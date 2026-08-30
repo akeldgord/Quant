@@ -13,7 +13,7 @@ SCOPE: Operational tooling remediation (local orchestrator watcher) — NOT
   orchestration/ORCHESTRATOR_INSTRUCTIONS.md was not modified.
 STATUS: PASS
 UTC_TIMESTAMP: 2026-08-30T23:29:16Z
-GIT_COMMIT: (this commit — see the COMMIT value returned alongside this checkpoint)
+GIT_COMMIT: a700ee11eb2af8ea4a433cbf8a6d807d6078b349
 PRE-COMMIT_BASE: cb52571ce1bb55ff410cc314568a7d20647f4470
 CONFIG_HASH: 4be41f34b83f1841299ccef8c244362f10beb31ccc1c1bfd3ba819dc1e323b0e
 

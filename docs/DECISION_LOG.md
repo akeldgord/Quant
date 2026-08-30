@@ -205,5 +205,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   architecture change; no MASTER_SPEC.md change.
   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified — Phase 1
   remains unauthorized by this or any prior task.
-- git_commit: (see the commit that includes this DECISION_LOG entry — the
-  final handoff message names the exact pushed SHA)
+- git_commit: a700ee11eb2af8ea4a433cbf8a6d807d6078b349
