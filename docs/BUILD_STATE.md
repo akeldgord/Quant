@@ -5,7 +5,7 @@ Every new implementation session must read this file before doing anything else.
 
 ```yaml
 current_phase: 0
-last_completed_phase: null
+last_completed_phase: 0  # implementation-agent build+test+acceptance complete; NOT orchestrator-approved
 last_orchestrator_approved_phase: null
 approved_commit: null
 awaiting_orchestrator_review: true
@@ -29,7 +29,7 @@ known_blockers:
 
 | Phase | Status | Commit | Notes |
 |-------|--------|--------|-------|
-| 0 | IN PROGRESS -> awaiting orchestrator review | (see checkpoint) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. |
+| 0 | BUILT — awaiting orchestrator review | 2ad092deb248136d443e4384b9c11dfc17f58135 | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. 29/29 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
 
 ## Rules
 
