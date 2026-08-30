@@ -78,7 +78,7 @@ def make_repo(tmp_path: Path) -> tuple[Path, Path]:
     # so those files never make the post-run worktree look dirty.
     _write(seed, ".gitignore", "runtime/\n")
     _write(seed, "MASTER_SPEC.md", "spec\n")
-    _write(seed, "docs/BUILD_STATE.md", "state\n")
+    _write(seed, "docs/BUILD_STATE.md", "```yaml\ncurrent_phase: 0\n```\n")
     _write(seed, "orchestration/ORCHESTRATOR_INSTRUCTIONS.md", INITIAL_INSTRUCTIONS)
     _write(seed, "orchestration/AGENT_HANDOFF.md", INITIAL_HANDOFF)
     _write(seed, "orchestration/checkpoints/none.md", "n/a\n")
@@ -103,6 +103,7 @@ def push_instruction(
     status: str,
     target_commit: str,
     label: str,
+    authorized_phase: str = "0",
 ) -> None:
     """Simulate the orchestrator committing ORCHESTRATOR_INSTRUCTIONS.md
     through GitHub: clone origin fresh, edit, commit, push -- independent of
@@ -116,7 +117,7 @@ def push_instruction(
         "ISSUED_AT: 2026-01-01T00:00:00Z\n"
         f"TARGET_COMMIT: {target_commit}\n"
         "AUTHORIZED_ACTION: TEST\n"
-        "AUTHORIZED_PHASE: 0\n"
+        f"AUTHORIZED_PHASE: {authorized_phase}\n"
         f"STATUS: {status}\n"
     )
     _write(clone, "orchestration/ORCHESTRATOR_INSTRUCTIONS.md", text)
@@ -471,6 +472,207 @@ def test_dirty_tree_after_claude_run_marks_failed(tmp_path: Path) -> None:
 
     state = watch.tick(config, claude_runner=runner)
 
+    assert state.current_status == "FAILED"
+
+
+# ---------------------------------------------------------------------
+# Remediation round: bug-fix regression tests
+#
+# Four defects found on independent audit, each with a dedicated
+# adversarial test proving the *old* behavior would have wrongly allowed
+# the run and the *new* behavior correctly blocks/fails it:
+#   A. AUTHORIZED_PHASE was parsed but never validated -- a malformed or
+#      out-of-sequence phase authorization reached Claude unchecked.
+#   B. LAST_ORCHESTRATOR_INSTRUCTION_ID matching used substring containment
+#      (`in`) instead of exact equality -- a stale/unrelated field value
+#      that merely contained the instruction id as a substring would
+#      false-positive match.
+#   C. CHECKPOINT_PATH/BUNDLE_PATH were only checked for existence, not
+#      that they were part of this run's own new commits -- stale
+#      pre-existing evidence at the same path would pass.
+#   D. Restart recovery only treated a stale RUNNING state as a crash;
+#      a stale CLAIMED state (crash between claiming and actually
+#      launching Claude) was silently ignored forever, with no FAILED
+#      transition and no log event.
+# ---------------------------------------------------------------------
+
+
+def test_authorized_phase_skip_ahead_blocks_launch(tmp_path: Path) -> None:
+    """(A) current_phase is 0; AUTHORIZED_PHASE: 2 skips ahead and must be
+    rejected -- this is precisely a case of Phase 1 (or later) being
+    authorized when it must not be."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-phase-skip",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+        authorized_phase="2",
+    )
+
+    runner = FakeClaudeRunner()
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert runner.calls == 0
+    assert state.current_instruction_id is None
+    assert state.current_status == "IDLE"
+
+
+def test_authorized_phase_malformed_blocks_launch(tmp_path: Path) -> None:
+    """(A) A non-numeric AUTHORIZED_PHASE must never reach Claude."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-phase-bad",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+        authorized_phase="one",
+    )
+
+    runner = FakeClaudeRunner()
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert runner.calls == 0
+    assert state.current_instruction_id is None
+
+
+def test_authorized_phase_same_or_next_is_allowed(tmp_path: Path) -> None:
+    """(A) Sanity check: current_phase (re-authorizing current work) and
+    current_phase + 1 (the legitimate next-phase case) are both allowed --
+    the guard blocks skip-ahead, not ordinary progress."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-phase-ok",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+        authorized_phase="1",
+    )
+
+    runner = FakeClaudeRunner(
+        side_effect=lambda cwd: do_successful_handoff(Path(cwd), "instr-phase-ok")
+    )
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert runner.calls == 1
+    assert state.current_status == "COMPLETED"
+
+
+def test_handoff_substring_false_positive_now_fails(tmp_path: Path) -> None:
+    """(B) LAST_ORCHESTRATOR_INSTRUCTION_ID = 'instr-12' textually contains
+    instruction id 'instr-1' as a substring but is NOT the same instruction.
+    The old `in`-based check would have wrongly accepted this."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin, tmp_path, instruction_id="instr-1", status="ACTIVE", target_commit=head, label="a"
+    )
+
+    def stale_substring_handoff(cwd: Any) -> None:
+        cwd_path = Path(cwd)
+        _write(cwd_path, "orchestration/checkpoints/done.md", "checkpoint\n")
+        _write(cwd_path, "orchestration/bundles/done.txt", "bundle\n")
+        _write(
+            cwd_path,
+            "orchestration/AGENT_HANDOFF.md",
+            "HANDOFF_ID: handoff-0001-done\n"
+            "UTC_TIMESTAMP: 2026-01-02T00:00:00Z\n"
+            "LAST_ORCHESTRATOR_INSTRUCTION_ID: instr-12\n"
+            "CHECKPOINT_PATH: orchestration/checkpoints/done.md\n"
+            "BUNDLE_PATH: orchestration/bundles/done.txt\n",
+        )
+        _run(["git", "add", "-A"], cwd_path)
+        _run(["git", "commit", "-m", "claude: mismatched instruction id"], cwd_path)
+        _run(["git", "push", "origin", BRANCH], cwd_path)
+
+    runner = FakeClaudeRunner(side_effect=stale_substring_handoff)
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert state.current_status == "FAILED"
+
+
+def test_stale_preexisting_checkpoint_bundle_marks_failed(tmp_path: Path) -> None:
+    """(C) CHECKPOINT_PATH/BUNDLE_PATH point at files that already existed
+    (committed in the seed, untouched by this run) rather than files this
+    run actually produced. Existence alone must not be accepted as
+    evidence -- this is exactly 'stale checkpoint/bundle data'."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-stale",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+    )
+
+    def point_at_preexisting_evidence(cwd: Any) -> None:
+        cwd_path = Path(cwd)
+        # Deliberately do NOT write new checkpoint/bundle files -- point at
+        # the ones that already existed in the seed commit instead.
+        _write(
+            cwd_path,
+            "orchestration/AGENT_HANDOFF.md",
+            "HANDOFF_ID: handoff-0001-stale\n"
+            "UTC_TIMESTAMP: 2026-01-02T00:00:00Z\n"
+            "LAST_ORCHESTRATOR_INSTRUCTION_ID: instr-stale\n"
+            "CHECKPOINT_PATH: orchestration/checkpoints/none.md\n"
+            "BUNDLE_PATH: orchestration/bundles/none.txt\n",
+        )
+        _run(["git", "add", "-A"], cwd_path)
+        _run(["git", "commit", "-m", "claude: points at stale evidence"], cwd_path)
+        _run(["git", "push", "origin", BRANCH], cwd_path)
+
+    runner = FakeClaudeRunner(side_effect=point_at_preexisting_evidence)
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert state.current_status == "FAILED"
+
+
+def test_claimed_state_restart_marks_failed(tmp_path: Path) -> None:
+    """(D) A crash between CLAIMED and RUNNING must be treated as stale on
+    restart, exactly like a stale RUNNING state -- not silently ignored."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-claimed",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+    )
+
+    config = make_config(work)
+    watch.write_state(
+        config.state_path,
+        watch.WatcherState(current_instruction_id="instr-claimed", current_status="CLAIMED"),
+    )
+
+    runner = FakeClaudeRunner()
+    state = watch.tick(config, claude_runner=runner)
+
+    assert runner.calls == 0
     assert state.current_status == "FAILED"
 
 

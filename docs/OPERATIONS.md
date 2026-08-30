@@ -80,8 +80,9 @@ rm runtime/ORCHESTRATION_PAUSED      # resume
   the process crashes (kernel-managed, no stale-lock cleanup needed).
 - `runtime/logs/orchestrator_watcher.log` — append-only event log
   (`WATCHER_STARTED`, `NEW_INSTRUCTION`, `DIRTY_WORKTREE`,
-  `GIT_PULL_FAILED`, `TARGET_COMMIT_MISMATCH`, `CLAUDE_STARTED`,
-  `CLAUDE_EXITED`, `HANDOFF_VERIFIED`, `RUN_COMPLETED`, `RUN_FAILED`, ...).
+  `GIT_PULL_FAILED`, `TARGET_COMMIT_MISMATCH`, `PHASE_AUTHORIZATION_INVALID`,
+  `CLAUDE_STARTED`, `CLAUDE_EXITED`, `HANDOFF_VERIFIED`, `RUN_COMPLETED`,
+  `RUN_FAILED`, `WATCHER_PAUSED`, `WATCHER_STOPPED`, ...).
   Never contains API keys, tokens, credentials, or raw environment/command
   dumps — only short structured event lines.
 

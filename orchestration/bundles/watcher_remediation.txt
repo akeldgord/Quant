@@ -1,0 +1,828 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE — Phase 0
+Generated: 2026-08-30T23:30:35.277906+00:00
+
+=== CHECKPOINT ===
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+MASTER_SPEC_HASH: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+SCOPE: Operational tooling remediation (local orchestrator watcher) — NOT
+  an ARGUS phase. current_phase remains 0; no phase gate was crossed;
+  orchestration/ORCHESTRATOR_INSTRUCTIONS.md was not modified.
+STATUS: PASS
+UTC_TIMESTAMP: 2026-08-30T23:29:16Z
+GIT_COMMIT: (this commit — see the COMMIT value returned alongside this checkpoint)
+PRE-COMMIT_BASE: cb52571ce1bb55ff410cc314568a7d20647f4470
+CONFIG_HASH: 4be41f34b83f1841299ccef8c244362f10beb31ccc1c1bfd3ba819dc1e323b0e
+
+B. What was built
+
+Per human-operator instruction relaying an independent audit (performed by
+a separate reviewer referred to as "ChatGPT"), the watcher and its tests
+were re-read from scratch — not trusted from the prior build's own
+account — starting with MASTER_SPEC.md, docs/BUILD_STATE.md,
+docs/DECISION_LOG.md, orchestration/PROTOCOL.md,
+orchestration/ORCHESTRATOR_INSTRUCTIONS.md, orchestration/AGENT_HANDOFF.md,
+every checkpoint/bundle path AGENT_HANDOFF.md names, then
+scripts/argus_orchestrator_watch.py and tests/unit/test_orchestrator_watch.py
+line by line. Four defects were independently substantiated (each
+reproduced by tracing the exact old code path, not merely asserted) and
+fixed. Full detail and reasoning: docs/DECISION_LOG.md, entry "Watcher
+remediation: four defects found on independent audit".
+
+(A) AUTHORIZED_PHASE parsed but never validated. tick() read
+`instructions.authorized_phase` into InstructionFields but no code path
+ever checked it against anything — phase-gate enforcement rested entirely
+on the Claude prompt text ("Follow all phase gates in MASTER_SPEC.md"),
+not on the watcher. A malformed value (e.g. "one") or a value that skipped
+ahead of docs/BUILD_STATE.md's current_phase (e.g. AUTHORIZED_PHASE: 2
+while current_phase: 0) would have reached Claude unchecked. Fix: added
+read_current_phase() (parses `current_phase:` from docs/BUILD_STATE.md)
+and verify_phase_authorization(), which requires AUTHORIZED_PHASE to be a
+non-negative integer no greater than current_phase + 1. A failing check
+logs PHASE_AUTHORIZATION_INVALID and does not launch Claude. This is what
+makes "Phase 1 must not be authorized" (while current_phase is still 0) an
+enforced property of the watcher itself.
+
+(B) Handoff instruction-id match used substring containment. The original
+check was `if instruction_id not in last_instruction`, i.e. Python's `in`
+operator on the LAST_ORCHESTRATOR_INSTRUCTION_ID string. A stale or
+unrelated field value that merely *contained* the new instruction id as a
+substring (e.g. id "instr-1" is a substring of a leftover "instr-12")
+would false-positive match. Fix: changed to exact string equality
+(`last_instruction != instruction_id` after stripping).
+
+(C) Checkpoint/bundle evidence checked only for existence. verify_handoff()
+originally only called `.exists()` on CHECKPOINT_PATH/BUNDLE_PATH — a file
+left over from an earlier handoff, at the same path, untouched by the
+current run, would pass. Fix: verify_handoff() now takes a `head_before`
+parameter (HEAD captured immediately before Claude was launched) and
+additionally requires both paths to appear in
+`git diff --name-only head_before HEAD` — i.e. to actually be part of the
+commits made during this run. If HEAD did not move at all during the run,
+the check fails immediately ("no new commits were made during this run")
+rather than accepting stale evidence by default.
+
+(D) Restart recovery only handled a stale RUNNING state. The top-of-tick
+check that detects a crashed prior run and marks it FAILED (rather than
+blindly re-executing) originally only matched `current_status == "RUNNING"`.
+A crash between the CLAIMED write and the RUNNING write left the state
+file at CLAIMED, which the later duplicate-instruction guard silently
+skipped forever with no FAILED transition and no log event — invisible to
+an operator or auditor. Fix: the stale-state check now matches
+`current_status in {"RUNNING", "CLAIMED"}`, logging RUN_FAILED with the
+specific stale status in either case.
+
+Also: CLAUDE_PROMPT and orchestration/PROTOCOL.md sections 5 and 7 were
+updated to document these as mechanically-enforced requirements (exact
+instruction-id match, evidence must be part of the run's own commits,
+AUTHORIZED_PHASE bound by current_phase + 1), so a real future Claude run
+producing a handoff is told what the watcher actually checks rather than
+discovering it by failing.
+
+C. Files changed
+Modified: scripts/argus_orchestrator_watch.py, tests/unit/test_orchestrator_watch.py,
+orchestration/PROTOCOL.md, docs/OPERATIONS.md, docs/DECISION_LOG.md,
+docs/BUILD_STATE.md. New: orchestration/checkpoints/watcher_remediation.md
+(this file), orchestration/bundles/watcher_remediation.txt,
+orchestration/AGENT_HANDOFF.md (updated in place, per its single-current-
+status-file convention).
+
+D. Commands actually run
+- Independent re-read of the full audit chain (files listed in B above),
+  via the Read tool, from a fresh `git pull --ff-only` at session start.
+- uv run ruff check . / uv run ruff format . (both clean)
+- uv run mypy scripts/argus_orchestrator_watch.py --ignore-missing-imports
+  and uv run mypy (full package) — both clean
+- uv run pytest tests/unit/test_orchestrator_watch.py -v, run twice: once
+  immediately after the BUILD_STATE.md test-fixture update (16/16 passed,
+  pre-existing tests only), once after adding the 6 new remediation tests
+  (22/22 passed)
+- uv run pytest --cov --cov-report=term-missing (full suite): 63/63 passed,
+  93% coverage on src/argus (unchanged)
+- uv run python scripts/argus_orchestrator_watch.py --once against the
+  real repository (STATUS: NO_INSTRUCTION unchanged) — correctly logged
+  DIRTY_WORKTREE while the fix was still uncommitted, took no git/Claude
+  action
+- grep-based secret scan on the staged diff; git status --porcelain clean
+  before commit; git fetch + SHA comparison against origin after push
+
+E. Test results
+pytest: passed: 63, failed: 0, skipped: 0 (57 pre-existing + 6 new
+  remediation regression tests: phase skip-ahead blocked, malformed
+  AUTHORIZED_PHASE blocked, same-or-next-phase still allowed [negative
+  control], substring-false-positive handoff id now correctly FAILED,
+  stale pre-existing checkpoint/bundle now correctly FAILED, stale CLAIMED
+  state on restart now correctly FAILED)
+coverage: 93% (src/argus, unchanged — the watcher lives outside that
+  coverage scope and is verified by its own 22 dedicated tests instead)
+ruff: All checks passed!
+mypy: Success: no issues found in 40 source files (+ watcher script clean
+  when checked directly)
+
+F. Acceptance criteria (this task)
+[PASS] Bug A (AUTHORIZED_PHASE unvalidated) substantiated and fixed, with
+  both a positive (skip-ahead blocked) and negative-control (same/next
+  phase still allowed) regression test
+[PASS] Bug B (substring instruction-id match) substantiated and fixed,
+  with a regression test proving the specific false-positive case
+[PASS] Bug C (stale checkpoint/bundle accepted by existence check alone)
+  substantiated and fixed, with a regression test using a pre-existing,
+  untouched file at the evidence path
+[PASS] Bug D (stale CLAIMED state not recovered on restart) substantiated
+  and fixed, with a regression test
+[PASS] Adversarial categories from the task explicitly covered across the
+  full 22-test watcher suite: stale checkpoint/bundle data (new), target-
+  commit mismatch (pre-existing, 2 tests), branch/head movement (covered
+  by the unreviewed-diff target-commit test + the new no-new-commits
+  evidence check), malformed or missing evidence (new AUTHORIZED_PHASE
+  tests + pre-existing missing-handoff test), incomplete checkpoint
+  bundles (new stale-evidence test), duplicate/replayed state
+  (pre-existing same-instruction test), restart during a transition (new
+  CLAIMED test + pre-existing RUNNING test), failed audit/remediation
+  state (FAILED status never auto-retried, pre-existing + new tests all
+  assert this), ACTIVE instruction handling (pre-existing + new phase
+  tests), conditions where Phase 1 must NOT be authorized (new
+  AUTHORIZED_PHASE skip-ahead test is a direct instance of this)
+[PASS] All new tests confirmed to be real regressions, not vacuous: traced
+  against the pre-fix code path for each (see docs/DECISION_LOG.md impact
+  section for the specific old-vs-new behavior per bug)
+[PASS] orchestration/ORCHESTRATOR_INSTRUCTIONS.md not modified
+[PASS] Phase 1 not self-authorized
+
+G. Database/data sanity
+Unchanged — this task touched no schema, migration, or database code.
+
+H. Provider usage
+Not applicable.
+
+I. Data quality warnings
+None new. PG17_COMPOSE_VALIDATION remains DEFERRED_ENVIRONMENTAL_CHECK
+(unchanged by this task; unrelated).
+
+J. Sample outputs
+Regression test names and what each proves (see
+tests/unit/test_orchestrator_watch.py for full bodies):
+  test_authorized_phase_skip_ahead_blocks_launch      -> Bug A, positive
+  test_authorized_phase_malformed_blocks_launch        -> Bug A, positive
+  test_authorized_phase_same_or_next_is_allowed        -> Bug A, negative control
+  test_handoff_substring_false_positive_now_fails      -> Bug B
+  test_stale_preexisting_checkpoint_bundle_marks_failed -> Bug C
+  test_claimed_state_restart_marks_failed              -> Bug D
+
+`uv run python scripts/argus_orchestrator_watch.py --once` against the
+real repo (STATUS: NO_INSTRUCTION unchanged throughout this task):
+  <timestamp> DIRTY_WORKTREE local worktree has uncommitted changes; not pulling
+(logged while the fix itself was still uncommitted -- expected and correct;
+no Claude process was launched)
+
+K. Architectural deviations
+NONE. No MASTER_SPEC.md change. No ARGUS architecture change.
+
+L. ORCHESTRATOR_REVIEW_REQUIRED
+NONE from this task specifically. Standing items unchanged and unrelated:
+PG17_COMPOSE_VALIDATION (see docs/BUILD_STATE.md); the general outstanding
+ask for the orchestrator to review Phase 0 evidence and write the first
+real instruction into orchestration/ORCHESTRATOR_INSTRUCTIONS.md.
+
+M. Known bugs / debt
+- The watcher's Claude CLI invocation itself (`claude -p <prompt>`) still
+  has not been exercised against a real `claude` process in this sandbox —
+  unchanged limitation from the original build, unrelated to this
+  remediation (every test and the real `--once` runs here either mock it
+  or never reach the launch step).
+- verify_phase_authorization()'s "no more than one phase ahead" rule
+  assumes strictly sequential phase numbering (0, 1, 2, ...) as
+  MASTER_SPEC.md defines; it does not attempt to validate sub-phases like
+  "1.5" (MASTER_SPEC.md Phase 1.5) since AUTHORIZED_PHASE is defined as an
+  integer field in the existing protocol contract. If a future instruction
+  needs to authorize a sub-phase, that's a protocol-contract question for
+  the orchestrator, not something this fix silently guesses at.
+
+N. Security state
+- No new secrets, no signing-key code, no live-execution code touched.
+- The watcher's credential-avoidance logging posture is unchanged (still
+  never logs raw command output, env vars, or credentials).
+- LIVE_READY_SOFTWARE=false, LIVE_CANARY_PASSED=false, LIVE_ARMED=false —
+  unaffected.
+- The four fixes are all in the direction of stricter, more conservative,
+  more fail-closed behavior — none relax any prior check.
+
+O. Next specified phase
+Per the human operator's explicit instruction: do NOT begin Phase 1, and
+do NOT self-authorize it. orchestration/ORCHESTRATOR_INSTRUCTIONS.md
+remains STATUS: NO_INSTRUCTION (untouched by this task). Phase 1 has not
+been authorized by this session, and no independent audit visible to this
+session has legitimately authorized it either.
+
+================ END ARGUS CHECKPOINT =========================
+
+--- git status --porcelain (ok) ---
+$ git status --porcelain
+M docs/BUILD_STATE.md
+ M docs/DECISION_LOG.md
+ M docs/OPERATIONS.md
+ M orchestration/AGENT_HANDOFF.md
+ M orchestration/PROTOCOL.md
+ M scripts/argus_orchestrator_watch.py
+ M tests/unit/test_orchestrator_watch.py
+?? orchestration/checkpoints/watcher_remediation.md
+
+--- git log -5 --oneline (ok) ---
+$ git log -5 --oneline
+cb52571 docs: fill in commit hash in watcher handoff/checkpoint/bundle
+9df37f9 ops: add local no-nudge orchestrator watcher
+aebb33a security: rewrite git history to scrub dev-only password literals
+966fd7a ops: add GitHub orchestrator handoff protocol
+db07169 docs: fill in remediation commit hash in BUILD_STATE/DECISION_LOG
+
+--- git diff --stat HEAD (ok) ---
+$ git diff --stat HEAD
+docs/BUILD_STATE.md                   |  19 +++-
+ docs/DECISION_LOG.md                  |  78 +++++++++++++
+ docs/OPERATIONS.md                    |   5 +-
+ orchestration/AGENT_HANDOFF.md        | 128 +++++++++++----------
+ orchestration/PROTOCOL.md             |  18 +++
+ scripts/argus_orchestrator_watch.py   | 143 +++++++++++++++++++++--
+ tests/unit/test_orchestrator_watch.py | 206 +++++++++++++++++++++++++++++++++-
+ 7 files changed, 519 insertions(+), 78 deletions(-)
+
+--- git diff --name-status HEAD (ok) ---
+$ git diff --name-status HEAD
+M	docs/BUILD_STATE.md
+M	docs/DECISION_LOG.md
+M	docs/OPERATIONS.md
+M	orchestration/AGENT_HANDOFF.md
+M	orchestration/PROTOCOL.md
+M	scripts/argus_orchestrator_watch.py
+M	tests/unit/test_orchestrator_watch.py
+
+--- repository tree (depth 3) ---
+.
+./.coverage
+./.env
+./.env.example
+./.mypy_cache
+./.mypy_cache/.gitignore
+./.mypy_cache/3.12
+./.mypy_cache/3.12/cache.db
+./.mypy_cache/CACHEDIR.TAG
+./.pytest_cache
+./.pytest_cache/.gitignore
+./.pytest_cache/CACHEDIR.TAG
+./.pytest_cache/README.md
+./.pytest_cache/v
+./.pytest_cache/v/cache
+./.ruff_cache
+./.ruff_cache/.gitignore
+./.ruff_cache/0.16.5
+./.ruff_cache/0.16.5/12260078328580260821
+./.ruff_cache/0.16.5/14019792682234110828
+./.ruff_cache/0.16.5/16473032065540448277
+./.ruff_cache/0.16.5/18213512197950766699
+./.ruff_cache/0.16.5/2946778260339496259
+./.ruff_cache/0.16.5/4443864223019225297
+./.ruff_cache/0.16.5/6348095768289384867
+./.ruff_cache/0.16.5/8211647409924013096
+./.ruff_cache/0.16.5/9274844432529131567
+./.ruff_cache/CACHEDIR.TAG
+./.venv
+./.venv/.gitignore
+./.venv/.lock
+./.venv/CACHEDIR.TAG
+./.venv/bin
+./.venv/bin/activate
+./.venv/bin/activate.bat
+./.venv/bin/activate.csh
+./.venv/bin/activate.fish
+./.venv/bin/activate.nu
+./.venv/bin/activate.ps1
+./.venv/bin/activate_this.py
+./.venv/bin/alembic
+./.venv/bin/argus
+./.venv/bin/coverage
+./.venv/bin/coverage-3.12
+./.venv/bin/coverage3
+./.venv/bin/deactivate.bat
+./.venv/bin/dmypy
+./.venv/bin/dotenv
+./.venv/bin/fastapi
+./.venv/bin/httpx
+./.venv/bin/hypothesis
+./.venv/bin/idna
+./.venv/bin/mako-render
+./.venv/bin/markdown-it
+./.venv/bin/mypy
+./.venv/bin/mypyc
+./.venv/bin/py.test
+./.venv/bin/pydoc.bat
+./.venv/bin/pygmentize
+./.venv/bin/pytest
+./.venv/bin/python
+./.venv/bin/python3
+./.venv/bin/python3.12
+./.venv/bin/ruff
+./.venv/bin/stubgen
+./.venv/bin/stubtest
+./.venv/bin/typer
+./.venv/bin/uvicorn
+./.venv/bin/watchfiles
+./.venv/include
+./.venv/include/site
+./.venv/lib
+./.venv/lib/python3.12
+./.venv/lib64
+./.venv/pyvenv.cfg
+./Dockerfile
+./MASTER_SPEC.md
+./Makefile
+./README.md
+./alembic.ini
+./compose.yaml
+./config
+./config/argus.default.yaml
+./config/bootstrap_tokens.example.csv
+./config/providers.yaml
+./config/risk.default.yaml
+./config/scoring_v1.yaml
+./config/signals_v1.yaml
+./data
+./data/cache
+./data/cache/.gitkeep
+./data/exports
+./data/exports/.gitkeep
+./data/parquet
+./data/parquet/.gitkeep
+./data/raw
+./data/raw/.gitkeep
+./docs
+./docs/ARCHITECTURE.md
+./docs/BUILD_STATE.md
+./docs/CHECKPOINTS.md
+./docs/DATA_MODEL.md
+./docs/DECISION_LOG.md
+./docs/EXECUTION_SAFETY.md
+./docs/OPERATIONS.md
+./docs/PROVIDERS.md
+./docs/RESEARCH_METHODS.md
+./docs/RUNBOOK.md
+./migrations
+./migrations/env.py
+./migrations/script.py.mako
+./migrations/versions
+./migrations/versions/.gitkeep
+./migrations/versions/0001_baseline_roles_and_provider_usage.py
+./orchestration
+./orchestration/AGENT_HANDOFF.md
+./orchestration/ORCHESTRATOR_INSTRUCTIONS.md
+./orchestration/PROTOCOL.md
+./orchestration/bundles
+./orchestration/bundles/phase_0_remediation.txt
+./orchestration/bundles/watcher_setup.txt
+./orchestration/checkpoints
+./orchestration/checkpoints/phase_0_remediation.md
+./orchestration/checkpoints/watcher_remediation.md
+./orchestration/checkpoints/watcher_setup.md
+./pyproject.toml
+./runtime
+./runtime/logs
+./runtime/logs/.gitkeep
+./runtime/logs/orchestrator_watcher.log
+./runtime/orchestrator_watcher.lock
+./runtime/orchestrator_watcher_state.json
+./runtime/reports
+./runtime/reports/.gitkeep
+./runtime/reports/checkpoint_phase_0.txt
+./runtime/reports/orchestrator_bundle_phase_0.txt
+./runtime/state
+./runtime/state/.gitkeep
+./scripts
+./scripts/argus_orchestrator_watch.py
+./scripts/backup.sh
+./scripts/bootstrap.sh
+./scripts/checkpoint.sh
+./scripts/smoke_test.sh
+./src
+./src/argus
+./src/argus/__init__.py
+./src/argus/api
+./src/argus/checkpoint.py
+./src/argus/cli.py
+./src/argus/clock.py
+./src/argus/clustering
+./src/argus/config.py
+./src/argus/copyability
+./src/argus/db
+./src/argus/domain
+./src/argus/execution
+./src/argus/graph
+./src/argus/health.py
+./src/argus/ingestion
+./src/argus/logging.py
+./src/argus/notifications
+./src/argus/outcomes
+./src/argus/parsing
+./src/argus/providers
+./src/argus/research
+./src/argus/risk
+./src/argus/scoring
+./src/argus/shadow
+./src/argus/signals
+./src/argus/tokens
+./src/argus/wallets
+./tests
+./tests/__init__.py
+./tests/fixtures
+./tests/fixtures/__init__.py
+./tests/golden
+./tests/golden/__init__.py
+./tests/integration
+./tests/integration/__init__.py
+./tests/integration/conftest.py
+./tests/integration/test_checkpoint_bundle.py
+./tests/integration/test_cli.py
+./tests/integration/test_db_roles.py
+./tests/integration/test_health_endpoint.py
+./tests/integration/test_provider_usage_model.py
+./tests/replay
+./tests/replay/__init__.py
+./tests/unit
+./tests/unit/__init__.py
+./tests/unit/test_checkpoint.py
+./tests/unit/test_clock.py
+./tests/unit/test_config.py
+./tests/unit/test_db_credentials.py
+./tests/unit/test_logging.py
+./tests/unit/test_orchestrator_watch.py
+./uv.lock
+
+--- dependency summary (uv pip list) (ok) ---
+$ uv pip list
+Package           Version         Editable project location
+----------------- --------------- -------------------------
+alembic           1.19.1
+annotated-doc     0.0.5
+annotated-types   0.8.0
+anyio             4.14.2
+argus             0.1.0           /home/user/Quant
+asgi-lifespan     2.1.0
+asyncpg           0.31.0
+certifi           2026.7.22
+click             8.5.0
+coverage          7.16.0
+fastapi           0.141.1
+greenlet          3.5.5
+h11               0.16.0
+httpcore          1.0.9
+httptools         0.8.0
+httpx             0.28.1
+hypothesis        6.167.1
+idna              3.19
+iniconfig         2.3.0
+librt             0.15.0
+mako              1.4.1
+markdown-it-py    4.2.0
+markupsafe        3.0.3
+mdurl             0.1.2
+mypy              1.20.2
+mypy-extensions   1.1.0
+packaging         26.3
+pathspec          1.1.1
+pluggy            1.6.0
+pydantic          2.13.5
+pydantic-core     2.46.5
+pydantic-settings 2.15.0
+pygments          2.21.0
+pytest            8.4.2
+pytest-asyncio    0.26.0
+pytest-cov        5.0.0
+python-dotenv     1.2.3
+pyyaml            6.0.3
+rich              13.9.4
+ruff              0.16.5
+shellingham       1.5.4
+sniffio           1.3.1
+sortedcontainers  2.4.0
+sqlalchemy        2.0.52
+starlette         1.6.0
+structlog         24.4.0
+typer             0.27.2
+types-pyyaml      6.0.12.20260815
+typing-extensions 4.16.0
+typing-inspection 0.4.4
+uvicorn           0.50.1
+uvloop            0.22.1
+watchfiles        1.2.0
+websockets        12.0
+
+--- compose service summary (ok) ---
+$ docker compose config --services
+postgres
+api
+
+--- alembic head (ok) ---
+$ uv run alembic current
+0001 (head)
+
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+
+--- MASTER_SPEC hash ---
+41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+
+--- BUILD_STATE.md ---
+# ARGUS Build State
+
+Machine-and-human-readable state for session recovery (MASTER_SPEC.md section 8).
+Every new implementation session must read this file before doing anything else.
+
+```yaml
+current_phase: 0
+last_completed_phase: 0  # implementation-agent build+test+acceptance complete; NOT orchestrator-approved
+last_orchestrator_approved_phase: null
+approved_commit: null
+awaiting_orchestrator_review: true
+
+# PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
+# (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
+# exercised end-to-end. It is DEFERRED, not PASS and not FAIL: functional
+# correctness of the migration/application code was verified against a
+# substitute PostgreSQL 16 server instead (see known_blockers below and
+# docs/DECISION_LOG.md). Per explicit orchestrator instruction (2026-08-30):
+# this deferral does NOT block starting Phase 1, but DOES block approving
+# live readiness until it is closed out with a real postgres:17 run.
+PG17_COMPOSE_VALIDATION: DEFERRED_ENVIRONMENTAL_CHECK
+
+known_blockers:
+  - "PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK. This
+     implementation sandbox's egress policy blocks Docker Hub's image CDN
+     (production.cloudfront.docker.com -> 403 at the proxy), so
+     `docker compose up postgres` (the actual postgres:17 image) could not
+     be pulled or exercised here. compose.yaml is unmodified and still
+     targets postgres:17 as required by TECH-004 -- this is an environment
+     limitation of this sandbox, not an architecture change. As a substitute,
+     Phase 0 functional acceptance (migration-from-zero, DB roles,
+     provider_usage grants, argus health, full pytest suite, missing-credential
+     fail-closed behavior) was verified against the sandbox's
+     locally-installed PostgreSQL 16 server, running the exact same Alembic
+     migration and application code Compose would run against PostgreSQL 17.
+     This PG16 run demonstrates the migration/application logic is correct;
+     it does NOT demonstrate anything PostgreSQL-17-version-specific and
+     must not be cited as PostgreSQL 17 validation. Closing this out requires
+     running `make bootstrap && make up` (or equivalent) on a host with
+     normal Docker Hub access and recording the result here and in
+     docs/DECISION_LOG.md. See docs/DECISION_LOG.md for the full decision
+     record. Per explicit orchestrator instruction, this deferred check does
+     NOT block Phase 1, but IS required before live readiness can be
+     approved."
+```
+
+## Phase history
+
+| Phase | Status | Commit | Notes |
+|-------|--------|--------|-------|
+| 0 | BUILT — remediated, awaiting orchestrator review | b838558f7eae1eac8d3559c7826ab340d604d916, remediated at ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (history rewritten 2026-08-30 to scrub inert dev-only placeholder credential strings — see docs/DECISION_LOG.md; these are the post-rewrite hashes) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
+
+## Operational tooling
+
+- `scripts/argus_orchestrator_watch.py` (`make orchestrator-watch`) — local
+  "no-nudge" watcher: polls `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` for
+  a new `ACTIVE` instruction and, when one appears and passes the
+  TARGET_COMMIT and phase-authorization checks, launches the local Claude
+  CLI non-interactively to execute exactly that instruction under
+  `orchestration/PROTOCOL.md`. Not running by default — the human operator
+  starts it explicitly. See `docs/OPERATIONS.md` for usage,
+  `orchestration/checkpoints/watcher_setup.md` for the original build/test
+  record, and `orchestration/checkpoints/watcher_remediation.md` for a
+  four-defect remediation pass (AUTHORIZED_PHASE was never validated;
+  handoff instruction-id matching used substring containment instead of
+  exact equality; checkpoint/bundle evidence was only checked for
+  existence, not that it was actually produced by the run; a crash between
+  CLAIMED and RUNNING was never recovered on restart — all four fixed,
+  with regression tests). This is operational tooling, not ARGUS phase
+  work — `current_phase` above is unaffected.
+
+## Rules
+
+- This file may be updated by the implementation agent to reflect actual build
+  progress.
+- `last_orchestrator_approved_phase` and `approved_commit` may ONLY be set to a
+  new value after receiving **explicit** orchestrator approval for that phase.
+  The implementation agent must never self-approve a phase here.
+- Do not begin work on `current_phase + 1` while `awaiting_orchestrator_review`
+  is `true` for the current phase.
+
+
+--- DECISION_LOG.md ---
+# ARGUS Decision Log
+
+Append-only record of every orchestrator-approved material change to
+MASTER_SPEC.md or to a decision the spec explicitly delegated to the
+orchestrator (MASTER_SPEC.md section 109). Do not silently edit
+MASTER_SPEC.md — record the change here instead, with the requesting
+party and the git commit that implements it.
+
+Entries are appended chronologically. Do not rewrite or delete prior entries.
+
+## Format
+
+```
+### YYYY-MM-DD — <short title>
+- requirement_id: <MASTER_SPEC section/ID this touches>
+- decision: <what was decided>
+- reason: <why>
+- requested_by: <human operator | orchestrator>
+- impact: <what changes as a result>
+- git_commit: <commit sha implementing it>
+```
+
+## Entries
+
+### 2026-08-30 — Phase 0 checkpoint STATUS discipline + deferred PG17 Docker validation
+- requirement_id: section 104 (STANDARD ORCHESTRATOR CHECKPOINT, field F/STATUS),
+  section 106 (CLEAN SOURCE REQUIREMENT), TECH-004 (PostgreSQL 17)
+- decision: The original Phase 0 checkpoint reported `STATUS: PASS` while also
+  reporting `[PARTIAL] Postgres starts`, which is an internally inconsistent
+  checkpoint. Corrected going forward: Phase 0's PostgreSQL-17-via-Docker-Compose
+  path is tracked as its own explicit state,
+  `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`, recorded in
+  docs/BUILD_STATE.md. The successful PostgreSQL 16 local run is retained as
+  evidence the migration/application code is functionally correct, but is
+  explicitly NOT represented as PostgreSQL 17 validation anywhere. Per
+  explicit orchestrator instruction, this deferred check does not block
+  starting Phase 1, but does block approving live readiness until closed out
+  with a real `postgres:17` run. compose.yaml remains unchanged — still pins
+  `postgres:17` per TECH-004; no architecture change was made.
+- reason: This sandbox's egress policy blocks Docker Hub's image CDN
+  (production.cloudfront.docker.com -> 403 at the proxy), so the postgres:17
+  container image could not be pulled here. Claiming an unconditional
+  checkpoint PASS while a stated acceptance criterion was PARTIAL violates
+  the checkpoint contract; the orchestrator asked for this to be corrected
+  rather than glossed over.
+- requested_by: orchestrator
+- impact: docs/BUILD_STATE.md now carries a `PG17_COMPOSE_VALIDATION` field
+  and an updated `known_blockers` entry so this cannot be silently forgotten
+  in a future session. The replacement Phase 0 checkpoint uses
+  `STATUS: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` instead of an
+  unconditional PASS.
+- git_commit: ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (hash as of the history rewrite recorded below; original pre-rewrite hash was d93d8036e81256cb3b51218b4a0fa7f6a9b78a11)
+
+### 2026-08-30 — Remove hardcoded fallback database passwords
+- requirement_id: SEC-005, section 108 (CREDENTIAL HANDLING), section 72
+  (database privilege separation)
+- decision: Removed all working hardcoded fallback DB role/admin passwords
+  (one clearly-labeled dev-only placeholder literal per role) from
+  migrations/versions/0001_baseline_roles_and_provider_usage.py, compose.yaml,
+  and src/argus/db/connection.py. Database role passwords (ingest, research,
+  executor, admin) must now come from required environment variables
+  (`ARGUS_DB_{INGEST,RESEARCH,EXECUTOR,ADMIN}_PASSWORD`, supplied via a local
+  gitignored `.env` or the process environment). A missing required password
+  now raises `argus.db.credentials.MissingCredentialError` with an explicit
+  "LOCAL CREDENTIAL REQUIRED" message (section 108 format) rather than
+  silently substituting a working default; compose.yaml uses Compose's
+  `${VAR:?message}` required-variable syntax for the same reason.
+  `.env.example` already contained empty placeholders only and needed no
+  change. DB role separation and grants (argus_ingest/argus_research/
+  argus_executor least-privilege table grants from migration 0001) are
+  unchanged.
+- reason: A repository must not contain any credential that would let it
+  "just work" against a real database without the operator supplying real
+  secrets, even a clearly-labeled dev-only one — that is a standing
+  liability and inconsistent with SEC-005/section 108's "never commit ...
+  credentials" and "fail rather than silently substitute" posture.
+- requested_by: orchestrator
+- impact: `uv run alembic upgrade head` and any DB connection now fail
+  immediately and clearly if the relevant `ARGUS_DB_*_PASSWORD` variable is
+  unset, instead of silently succeeding with a guessable password. New
+  regression tests (tests/unit/test_db_credentials.py) assert both the
+  fail-closed behavior and that no `dev_only`-style literal remains in the
+  connection-resolution code path.
+- git_commit: ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (hash as of the history rewrite recorded below; original pre-rewrite hash was d93d8036e81256cb3b51218b4a0fa7f6a9b78a11)
+
+### 2026-08-30 — Git history rewrite to scrub inert dev-only password literals
+- requirement_id: SEC-005, section 108 (CREDENTIAL HANDLING)
+- decision: Before making this repository public, the human operator asked
+  Claude to confirm no secrets existed anywhere in git history (not just the
+  working tree). A full-history scan (`git log --all -p` across every file
+  ever committed) found that the four literal dev-only DB password fallback
+  strings removed from the working tree by the "Remove hardcoded fallback
+  database passwords" entry above were still present in history: visible in
+  the blob at the pre-remediation commit (originally `2ad092d`) and in the
+  `-` side of the remediation commit's diff (originally `d93d803`). These
+  strings were never real credentials — they were only ever used, as a
+  hardcoded fallback, against an ephemeral local Postgres instance inside a
+  disposable implementation-sandbox container, never against any real or
+  production database. The human operator explicitly chose, when offered the
+  choice, to rewrite history to purge them rather than leave them in place
+  with documentation. `git-filter-repo` was used with `--replace-text` and
+  `--replace-message` to replace the four exact literal per-role placeholder
+  strings (deliberately not reproduced here, to avoid reintroducing them
+  into history via this very entry) with the placeholder text
+  `REDACTED_FORMER_DEV_PLACEHOLDER` across every blob and commit message in
+  history, then the branch was force-pushed. This rewrote every commit's
+  hash on `claude/argus-folder-setup-77ahrk`; the mapping from old to new
+  hashes is: `be09468`→`be09468` (root commit, unchanged — contained none of
+  the scrubbed strings), `2ad092d`→`b838558`, `386532e`→`cc82081`,
+  `d93d803`→`ca74d09`, `a4bfc01`→`db07169`, `37699d7`→`966fd7a`. All
+  commit-hash references in `docs/BUILD_STATE.md`, this file, and
+  `orchestration/AGENT_HANDOFF.md` / `orchestration/checkpoints/` /
+  `orchestration/bundles/` were updated to the new hashes as part of this
+  same change. A handful of *current* files that had legitimately quoted one
+  of the four strings in prose (documenting what had been removed, not an
+  active secret) were collaterally rewritten to the placeholder text too;
+  those were cleaned up by hand in the same commit
+  (`tests/unit/test_db_credentials.py`'s now-redundant assertion was
+  removed; prose in this file and in the `orchestration/` checkpoint/bundle
+  copies was reworded).
+- reason: The literal request was to confirm nothing sensitive exists in git
+  history before making the repository public, and — once one real (if
+  low-risk) finding surfaced — to actually remove it rather than merely
+  document it, since the repository was about to become publicly readable.
+- requested_by: human operator
+- impact: A full re-scan of `git log --all -p` after the rewrite finds zero
+  occurrences of the four original literal strings anywhere in history. No
+  application code or architecture changed — this was a git-history-only
+  operation plus documentation/test cleanup. All commit hashes referenced
+  anywhere in this repository's own tracked files were updated to match.
+- git_commit: 966fd7a3d3ccfedc02f2ff18678fae48f0ddab36 (pre-cleanup rewrite tip; see the follow-up commit that includes this DECISION_LOG entry itself for the final hash)
+
+### 2026-08-30 — Watcher remediation: four defects found on independent audit
+- requirement_id: `orchestration/PROTOCOL.md` sections 5 and 7 (agent handoff
+  contract, target-commit protection), MASTER_SPEC.md section 103 (phase
+  gating — "do not begin the next phase until explicit orchestrator
+  approval")
+- decision: Per human-operator instruction, independently re-audited
+  `scripts/argus_orchestrator_watch.py` and its test suite from a fresh
+  read of MASTER_SPEC.md / docs/BUILD_STATE.md / docs/DECISION_LOG.md /
+  orchestration/PROTOCOL.md / orchestration/ORCHESTRATOR_INSTRUCTIONS.md /
+  orchestration/AGENT_HANDOFF.md / the checkpoint+bundle evidence it
+  names, rather than trusting the prior build's own account of itself.
+  Substantiated and fixed four defects, each with a dedicated regression
+  test proving the old code would have wrongly allowed the failure mode:
+  - (A) `AUTHORIZED_PHASE` was parsed out of
+    `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` but never validated
+    anywhere — a malformed value, or one that skipped ahead of
+    `docs/BUILD_STATE.md`'s `current_phase` (e.g. authorizing phase 2 while
+    still on phase 0), would have reached Claude unchecked, with phase-gate
+    enforcement resting entirely on the Claude prompt rather than the
+    watcher. Added `verify_phase_authorization()`: rejects (logs
+    `PHASE_AUTHORIZATION_INVALID`, does not launch) any `AUTHORIZED_PHASE`
+    that isn't a non-negative integer no greater than `current_phase + 1`.
+    This is what makes "Phase 1 must not be authorized" prematurely an
+    enforced property of the watcher, not just of the prompt.
+  - (B) The check that `AGENT_HANDOFF.md`'s `LAST_ORCHESTRATOR_INSTRUCTION_ID`
+    refers to the instruction just run used substring containment (`in`)
+    instead of exact equality — a stale or unrelated field value that
+    merely *contained* the instruction id as a substring (e.g. id `"1"`
+    inside a leftover `"instr-12"`) would have false-positive matched.
+    Changed to exact string equality.
+  - (C) `CHECKPOINT_PATH`/`BUNDLE_PATH` were verified only by
+    `Path.exists()` — a pre-existing file at that path, left over from an
+    earlier handoff and never touched by the current run, would pass. Now
+    both paths must also appear in `git diff --name-only` between HEAD
+    immediately before Claude was launched and HEAD after the run, proving
+    the evidence was actually produced (or at least touched) by commits
+    made during this run, not merely present on disk.
+  - (D) Stale-state recovery on watcher restart only handled a `RUNNING`
+    state (crash during the Claude subprocess). A crash between writing
+    `CLAIMED` and writing `RUNNING` left the watcher silently wedged on
+    that state forever — no `FAILED` transition, no log event, nothing
+    visible to an operator or auditor. The restart check now treats both
+    `RUNNING` and `CLAIMED` as stale, marking `FAILED` with a log event in
+    either case.
+  Also tightened the CLAUDE_PROMPT text and `orchestration/PROTOCOL.md`
+  sections 5/7 to document these as mechanically-enforced requirements
+  (exact instruction-id match, evidence-freshness, phase-authorization
+  bound), not just implementation detail, so a future Claude run producing
+  a real handoff complies with what the watcher actually checks.
+- reason: The watcher is meant to gate whether Phase 1 (or any phase) work
+  begins unattended; MASTER_SPEC.md section 103 and the phase-gate
+  discipline throughout the spec require that no phase begin without
+  explicit, verifiable orchestrator approval. A watcher that accepts a
+  malformed phase authorization, a substring-matched instruction id, or a
+  stale checkpoint/bundle as valid evidence would let exactly that kind of
+  unaudited, unauthorized advancement slip through silently — the opposite
+  of "fail closed."
+- requested_by: human operator (relaying an independent audit performed by
+  a separate reviewer, "ChatGPT" — the four defects were reproduced and
+  substantiated independently from the code and this repository's own
+  evidence before being fixed, not accepted on the audit's say-so alone)
+- impact: `scripts/argus_orchestrator_watch.py` gained
+  `verify_phase_authorization()` / `read_current_phase()`, a stricter
+  `verify_handoff()` (exact id match + evidence-freshness check via a new
+  `head_before` parameter), and a broadened stale-state restart check.
+  6 new regression tests added
+  (`tests/unit/test_orchestrator_watch.py`); all pass, and each was
+  confirmed to fail under the pre-fix code by tracing the old logic (a
+  skip-ahead/malformed AUTHORIZED_PHASE would have launched Claude; the
+  substring-match handoff and stale-evidence cases would have reached
+  `COMPLETED`; the stale-CLAIMED case would not have transitioned to
+  `FAILED`). Full suite: 63/63 passed, ruff clean, mypy clean. No ARGUS
+  architecture change; no MASTER_SPEC.md change.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified — Phase 1
+  remains unauthorized by this or any prior task.
+- git_commit: (see the commit that includes this DECISION_LOG entry — the
+  final handoff message names the exact pushed SHA)
+

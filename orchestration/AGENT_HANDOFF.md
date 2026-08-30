@@ -7,83 +7,95 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 ---
 
-HANDOFF_ID: handoff-0003-watcher-setup
-UTC_TIMESTAMP: 2026-08-30T23:09:24Z
-CURRENT_COMMIT: 9df37f9e8e77bf538dcb99c08d16fa96827229b7
+HANDOFF_ID: handoff-0004-watcher-remediation
+UTC_TIMESTAMP: 2026-08-30T23:29:16Z
+CURRENT_COMMIT: (this commit — see `git log -1` / the COMMIT value returned alongside this handoff)
 CURRENT_PHASE: 0
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
-LAST_ORCHESTRATOR_INSTRUCTION_ID: none (no instruction has been issued through GitHub yet — see orchestration/ORCHESTRATOR_INSTRUCTIONS.md, STATUS: NO_INSTRUCTION; this handoff is for operational tooling work the human operator authorized directly, not an ORCHESTRATOR_INSTRUCTIONS.md-authorized task)
-CHECKPOINT_PATH: orchestration/checkpoints/watcher_setup.md
-BUNDLE_PATH: orchestration/bundles/watcher_setup.txt
-TEST_STATUS: 57/57 passed (41 pre-existing + 16 new), 93% src/argus coverage (unchanged), ruff clean, mypy clean
+LAST_ORCHESTRATOR_INSTRUCTION_ID: none (no instruction has been issued through GitHub yet — see orchestration/ORCHESTRATOR_INSTRUCTIONS.md, STATUS: NO_INSTRUCTION; this handoff is for operational tooling remediation the human operator authorized directly, not an ORCHESTRATOR_INSTRUCTIONS.md-authorized task)
+CHECKPOINT_PATH: orchestration/checkpoints/watcher_remediation.md
+BUNDLE_PATH: orchestration/bundles/watcher_remediation.txt
+TEST_STATUS: 63/63 passed (57 pre-existing + 6 new remediation regression tests), 93% src/argus coverage (unchanged), ruff clean, mypy clean
 WORKING_TREE: clean (verified via `git status --porcelain` before and after this commit)
-ORCHESTRATOR_REVIEW_REQUIRED: none from this task; PG17_COMPOSE_VALIDATION (deferred, unrelated to this task) still open — see docs/BUILD_STATE.md
+ORCHESTRATOR_REVIEW_REQUIRED: none from this task; PG17_COMPOSE_VALIDATION (deferred, unrelated) still open — see docs/BUILD_STATE.md
 
 ## Work completed
 
-1. **Phase 0 (Foundation)** built, tested, and remediated (hardcoded DB
-   password fallbacks removed; git history scrubbed of the inert dev-only
-   placeholder strings before the repository was made public). See
+1. **Phase 0 (Foundation)** built, tested, and remediated. See
    `orchestration/checkpoints/phase_0_remediation.md`.
-2. **Orchestration protocol bootstrap**: `orchestration/PROTOCOL.md`,
-   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` (orchestrator-owned
-   placeholder, `STATUS: NO_INSTRUCTION` — still untouched), this file, and
-   `checkpoints/` / `bundles/`.
-3. **This handoff — local "no-nudge" orchestrator watcher**
-   (`scripts/argus_orchestrator_watch.py` + `make orchestrator-watch` +
-   `docs/OPERATIONS.md`), built per explicit human-operator instruction so
-   they no longer need to manually start Claude for each ARGUS phase. Full
-   build/test record in `orchestration/checkpoints/watcher_setup.md`.
-   Summary: polls this repo, verifies TARGET_COMMIT safety, launches the
-   Claude CLI non-interactively only on a new `ACTIVE` instruction,
-   verifies the resulting handoff and push before marking a run
-   `COMPLETED`, never auto-retries a failed or crashed run. 16 new tests
-   cover every required scenario; the Claude CLI is fully mocked in all of
-   them (no Claude-model tokens spent by the test suite).
+2. **Orchestration protocol bootstrap + local watcher** (handoff-0003). See
+   `orchestration/checkpoints/watcher_setup.md`.
+3. **This handoff — watcher remediation**: per human-operator instruction
+   relaying an independent audit, re-read the entire audit chain from
+   scratch (MASTER_SPEC.md, docs/BUILD_STATE.md, docs/DECISION_LOG.md,
+   orchestration/PROTOCOL.md, orchestration/ORCHESTRATOR_INSTRUCTIONS.md,
+   this file, every checkpoint/bundle path it names, then the watcher
+   implementation and tests line by line) and independently substantiated
+   four real defects, fixing all four with dedicated regression tests. See
+   `orchestration/checkpoints/watcher_remediation.md` and
+   `docs/DECISION_LOG.md` (entry "Watcher remediation: four defects found
+   on independent audit") for full detail. Summary of the four:
+   - **(A)** `AUTHORIZED_PHASE` was parsed but never validated anywhere —
+     a malformed or premature (skip-ahead) phase authorization would have
+     reached Claude unchecked, relying entirely on the prompt for
+     enforcement. Fixed: the watcher now rejects any `AUTHORIZED_PHASE`
+     that isn't a non-negative integer ≤ `current_phase + 1` (read from
+     `docs/BUILD_STATE.md`), logging `PHASE_AUTHORIZATION_INVALID`.
+   - **(B)** The handoff instruction-id match used substring containment
+     (`in`) instead of exact equality — a stale field value that merely
+     *contained* the instruction id as a substring would false-positive
+     match. Fixed: exact equality.
+   - **(C)** `CHECKPOINT_PATH`/`BUNDLE_PATH` were checked only for
+     existence — a pre-existing, untouched file at that path would pass.
+     Fixed: both paths must now appear in the git diff between HEAD before
+     Claude launched and HEAD after the run, proving the evidence was
+     actually produced by this run.
+   - **(D)** Restart recovery only treated a stale `RUNNING` state as a
+     crash; a stale `CLAIMED` state (crash between claiming and actually
+     launching) was silently ignored forever with no `FAILED` transition
+     or log event. Fixed: both states are now treated as stale on restart.
+   All four fixes are strictly more conservative/fail-closed than the
+   prior behavior — none relax any existing check.
 
 ## Important findings
 
-- The watcher was **not** used to authorize or perform any ARGUS phase
-  work — `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is still
-  `STATUS: NO_INSTRUCTION`, exactly as it was before this task, per the
-  human operator's explicit instruction not to begin Phase 1 or wait for an
-  orchestrator instruction in this session.
-- The watcher's Claude CLI invocation (`claude -p <prompt>`, extensible via
-  `--claude-arg`) has not been end-to-end exercised against a real `claude`
-  process in this sandbox — every test and the one real `--once` run here
-  either mock it or never reach the launch step (because
-  `ORCHESTRATOR_INSTRUCTIONS.md` had no `ACTIVE` instruction to act on).
-  The operator should watch the first real run closely.
+- All four defects were genuine and substantiated by tracing the exact
+  pre-fix code path, not accepted on the audit's account alone — see
+  `docs/DECISION_LOG.md` for the specific old-vs-new behavior per bug.
+- `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is unchanged — still
+  `STATUS: NO_INSTRUCTION`. This task did not authorize, and could not
+  have authorized, any ARGUS phase.
 - `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` is unchanged and
-  unrelated to this task — still open, see `docs/BUILD_STATE.md`.
+  unrelated — still open, see `docs/BUILD_STATE.md`.
+- The watcher's real (non-mocked) Claude CLI launch path remains untested
+  against an actual `claude` process in this sandbox — unchanged
+  limitation, noted in the original `watcher_setup.md` checkpoint too.
 
 ## Failures or limitations
 
-- None new. The standing `docker compose up -d postgres` limitation (Docker
-  Hub CDN blocked in this sandbox) is unchanged and unrelated to this task.
+- None new. Same standing limitations as the prior handoff (Docker Hub CDN
+  blocked in this sandbox; real Claude CLI launch unexercised).
 
 ## Deferred checks
 
-- `PG17_COMPOSE_VALIDATION` (unchanged, unrelated to this task — see prior
-  handoffs and `docs/DECISION_LOG.md`).
-- First real (non-mocked) watcher-triggered Claude launch should be
-  observed by the operator to confirm the CLI invocation is correct for
-  their installed Claude CLI version.
+- `PG17_COMPOSE_VALIDATION` (unchanged, unrelated — see
+  `docs/DECISION_LOG.md`).
+- First real (non-mocked) watcher-triggered Claude launch should still be
+  observed by the operator.
 
 ## Exact next action requested from orchestrator
 
-None from the orchestrator for this task specifically — it was authorized
-and scoped directly by the human operator, not by an
-`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` entry. The orchestrator's
-outstanding action from the prior handoff still applies: review
-`orchestration/checkpoints/phase_0_remediation.md` and write an instruction
-into `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` (`STATUS: ACTIVE`,
-`TARGET_COMMIT` pinned to current HEAD) to authorize the next piece of
-ARGUS work. Once that instruction exists, the watcher (if the operator has
-started it) will pick it up automatically — no further manual Claude
-session start should be necessary.
+Unchanged from the prior handoff: review the Phase 0 evidence
+(`orchestration/checkpoints/phase_0_remediation.md`) and the watcher
+evidence (`orchestration/checkpoints/watcher_setup.md` +
+`orchestration/checkpoints/watcher_remediation.md`), then write an
+instruction into `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
+(`STATUS: ACTIVE`, `TARGET_COMMIT` pinned to the exact commit named in the
+final handoff message for this task) to authorize the next piece of ARGUS
+work. Until that instruction exists, the watcher (if running) takes no
+action beyond logging `NO_ACTIVE_INSTRUCTION`.
 
-**Note on this branch's history:** unchanged from the prior handoff — if
-you cloned/fetched this branch before 2026-08-30T22:35 UTC, re-clone or
+**Note on this branch's history:** unchanged from prior handoffs — if you
+cloned/fetched this branch before 2026-08-30T22:35 UTC, re-clone or
 `git fetch --all && git reset --hard origin/claude/argus-folder-setup-77ahrk`
-rather than merging/rebasing the old history.
+rather than merging/rebasing the old (pre-rewrite) history.

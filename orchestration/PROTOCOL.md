@@ -155,6 +155,16 @@ This is an index/status file, not a replacement for the full checkpoint —
 the full checkpoint lives in `orchestration/checkpoints/` (and, per the
 existing MASTER_SPEC.md contract, in `runtime/reports/`).
 
+**Contract enforced mechanically by `scripts/argus_orchestrator_watch.py`**
+(not just convention — a run violating either is marked `FAILED`, not
+`COMPLETED`):
+
+- `LAST_ORCHESTRATOR_INSTRUCTION_ID` must be **exactly** the instruction's
+  `INSTRUCTION_ID` — no other text appended or reworded.
+- `CHECKPOINT_PATH` and `BUNDLE_PATH` must reference files that are part of
+  the commit(s) pushed during that run — a path that merely exists on disk
+  (e.g. left over from an earlier handoff) is not accepted as evidence.
+
 ## 6. Session-start rule
 
 Every future implementation-agent session **must** begin with:
@@ -204,6 +214,14 @@ instruction-file commit on top of `TARGET_COMMIT` (i.e. `HEAD` =
 implementation commit is clearly still the intended target and work may
 proceed. This check must be applied conservatively: when in doubt, treat it
 as a mismatch and stop.
+
+**Phase-authorization protection.** `AUTHORIZED_PHASE` is not trusted
+blindly either: the watcher reads `current_phase` from `docs/BUILD_STATE.md`
+and refuses to launch Claude unless `AUTHORIZED_PHASE` is a well-formed
+non-negative integer no greater than `current_phase + 1`. This is what
+makes "Phase 1 must not be authorized while current_phase is still 0"
+(or any phase skip-ahead) an enforced property of the watcher itself, not
+merely something asked of the Claude prompt.
 
 ## 8. End-of-work rule
 

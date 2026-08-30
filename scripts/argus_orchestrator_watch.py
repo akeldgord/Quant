@@ -45,6 +45,7 @@ DEFAULT_CLAUDE_TIMEOUT_SECONDS = 3600
 
 INSTRUCTIONS_RELPATH = Path("orchestration/ORCHESTRATOR_INSTRUCTIONS.md")
 HANDOFF_RELPATH = Path("orchestration/AGENT_HANDOFF.md")
+BUILD_STATE_RELPATH = Path("docs/BUILD_STATE.md")
 STATE_RELPATH = Path("runtime/orchestrator_watcher_state.json")
 LOCK_RELPATH = Path("runtime/orchestrator_watcher.lock")
 PAUSE_RELPATH = Path("runtime/ORCHESTRATION_PAUSED")
@@ -79,6 +80,14 @@ When authorized work is complete:
 - push,
 - STOP.
 Do not begin later work.
+
+AGENT_HANDOFF.md requirements this watcher enforces mechanically (a run
+that violates either is marked FAILED, not COMPLETED):
+- LAST_ORCHESTRATOR_INSTRUCTION_ID must be EXACTLY the ACTIVE instruction's
+  INSTRUCTION_ID value -- nothing appended or reworded.
+- CHECKPOINT_PATH and BUNDLE_PATH must point to files that are part of the
+  commit(s) you push during this run, not a pre-existing file left over
+  from an earlier handoff.
 """
 
 
@@ -103,6 +112,10 @@ class WatcherConfig:
     @property
     def handoff_path(self) -> Path:
         return self.repo_root / HANDOFF_RELPATH
+
+    @property
+    def build_state_path(self) -> Path:
+        return self.repo_root / BUILD_STATE_RELPATH
 
     @property
     def state_path(self) -> Path:
@@ -361,6 +374,63 @@ def verify_target_commit(repo_root: Path, target_commit: str) -> TargetCommitChe
     return TargetCommitCheck(ok=True)
 
 
+_CURRENT_PHASE_RE = re.compile(r"^current_phase:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def read_current_phase(build_state_path: Path) -> int | None:
+    if not build_state_path.exists():
+        return None
+    match = _CURRENT_PHASE_RE.search(build_state_path.read_text(encoding="utf-8"))
+    return int(match.group(1)) if match else None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PhaseAuthorizationCheck:
+    ok: bool
+    reason: str = ""
+
+
+def verify_phase_authorization(
+    build_state_path: Path, authorized_phase: str
+) -> PhaseAuthorizationCheck:
+    """An ACTIVE instruction's AUTHORIZED_PHASE must be a well-formed,
+    in-sequence phase number -- never trusted blindly (bug fix: this field
+    was previously parsed but never validated anywhere, so a malformed or
+    prematurely-advanced AUTHORIZED_PHASE would reach Claude unchecked).
+
+    "In-sequence" means: no more than one phase ahead of
+    docs/BUILD_STATE.md's current_phase. This is what makes "Phase 1 must
+    not be authorized" (while current_phase is still 0 and nothing has
+    legitimately advanced it) an enforced property of the watcher itself,
+    not just something hoped for from the Claude prompt.
+    """
+    current_phase = read_current_phase(build_state_path)
+    if current_phase is None:
+        return PhaseAuthorizationCheck(
+            ok=False, reason=f"could not read current_phase from {BUILD_STATE_RELPATH}"
+        )
+
+    raw = (authorized_phase or "").strip()
+    try:
+        requested = int(raw)
+    except ValueError:
+        return PhaseAuthorizationCheck(
+            ok=False, reason=f"AUTHORIZED_PHASE {raw!r} is not a valid non-negative integer"
+        )
+
+    if requested < 0:
+        return PhaseAuthorizationCheck(ok=False, reason=f"AUTHORIZED_PHASE {requested} is negative")
+    if requested > current_phase + 1:
+        return PhaseAuthorizationCheck(
+            ok=False,
+            reason=(
+                f"AUTHORIZED_PHASE {requested} skips ahead of current_phase {current_phase} "
+                f"(max allowed is {current_phase + 1})"
+            ),
+        )
+    return PhaseAuthorizationCheck(ok=True)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class PushCheck:
     ok: bool
@@ -390,24 +460,57 @@ class HandoffCheck:
 
 
 def verify_handoff(
-    repo_root: Path, handoff_path: Path, instruction_id: str, handoff_id_before: str | None
+    repo_root: Path,
+    handoff_path: Path,
+    instruction_id: str,
+    handoff_id_before: str | None,
+    head_before: str | None,
 ) -> HandoffCheck:
+    """Verify AGENT_HANDOFF.md evidence is genuine, current, and complete.
+
+    Three bug fixes live here relative to the original implementation:
+
+    - LAST_ORCHESTRATOR_INSTRUCTION_ID must now match ``instruction_id``
+      EXACTLY (previously a substring/``in`` check, which could
+      false-positive match an unrelated or stale field value that merely
+      happened to contain the id as a substring -- e.g. instruction id "1"
+      inside a stale "instr-12").
+    - CHECKPOINT_PATH and BUNDLE_PATH must not just exist on disk: they must
+      be part of the actual diff between ``head_before`` (HEAD immediately
+      before Claude was launched) and the current HEAD. A file that merely
+      *exists* could be stale evidence left over from an earlier,
+      unrelated run at the same path -- existence alone never proved this
+      run produced it.
+    - If HEAD did not move at all during the run, there are by definition
+      no new commits and thus no possible new evidence -- fail immediately
+      rather than let a no-op run masquerade as having produced anything.
+    """
     fields = read_handoff(handoff_path)
     new_handoff_id = fields.get("HANDOFF_ID", "")
-    last_instruction = fields.get("LAST_ORCHESTRATOR_INSTRUCTION_ID", "")
+    last_instruction = fields.get("LAST_ORCHESTRATOR_INSTRUCTION_ID", "").strip()
 
     if not new_handoff_id:
         return HandoffCheck(ok=False, reason="AGENT_HANDOFF.md has no HANDOFF_ID")
     if new_handoff_id == (handoff_id_before or ""):
         return HandoffCheck(ok=False, reason="AGENT_HANDOFF.md HANDOFF_ID was not updated")
-    if instruction_id not in last_instruction:
+    if last_instruction != instruction_id:
         return HandoffCheck(
             ok=False,
             reason=(
                 f"AGENT_HANDOFF.md LAST_ORCHESTRATOR_INSTRUCTION_ID "
-                f"({last_instruction!r}) does not reference {instruction_id!r}"
+                f"({last_instruction!r}) does not exactly match {instruction_id!r}"
             ),
         )
+
+    head_after = git_head(repo_root)
+    if head_after is None:
+        return HandoffCheck(ok=False, reason="could not resolve HEAD after run")
+    if head_before is not None and head_after == head_before:
+        return HandoffCheck(ok=False, reason="no new commits were made during this run")
+
+    changed_paths = (
+        set(git_changed_paths(repo_root, head_before, head_after)) if head_before else None
+    )
 
     for field_name in ("CHECKPOINT_PATH", "BUNDLE_PATH"):
         rel = fields.get(field_name, "")
@@ -415,6 +518,14 @@ def verify_handoff(
             return HandoffCheck(ok=False, reason=f"AGENT_HANDOFF.md missing {field_name}")
         if not (repo_root / rel).exists():
             return HandoffCheck(ok=False, reason=f"{field_name} {rel!r} does not exist on disk")
+        if changed_paths is not None and rel not in changed_paths:
+            return HandoffCheck(
+                ok=False,
+                reason=(
+                    f"{field_name} {rel!r} exists but is not part of this run's commits "
+                    "(stale evidence -- not produced by this run)"
+                ),
+            )
 
     return HandoffCheck(ok=True)
 
@@ -491,14 +602,19 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     state = read_state(config.state_path)
     state.last_check_at = datetime.now(UTC).isoformat()
 
-    # A RUNNING state found at rest means a previous watcher process crashed
-    # mid-launch. Never blindly re-execute -- require a human/orchestrator
-    # decision (section 4).
-    if state.current_status == "RUNNING":
+    # A RUNNING or CLAIMED state found at rest means a previous watcher
+    # process crashed mid-transition (bug fix: originally only RUNNING was
+    # treated as stale here; a crash between CLAIMED and RUNNING left the
+    # watcher silently wedged forever with no FAILED transition and no log
+    # event, since the later duplicate-instruction check swallowed CLAIMED
+    # without ever explaining why). Never blindly re-execute either state --
+    # require a human/orchestrator decision (section 4).
+    if state.current_status in {"RUNNING", "CLAIMED"}:
         log_event(
             config,
             "RUN_FAILED",
-            f"stale RUNNING state found for instruction_id={state.current_instruction_id!r} "
+            f"stale {state.current_status} state found for "
+            f"instruction_id={state.current_instruction_id!r} "
             "(watcher crashed mid-run); not auto-retrying",
         )
         state.current_status = "FAILED"
@@ -564,6 +680,12 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
         write_state(config.state_path, state)
         return state
 
+    phase_check = verify_phase_authorization(config.build_state_path, instructions.authorized_phase)
+    if not phase_check.ok:
+        log_event(config, "PHASE_AUTHORIZATION_INVALID", phase_check.reason)
+        write_state(config.state_path, state)
+        return state
+
     log_event(
         config,
         "NEW_INSTRUCTION",
@@ -578,6 +700,7 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     write_state(config.state_path, state)
 
     handoff_id_before = read_handoff(config.handoff_path).get("HANDOFF_ID")
+    head_before = git_head(config.repo_root)
 
     state.current_status = "RUNNING"
     state.last_launch_at = datetime.now(UTC).isoformat()
@@ -596,7 +719,7 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     state.last_exit_code = exit_code
 
     handoff_check = verify_handoff(
-        config.repo_root, config.handoff_path, instruction_id, handoff_id_before
+        config.repo_root, config.handoff_path, instruction_id, handoff_id_before, head_before
     )
     if not handoff_check.ok:
         log_event(config, "RUN_FAILED", f"handoff verification failed: {handoff_check.reason}")
