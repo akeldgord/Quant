@@ -1,5 +1,15 @@
 ================ ARGUS ORCHESTRATOR CHECKPOINT ================
 
+[PROVENANCE NOTE, added after this checkpoint was first written: on
+2026-08-30 the human operator had git history rewritten (git-filter-repo)
+to scrub four inert dev-only password placeholder strings that had been
+present in earlier commits, before making this repository public. That
+rewrite changed every commit hash on this branch. GIT_COMMIT below has been
+updated to the new hash; see docs/DECISION_LOG.md, entry "Git history
+rewrite to scrub inert dev-only password literals", for the full record
+and the old->new hash mapping. No other content in this checkpoint was
+altered except the incidental redaction noted at "B.1" below.]
+
 A. Identity
 PROJECT: ARGUS
 MASTER_SPEC_VERSION: v2.0
@@ -7,7 +17,7 @@ MASTER_SPEC_HASH: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d140
 PHASE: 0 (Foundation)
 STATUS: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION
 UTC_TIMESTAMP: 2026-08-30T22:06:17Z
-GIT_COMMIT: a4bfc01bd4cde04b0942cca2fcc4bf7c9e17e1eb
+GIT_COMMIT: db0716924df42db64028116b0dfc1e7f53a93ce7 (post-rewrite hash; original was a4bfc01bd4cde04b0942cca2fcc4bf7c9e17e1eb)
 CONFIG_HASH: 4be41f34b83f1841299ccef8c244362f10beb31ccc1c1bfd3ba819dc1e323b0e
 SCHEMA_VERSION: 0.1.0-phase0
 
@@ -25,11 +35,12 @@ argus_ingest/argus_research/argus_executor roles + provider_usage table),
 config.py/clock.py/logging.py, db/ package, health.py, cli.py, api/main.py,
 checkpoint.py, config/*.yaml, Makefile + scripts/.
 
-Remediation completed this round (commits d93d803, a4bfc01), per orchestrator
+Remediation completed this round (originally commits d93d803, a4bfc01; see
+provenance note above for post-history-rewrite hashes), per orchestrator
 instruction:
-1. Removed every working hardcoded fallback DB password (e.g.
-   "REDACTED_FORMER_DEV_PLACEHOLDER") from migrations/versions/0001_*.py, compose.yaml,
-   and src/argus/db/connection.py. Added src/argus/db/credentials.py:
+1. Removed every working hardcoded fallback DB password (one clearly-labeled
+   dev-only placeholder literal per role) from migrations/versions/0001_*.py,
+   compose.yaml, and src/argus/db/connection.py. Added src/argus/db/credentials.py:
    database role/admin passwords now come strictly from required environment
    variables (ARGUS_DB_{INGEST,RESEARCH,EXECUTOR,ADMIN}_PASSWORD); a missing
    one raises MissingCredentialError with a "LOCAL CREDENTIAL REQUIRED"

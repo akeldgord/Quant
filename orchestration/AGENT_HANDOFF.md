@@ -7,59 +7,75 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 ---
 
-HANDOFF_ID: handoff-0001-orchestration-protocol-bootstrap
-UTC_TIMESTAMP: 2026-08-30T22:15:00Z
+HANDOFF_ID: handoff-0002-history-rewrite
+UTC_TIMESTAMP: 2026-08-30T22:35:00Z
 CURRENT_COMMIT: (this commit — see `git log -1` / the COMMIT value returned alongside this handoff)
 CURRENT_PHASE: 0
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
 LAST_ORCHESTRATOR_INSTRUCTION_ID: none (no instruction has been issued through GitHub yet — see orchestration/ORCHESTRATOR_INSTRUCTIONS.md, STATUS: NO_INSTRUCTION)
 CHECKPOINT_PATH: orchestration/checkpoints/phase_0_remediation.md
 BUNDLE_PATH: orchestration/bundles/phase_0_remediation.txt
-TEST_STATUS: 41/41 passed, 93% coverage, ruff clean, mypy clean (as of the Phase 0 remediation commit a4bfc01bd4cde04b0942cca2fcc4bf7c9e17e1eb; this handoff's own commit only adds documentation/protocol files under orchestration/, no application code changed, so these results still hold)
+TEST_STATUS: 41/41 passed, 93% coverage, ruff clean, mypy clean (re-verified after the history rewrite below; no application code behavior changed, only one now-redundant test assertion was removed)
 WORKING_TREE: clean (verified via `git status --porcelain` before and after this commit)
 ORCHESTRATOR_REVIEW_REQUIRED: PG17_COMPOSE_VALIDATION (deferred — see below); first instruction on how to proceed (Phase 1, further remediation, or something else)
 
 ## Work completed
 
 1. **Phase 0 (Foundation)** built and tested per MASTER_SPEC.md's Phase 0
-   BUILD/TEST/ACCEPTANCE list. Commit `2ad092d` (+ `386532e` doc follow-up).
+   BUILD/TEST/ACCEPTANCE list.
 2. **Phase 0 remediation**, per orchestrator instruction: removed every
    hardcoded fallback database password from the codebase in favor of
    required environment variables that fail closed with a clear
    `MissingCredentialError`; corrected the checkpoint's `STATUS` field so it
    no longer claims an unconditional PASS while
    PostgreSQL-17-via-Docker-Compose remains unverified in this sandbox.
-   Commits `d93d803` (+ `a4bfc01` doc follow-up).
-3. **This handoff**: created the `orchestration/` GitHub handoff protocol
+3. **Orchestration protocol bootstrap**: created `orchestration/`
    (`PROTOCOL.md`, this file, the orchestrator-owned
    `ORCHESTRATOR_INSTRUCTIONS.md` placeholder, `checkpoints/`, `bundles/`),
-   and copied the current Phase 0 (remediated) checkpoint and review bundle
-   into the tracked `orchestration/checkpoints/` and `orchestration/bundles/`
-   directories so the orchestrator can read them through GitHub instead of
-   the human operator pasting them manually. No ARGUS architecture change,
-   no MASTER_SPEC.md change, no further Phase 0 remediation was performed as
-   part of this handoff (none was authorized for this round).
+   and copied the Phase 0 (remediated) checkpoint and review bundle into it.
+4. **Git history rewrite** (this round), per explicit human-operator
+   request before making the repository public: a full-history scan
+   (`git log --all -p`) found that four literal dev-only DB password
+   fallback strings — removed from the working tree by step 2 above — were
+   still present in earlier commits' history. These were never real
+   credentials (only ever used against an ephemeral local Postgres inside
+   this disposable sandbox), but the human operator asked for history to be
+   rewritten to remove them rather than merely document them, given the
+   repository is about to become public. `git-filter-repo` was used to
+   scrub the four exact strings from every blob and commit message in
+   history, then the branch was force-pushed. **This changed every commit
+   hash on this branch.** Full details, the reasoning, and the old→new hash
+   mapping are in `docs/DECISION_LOG.md`, entry "Git history rewrite to
+   scrub inert dev-only password literals". All commit-hash references in
+   this repository's own tracked files (`docs/BUILD_STATE.md`,
+   `docs/DECISION_LOG.md`, `orchestration/checkpoints/`,
+   `orchestration/bundles/`) were updated to match. No application code or
+   ARGUS architecture changed as part of this.
 
 ## Important findings
 
 - The full Phase 0 (remediated) findings are in
-  `orchestration/checkpoints/phase_0_remediation.md`
-  (mirrors `runtime/reports/checkpoint_phase_0.txt` at the time it was
-  written) — read that file for the complete picture. Summary: Phase 0
+  `orchestration/checkpoints/phase_0_remediation.md` — read that file for
+  the complete picture (it now carries a provenance note at the top
+  explaining the post-rewrite hash it references). Summary: Phase 0
   acceptance criteria all PASS except one explicitly tracked deferral (next
   bullet).
 - `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
   (`docs/BUILD_STATE.md`): this implementation sandbox's egress policy
   blocks Docker Hub's image CDN, so `docker compose up postgres` (the real
   `postgres:17` image pinned in `compose.yaml`) has never actually been
-  pulled or run. All Phase 0 functional verification (migration-from-zero,
-  DB role grants, `argus health`, the full pytest suite, and the
-  missing-credential fail-closed behavior) was instead run against a
-  substitute local PostgreSQL 16 server. This is recorded as a deferral, not
-  a pass, per `docs/DECISION_LOG.md`.
+  pulled or run. All Phase 0 functional verification was instead run
+  against a substitute local PostgreSQL 16 server. Recorded as a deferral,
+  not a pass.
 - No hardcoded working credential of any kind remains anywhere in the
-  repository (verified by grep scan and by an automated regression test,
-  `tests/unit/test_db_credentials.py`).
+  repository's current tracked files, **and** a full-history re-scan after
+  the rewrite confirms zero occurrences of the four scrubbed literal
+  strings anywhere in git history (all branches, all commits).
+- Before making this repository public: also confirmed no API keys,
+  private keys/seed phrases, `.env` files, live wallet info, tokens/
+  cookies, `/var/lib/argus/secrets/` file content, or personal data exist
+  anywhere in git history — see `docs/DECISION_LOG.md` for the scope of
+  what was checked.
 
 ## Failures or limitations
 
@@ -87,3 +103,9 @@ ORCHESTRATOR_REVIEW_REQUIRED: PG17_COMPOSE_VALIDATION (deferred — see below); 
    with a `TARGET_COMMIT` pinned to the commit this handoff was pushed at.
 3. Until an `ACTIVE` instruction exists, the implementation agent will not
    begin further ARGUS phase work (per `orchestration/PROTOCOL.md` section 6).
+
+**Note on this branch's history:** if you (or any tool) cloned or fetched
+this branch before 2026-08-30T22:35 UTC, your local copy has the
+pre-rewrite commit hashes and will diverge from `origin`. Re-clone or
+`git fetch --all && git reset --hard origin/claude/argus-folder-setup-77ahrk`
+rather than trying to merge/rebase the old history onto the new.

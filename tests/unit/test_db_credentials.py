@@ -76,4 +76,3 @@ def test_no_hardcoded_dev_only_password_fallback_exists() -> None:
 
     source = inspect.getsource(connection_module)
     assert "dev_only" not in source
-    assert "REDACTED_FORMER_DEV_PLACEHOLDER" not in source
