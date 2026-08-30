@@ -1,0 +1,36 @@
+# Wallet Qualification Score v1 (MASTER_SPEC.md section 38).
+# These are V1 priors to be evaluated prospectively — do not retune silently
+# (section 38). Any change requires an orchestrator-approved decision logged
+# in docs/DECISION_LOG.md and a new score_version.
+
+score_version: qualification_v1
+
+weights:
+  selection_alpha: 0.25
+  consistency: 0.15
+  entry_timing: 0.15
+  forward_information: 0.15
+  risk_adjusted_return: 0.10
+  exit_capture: 0.10
+  recency: 0.05
+  data_confidence: 0.05
+
+penalties:
+  insider_penalty_enabled: true
+  cluster_uncertainty_penalty_enabled: true
+  lottery_dominance_penalty_enabled: true
+  data_quality_penalty_enabled: true
+  predation_penalty_enabled: true
+
+lottery_dominance:
+  # section 40: flag when the largest position contributes more than this
+  # fraction of estimated lifetime P&L.
+  max_single_position_pnl_share: 0.70
+
+sample_requirements:
+  # section 39
+  min_usable_closed_positions: 20
+  min_distinct_tokens_with_outcomes: 10
+  disallow_history_completeness: [LOW, UNKNOWN]
+
+recency_windows_days: [7, 30, 90, 180]  # section 41; lifetime is implicit

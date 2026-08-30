@@ -1,0 +1,28 @@
+# Default capital / risk configuration (MASTER_SPEC.md section 74, 81).
+# These defaults make live trading structurally impossible: every cap is
+# zero. Raising them is an explicit human/operator decision made outside
+# this repository (the live-arm file, section 73) — the implementation
+# agent must never edit these to a nonzero value.
+
+risk_version: risk_default_v1
+
+capital_limits:
+  live_max_single_trade_sol: 0
+  live_max_total_exposure_sol: 0
+  live_max_daily_loss_sol: 0
+
+risk_multipliers:  # section 74
+  MICRO: 0.10
+  QUARTER: 0.25
+  HALF: 0.50
+  NORMAL: 1.00
+
+execution_policy:
+  allow_automatic_scale_in: false        # section 65
+  allow_automatic_slippage_escalation: false  # section 80
+  require_confirmed_source_tx: true      # section 20
+  one_open_position_per_mint: true       # section 65
+
+kill_switch:
+  max_daily_loss_sol: 0
+  operator_emergency_exit_enabled: true

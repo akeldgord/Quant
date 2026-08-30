@@ -1,0 +1,32 @@
+# ARGUS default runtime configuration (Phase 0 baseline).
+# Values here are behavioral defaults, not secrets — credentials live in
+# .env (see .env.example) and are never part of this file or config_hash's
+# printed inputs.
+
+environment: development
+log_level: INFO
+
+clock:
+  max_drift_seconds: 5.0
+  heartbeat_interval_seconds: 1.0
+
+live_readiness:
+  # These are always reported by `argus health`; Phase 0 hardcodes them
+  # false because no executor, canary, or arming mechanism exists yet.
+  live_ready_software: false
+  live_canary_passed: false
+  live_armed: false
+
+versions:
+  schema_version: "0.1.0-phase0"
+  parser_version: null
+  winner_definition_version: null
+  wallet_score_version: null
+  copyability_version: null
+  cluster_version: null
+  graph_version: null
+  counterfactual_version: null
+  signal_version: null
+  risk_version: null
+  strategy_version: null
+  model_version: null

@@ -1,0 +1,35 @@
+# Trade Readiness Score v1 + copyability weights (MASTER_SPEC.md sections 49, 53).
+# V1 priors — do not silently retune (section 53).
+
+signal_version: trade_readiness_v1
+
+copyability_weights:  # section 49
+  prospective_delayed_follower_alpha: 0.35
+  liquidity_executability: 0.15
+  post_entry_stability: 0.10
+  holding_duration_suitability: 0.10
+  latency_tolerance: 0.10
+  slippage_sensitivity: 0.10
+  sample_confidence: 0.10
+
+trade_readiness_weights:  # section 53
+  qualification_score: 0.20
+  copyability: 0.20
+  remaining_information_at_current_delay: 0.15
+  liquidity_executable_price_impact: 0.15
+  price_movement_since_leader: 0.10
+  relative_position_size_surprise: 0.10
+  independent_confirmation: 0.10
+
+thresholds:
+  trade_readiness_min: 90          # section 53
+  wallet_tier_allowed: [A, S]       # section 54
+  qualification_score_min: 85
+  copyability_score_min: 75
+
+copyability_delay_probes_seconds: [1, 5, 15, 30, 60, 300]  # section 46
+executable_outcome_horizons: ["5m", "30m", "1h", "6h", "24h"]  # section 47
+mark_outcome_horizons: ["5m", "30m", "1h", "6h", "24h", "3d", "7d"]  # section 89
+
+allow_automatic_scale_in: false  # section 65 — must stay false until a
+                                  # separately validated strategy is approved

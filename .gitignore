@@ -1,0 +1,54 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+
+# --- uv / venv ---
+.venv/
+venv/
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*keypair*.json
+*_arm.json
+live_arm.json
+
+# --- Runtime data (never authoritative research evidence in git) ---
+runtime/logs/*
+!runtime/logs/.gitkeep
+runtime/state/*
+!runtime/state/.gitkeep
+runtime/reports/*
+!runtime/reports/.gitkeep
+
+# --- Local/analytical datasets ---
+data/raw/*
+!data/raw/.gitkeep
+data/parquet/*
+!data/parquet/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- Docker ---
+*.pid

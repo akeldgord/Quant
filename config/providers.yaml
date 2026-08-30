@@ -1,0 +1,47 @@
+# Provider configuration (MASTER_SPEC.md sections 11-16).
+# Free-first policy: every provider starts on its free tier, disabled unless
+# explicitly wired up in a later phase. No paid tier may be enabled here
+# without an explicit orchestrator-approved decision recorded in
+# docs/DECISION_LOG.md (COST-003).
+#
+# Phase 0 does not implement any provider adapter; this file exists so the
+# config loader and cost-guard schema have a stable shape to build against
+# starting Phase 1.
+
+helius:
+  enabled: false
+  tier: free
+  paid_historical_api_enabled: false  # PROV-001: must stay false for free V1
+  conservative_rate_limit_per_sec: 5
+
+dexscreener:
+  enabled: false
+  tier: free
+  conservative_rate_limit_per_sec: 2
+
+geckoterminal:
+  enabled: false
+  tier: free
+  conservative_rate_limit_per_sec: 1
+
+jupiter:
+  enabled: false
+  tier: free
+  conservative_rate_limit_per_sec: 2
+  # Central priority scheduler classes (section 15), highest priority first.
+  priority_classes:
+    - P0_emergency_live_exit
+    - P1_ordinary_live_exit
+    - P2_live_entry_order
+    - P3_live_safety_check
+    - P4_prospective_copyability_quote
+    - P5_shadow_exit_quote
+    - P6_background_research
+
+bigquery:
+  enabled: false
+  tier: free
+  dry_run_required: true          # section 16
+  max_bytes_billed_ceiling: 0      # 0 = disabled until explicitly configured
+
+usage_warning_thresholds_pct: [70, 85, 95]  # section 14
