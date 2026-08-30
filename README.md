@@ -10,6 +10,13 @@ decision recorded in [`docs/DECISION_LOG.md`](./docs/DECISION_LOG.md).
 
 Current build progress lives in [`docs/BUILD_STATE.md`](./docs/BUILD_STATE.md).
 
+The implementation agent and the ARGUS orchestrator communicate through this
+repository — see [`orchestration/PROTOCOL.md`](./orchestration/PROTOCOL.md)
+for the handoff protocol, [`orchestration/ORCHESTRATOR_INSTRUCTIONS.md`](./orchestration/ORCHESTRATOR_INSTRUCTIONS.md)
+for the current authorized-work instruction, and
+[`orchestration/AGENT_HANDOFF.md`](./orchestration/AGENT_HANDOFF.md) for the
+agent's current status.
+
 ## Status
 
 **Phase 0 (Foundation).** No provider, ingestion, scoring, or execution code

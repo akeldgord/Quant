@@ -1,0 +1,649 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE — Phase 0
+Generated: 2026-08-30T22:07:07.562180+00:00
+
+=== CHECKPOINT ===
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+MASTER_SPEC_HASH: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+PHASE: 0 (Foundation)
+STATUS: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION
+UTC_TIMESTAMP: 2026-08-30T22:06:17Z
+GIT_COMMIT: a4bfc01bd4cde04b0942cca2fcc4bf7c9e17e1eb
+CONFIG_HASH: 4be41f34b83f1841299ccef8c244362f10beb31ccc1c1bfd3ba819dc1e323b0e
+SCHEMA_VERSION: 0.1.0-phase0
+
+This replaces the prior Phase 0 checkpoint (commit 2ad092d), which incorrectly
+reported STATUS: PASS while also reporting [PARTIAL] Postgres starts — an
+internally inconsistent checkpoint. This checkpoint corrects that and reports
+the remediation completed per explicit orchestrator instruction.
+
+B. What was built
+Phase 0 build (unchanged from the prior checkpoint): repository scaffold per
+section 7, MASTER_SPEC.md saved verbatim, docs/ARCHITECTURE.md/BUILD_STATE.md/
+DECISION_LOG.md (+ stubs), uv-managed Python 3.12 env, compose.yaml (Postgres
+17 + api services), Alembic baseline migration 0001 (least-privilege
+argus_ingest/argus_research/argus_executor roles + provider_usage table),
+config.py/clock.py/logging.py, db/ package, health.py, cli.py, api/main.py,
+checkpoint.py, config/*.yaml, Makefile + scripts/.
+
+Remediation completed this round (commits d93d803, a4bfc01), per orchestrator
+instruction:
+1. Removed every working hardcoded fallback DB password (e.g.
+   "REDACTED_FORMER_DEV_PLACEHOLDER") from migrations/versions/0001_*.py, compose.yaml,
+   and src/argus/db/connection.py. Added src/argus/db/credentials.py:
+   database role/admin passwords now come strictly from required environment
+   variables (ARGUS_DB_{INGEST,RESEARCH,EXECUTOR,ADMIN}_PASSWORD); a missing
+   one raises MissingCredentialError with a "LOCAL CREDENTIAL REQUIRED"
+   message (section 108 format) instead of silently substituting a working
+   default. compose.yaml uses Compose's ${VAR:?message} required-variable
+   syntax for the admin password. .env.example already contained empty
+   placeholders only. scripts/bootstrap.sh now stops after creating .env and
+   tells the operator to fill in real password values, rather than
+   proceeding into a migration that would previously have silently
+   succeeded with a guessable password.
+2. Recorded PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK explicitly
+   in docs/BUILD_STATE.md (as a top-level field, not buried in prose) and in
+   docs/DECISION_LOG.md, so this cannot be forgotten in a future session.
+   compose.yaml is unchanged and still pins postgres:17 (TECH-004) — nothing
+   about the target architecture changed.
+3. Added tests/unit/test_db_credentials.py: fail-closed behavior for every
+   DB role (parametrized) and for the admin connection, plus a regression
+   guard asserting no "dev_only"-style literal exists anywhere in
+   src/argus/db/connection.py.
+
+C. Files changed
+git diff --stat be09468..HEAD: 98 files changed, 7990 insertions(+), 1
+deletion(-). Since the prior checkpoint (2ad092d..a4bfc01): 10 files touched
+in the remediation commit (2 new: src/argus/db/credentials.py,
+tests/unit/test_db_credentials.py; 8 modified: README.md, compose.yaml,
+docs/ARCHITECTURE.md, docs/BUILD_STATE.md, docs/DECISION_LOG.md,
+migrations/versions/0001_*.py, scripts/bootstrap.sh,
+src/argus/db/connection.py) plus one docs-only follow-up commit
+(BUILD_STATE.md, DECISION_LOG.md hash backfill). Full listing in
+runtime/reports/orchestrator_bundle_phase_0.txt (gitignored local artifact).
+
+D. Commands actually run (this remediation round)
+- Edited: src/argus/db/credentials.py (new), src/argus/db/connection.py,
+  migrations/versions/0001_baseline_roles_and_provider_usage.py,
+  compose.yaml, scripts/bootstrap.sh, README.md, docs/ARCHITECTURE.md,
+  docs/BUILD_STATE.md, docs/DECISION_LOG.md, tests/unit/test_db_credentials.py
+- uv run ruff check . / uv run ruff format . / uv run ruff format --check .
+- uv run mypy
+- service postgresql start (local PG16 substitute; had stopped between
+  sessions and was restarted)
+- Migration-from-zero, run twice: once with all required credentials
+  present (succeeded), once with ARGUS_DB_INGEST_PASSWORD deliberately
+  unset (failed immediately with MissingCredentialError, exit code 1 — no
+  partial role/table creation occurred), then re-migrated cleanly
+- uv run pytest --cov --cov-report=term-missing (run after edits; 41/41
+  passed)
+- uv run pytest tests/integration/test_db_roles.py
+  tests/integration/test_provider_usage_model.py -v (role-privilege tests,
+  explicitly re-verified)
+- grep-based secret scan across tracked file types
+- grep-based scan for any remaining "dev_only" literal outside the
+  regression-guard test itself
+- git status --porcelain (clean after each commit) / git add -A / git commit
+  (x2: remediation + doc hash backfill) / git push
+
+E. Test results
+pytest: passed: 41, failed: 0, skipped: 0 (up from 29 — added
+  tests/unit/test_db_credentials.py, 12 tests)
+coverage: 93% overall (442 statements, 21 missed); src/argus/db/connection.py
+  and src/argus/db/credentials.py both 100%; all modules >= 80%
+ruff: All checks passed! (check + format --check clean)
+mypy: Success: no issues found in 40 source files
+
+F. Acceptance criteria (Phase 0)
+[PASS] fresh repo bootstrap works (uv sync + uv python install 3.12
+  verified; scripts/bootstrap.sh now explicitly stops for the operator to
+  fill in real DB passwords before proceeding — this is intentional
+  fail-closed behavior, not a defect)
+[DEFERRED] Postgres starts via `docker compose up -d postgres` —
+  PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK (see docs/BUILD_STATE.md
+  and docs/DECISION_LOG.md). Docker Hub's image CDN is blocked by this
+  sandbox's egress policy (403 at the proxy), so the actual postgres:17
+  image could not be pulled here. This is NOT represented as PASS or as
+  PostgreSQL 17 validation. A local PostgreSQL 16 server was substituted
+  to functionally validate the identical migration/application code (PASS
+  for that substitute path only). compose.yaml is untouched, still pins
+  postgres:17 per TECH-004. Per explicit orchestrator instruction, this
+  deferred check does not block Phase 1 but does block live-readiness
+  approval.
+[PASS] migration from zero works (re-verified this round, including a
+  deliberate missing-credential failure case that correctly aborted
+  before creating any role/table, followed by a clean re-run)
+[PASS] tests run (41/41 passed)
+[PASS] Ruff runs
+[PASS] mypy runs
+[PASS] config hash generated (unchanged: 4be41f34... — no config/*.yaml
+  files were touched by this remediation)
+[PASS] MASTER_SPEC hash generated (unchanged: 41f7242c...; MASTER_SPEC.md
+  was not touched)
+[PASS] DB roles exist (re-verified: tests/integration/test_db_roles.py x3 +
+  tests/integration/test_provider_usage_model.py, all passing against a
+  freshly-migrated database)
+[PASS] no secrets committed — additionally, no hardcoded *working* fallback
+  credential of any kind remains anywhere in the repository (this round's
+  specific remediation target); grep scan for both secret patterns and
+  "dev_only"-style literals is clean; git status --porcelain clean after
+  every commit
+[PASS] runtime directories ignored (unchanged)
+[PASS] BUILD_STATE works (now additionally carries an explicit
+  PG17_COMPOSE_VALIDATION field so the deferral cannot be silently dropped)
+
+G. Database/data sanity
+Unchanged from the prior checkpoint: provider_usage table with the full
+17-column section-14 schema, 0 rows (no provider adapters exist yet). 3
+application-facing roles (argus_ingest, argus_research, argus_executor),
+each now created with a password sourced from a required env var rather
+than a hardcoded literal. No other tables exist yet (expected for Phase 0).
+
+H. Provider usage
+Not applicable — no provider adapters exist yet (Phase 1+).
+
+I. Data quality warnings
+- PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK (see F above and
+  docs/BUILD_STATE.md / docs/DECISION_LOG.md for the full record). This is
+  the only open item from this checkpoint's perspective; it is explicitly
+  not being represented as resolved.
+- No hardcoded credential fallback of any kind remains in the repository;
+  .env (local, gitignored) continues to hold this sandbox's own disposable
+  dev-only password values, supplied as the required environment variables
+  — this is the intended mechanism, not a code-level fallback, and .env
+  itself was never committed.
+
+J. Sample outputs
+`uv run argus health` (unchanged from prior checkpoint's shape):
+  Postgres: OK
+  Clock: OK
+  config_hash: 4be41f34b83f1841299ccef8c244362f10beb31ccc1c1bfd3ba819dc1e323b0e
+  master_spec_hash: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+  LIVE_READY_SOFTWARE: false
+  LIVE_CANARY_PASSED: false
+  LIVE_ARMED: false
+
+Missing-credential failure (deliberately triggered this round, ARGUS_DB_INGEST_PASSWORD unset):
+  argus.db.credentials.MissingCredentialError: LOCAL CREDENTIAL REQUIRED:
+  ARGUS_DB_INGEST_PASSWORD
+  Place it locally in your .env file (gitignored; see .env.example) or
+  process environment before running migrations or connecting to Postgres.
+  DO NOT paste its value into chat. No fallback password exists — this is
+  intentional (MASTER_SPEC.md SEC-005).
+  (alembic exit code 1; no partial role/table creation occurred)
+
+K. Architectural deviations
+NONE. compose.yaml still targets postgres:17 (TECH-004); the PostgreSQL 16
+substitute used for sandbox verification is explicitly tracked as a deferred
+environmental check, not an architecture change.
+
+L. ORCHESTRATOR_REVIEW_REQUIRED
+- PG17_COMPOSE_VALIDATION remains DEFERRED_ENVIRONMENTAL_CHECK. Per your
+  instruction this does not block Phase 1, but closing it out (running
+  `make bootstrap && make up` against real postgres:17 on a host with normal
+  Docker Hub access, then recording the result in docs/BUILD_STATE.md and
+  docs/DECISION_LOG.md) is required before live readiness can be approved.
+  No other review items are outstanding from this remediation.
+
+M. Known bugs / debt
+None beyond the deferred PG17 validation in I/L above. Coverage gaps are
+limited to the same handful of defensive/unreachable branches noted in the
+prior checkpoint (api/main.py engine-unavailable fallback paths,
+checkpoint.py missing-file fallback branches, cli.py --console-logs/__main__
+guard, config.py edge-case merge branches, db/session.py dispose_all,
+clock.py first-tick branch); none are safety-relevant since no
+live-execution, risk, or custody code exists yet.
+
+N. Security state
+- Secret scan: clean. Additionally: zero hardcoded working fallback
+  credentials remain anywhere in the repository (this round's remediation
+  target), verified by grep scan and by an automated regression test
+  (tests/unit/test_db_credentials.py::test_no_hardcoded_dev_only_password_fallback_exists).
+- Key isolation: not applicable yet — no signing key/executor exists.
+- Live readiness: LIVE_READY_SOFTWARE=false, LIVE_CANARY_PASSED=false,
+  LIVE_ARMED=false (hardcoded; no code path can set any to true).
+- Arming: no arm file/mechanism exists. risk.default.yaml pins all capital
+  limits to 0.
+- DB privilege separation (section 72): unchanged and re-verified —
+  argus_ingest can write provider_usage, argus_research can only read it
+  (automated test asserts the research-role write is rejected by
+  Postgres), argus_executor has no table grants yet. All three roles are
+  now created with passwords sourced from required environment variables
+  rather than any hardcoded value.
+
+O. Next specified phase
+PHASE 1 — PROVIDERS, IMMUTABLE INGESTION, LIVE RECONCILIATION.
+DO NOT BEGIN IT. Per this remediation round, the deferred PG17 Docker
+validation does not block starting Phase 1 once explicitly approved — but
+Phase 1 has not been started, and this checkpoint does not constitute that
+approval.
+
+================ END ARGUS CHECKPOINT =========================
+
+--- git status --porcelain (ok) ---
+$ git status --porcelain
+(no output)
+
+--- git log -5 --oneline (ok) ---
+$ git log -5 --oneline
+a4bfc01 docs: fill in remediation commit hash in BUILD_STATE/DECISION_LOG
+d93d803 phase0-remediation: remove hardcoded DB password fallbacks; fix checkpoint STATUS
+386532e docs: record Phase 0 build completion in BUILD_STATE.md
+2ad092d phase0: scaffold ARGUS architecture and infrastructure
+be09468 Initial commit
+
+--- git diff --stat HEAD (ok) ---
+$ git diff --stat HEAD
+(no output)
+
+--- git diff --name-status HEAD (ok) ---
+$ git diff --name-status HEAD
+(no output)
+
+--- repository tree (depth 3) ---
+.
+./.coverage
+./.env
+./.env.example
+./.mypy_cache
+./.mypy_cache/.gitignore
+./.mypy_cache/3.12
+./.mypy_cache/3.12/cache.db
+./.mypy_cache/CACHEDIR.TAG
+./.pytest_cache
+./.pytest_cache/.gitignore
+./.pytest_cache/CACHEDIR.TAG
+./.pytest_cache/README.md
+./.pytest_cache/v
+./.pytest_cache/v/cache
+./.ruff_cache
+./.ruff_cache/.gitignore
+./.ruff_cache/0.16.5
+./.ruff_cache/0.16.5/12260078328580260821
+./.ruff_cache/0.16.5/14019792682234110828
+./.ruff_cache/0.16.5/18213512197950766699
+./.ruff_cache/0.16.5/4443864223019225297
+./.ruff_cache/0.16.5/6348095768289384867
+./.ruff_cache/0.16.5/9274844432529131567
+./.ruff_cache/CACHEDIR.TAG
+./.venv
+./.venv/.gitignore
+./.venv/.lock
+./.venv/CACHEDIR.TAG
+./.venv/bin
+./.venv/bin/activate
+./.venv/bin/activate.bat
+./.venv/bin/activate.csh
+./.venv/bin/activate.fish
+./.venv/bin/activate.nu
+./.venv/bin/activate.ps1
+./.venv/bin/activate_this.py
+./.venv/bin/alembic
+./.venv/bin/argus
+./.venv/bin/coverage
+./.venv/bin/coverage-3.12
+./.venv/bin/coverage3
+./.venv/bin/deactivate.bat
+./.venv/bin/dmypy
+./.venv/bin/dotenv
+./.venv/bin/fastapi
+./.venv/bin/httpx
+./.venv/bin/hypothesis
+./.venv/bin/idna
+./.venv/bin/mako-render
+./.venv/bin/markdown-it
+./.venv/bin/mypy
+./.venv/bin/mypyc
+./.venv/bin/py.test
+./.venv/bin/pydoc.bat
+./.venv/bin/pygmentize
+./.venv/bin/pytest
+./.venv/bin/python
+./.venv/bin/python3
+./.venv/bin/python3.12
+./.venv/bin/ruff
+./.venv/bin/stubgen
+./.venv/bin/stubtest
+./.venv/bin/typer
+./.venv/bin/uvicorn
+./.venv/bin/watchfiles
+./.venv/include
+./.venv/include/site
+./.venv/lib
+./.venv/lib/python3.12
+./.venv/lib64
+./.venv/pyvenv.cfg
+./Dockerfile
+./MASTER_SPEC.md
+./Makefile
+./README.md
+./alembic.ini
+./compose.yaml
+./config
+./config/argus.default.yaml
+./config/bootstrap_tokens.example.csv
+./config/providers.yaml
+./config/risk.default.yaml
+./config/scoring_v1.yaml
+./config/signals_v1.yaml
+./data
+./data/cache
+./data/cache/.gitkeep
+./data/exports
+./data/exports/.gitkeep
+./data/parquet
+./data/parquet/.gitkeep
+./data/raw
+./data/raw/.gitkeep
+./docs
+./docs/ARCHITECTURE.md
+./docs/BUILD_STATE.md
+./docs/CHECKPOINTS.md
+./docs/DATA_MODEL.md
+./docs/DECISION_LOG.md
+./docs/EXECUTION_SAFETY.md
+./docs/OPERATIONS.md
+./docs/PROVIDERS.md
+./docs/RESEARCH_METHODS.md
+./docs/RUNBOOK.md
+./migrations
+./migrations/env.py
+./migrations/script.py.mako
+./migrations/versions
+./migrations/versions/.gitkeep
+./migrations/versions/0001_baseline_roles_and_provider_usage.py
+./pyproject.toml
+./runtime
+./runtime/logs
+./runtime/logs/.gitkeep
+./runtime/reports
+./runtime/reports/.gitkeep
+./runtime/reports/checkpoint_phase_0.txt
+./runtime/reports/orchestrator_bundle_phase_0.txt
+./runtime/state
+./runtime/state/.gitkeep
+./scripts
+./scripts/backup.sh
+./scripts/bootstrap.sh
+./scripts/checkpoint.sh
+./scripts/smoke_test.sh
+./src
+./src/argus
+./src/argus/__init__.py
+./src/argus/api
+./src/argus/checkpoint.py
+./src/argus/cli.py
+./src/argus/clock.py
+./src/argus/clustering
+./src/argus/config.py
+./src/argus/copyability
+./src/argus/db
+./src/argus/domain
+./src/argus/execution
+./src/argus/graph
+./src/argus/health.py
+./src/argus/ingestion
+./src/argus/logging.py
+./src/argus/notifications
+./src/argus/outcomes
+./src/argus/parsing
+./src/argus/providers
+./src/argus/research
+./src/argus/risk
+./src/argus/scoring
+./src/argus/shadow
+./src/argus/signals
+./src/argus/tokens
+./src/argus/wallets
+./tests
+./tests/__init__.py
+./tests/fixtures
+./tests/fixtures/__init__.py
+./tests/golden
+./tests/golden/__init__.py
+./tests/integration
+./tests/integration/__init__.py
+./tests/integration/conftest.py
+./tests/integration/test_checkpoint_bundle.py
+./tests/integration/test_cli.py
+./tests/integration/test_db_roles.py
+./tests/integration/test_health_endpoint.py
+./tests/integration/test_provider_usage_model.py
+./tests/replay
+./tests/replay/__init__.py
+./tests/unit
+./tests/unit/__init__.py
+./tests/unit/test_checkpoint.py
+./tests/unit/test_clock.py
+./tests/unit/test_config.py
+./tests/unit/test_db_credentials.py
+./tests/unit/test_logging.py
+./uv.lock
+
+--- dependency summary (uv pip list) (ok) ---
+$ uv pip list
+Package           Version         Editable project location
+----------------- --------------- -------------------------
+alembic           1.19.1
+annotated-doc     0.0.5
+annotated-types   0.8.0
+anyio             4.14.2
+argus             0.1.0           /home/user/Quant
+asgi-lifespan     2.1.0
+asyncpg           0.31.0
+certifi           2026.7.22
+click             8.5.0
+coverage          7.16.0
+fastapi           0.141.1
+greenlet          3.5.5
+h11               0.16.0
+httpcore          1.0.9
+httptools         0.8.0
+httpx             0.28.1
+hypothesis        6.167.1
+idna              3.19
+iniconfig         2.3.0
+librt             0.15.0
+mako              1.4.1
+markdown-it-py    4.2.0
+markupsafe        3.0.3
+mdurl             0.1.2
+mypy              1.20.2
+mypy-extensions   1.1.0
+packaging         26.3
+pathspec          1.1.1
+pluggy            1.6.0
+pydantic          2.13.5
+pydantic-core     2.46.5
+pydantic-settings 2.15.0
+pygments          2.21.0
+pytest            8.4.2
+pytest-asyncio    0.26.0
+pytest-cov        5.0.0
+python-dotenv     1.2.3
+pyyaml            6.0.3
+rich              13.9.4
+ruff              0.16.5
+shellingham       1.5.4
+sniffio           1.3.1
+sortedcontainers  2.4.0
+sqlalchemy        2.0.52
+starlette         1.6.0
+structlog         24.4.0
+typer             0.27.2
+types-pyyaml      6.0.12.20260815
+typing-extensions 4.16.0
+typing-inspection 0.4.4
+uvicorn           0.50.1
+uvloop            0.22.1
+watchfiles        1.2.0
+websockets        12.0
+
+--- compose service summary (ok) ---
+$ docker compose config --services
+postgres
+api
+
+--- alembic head (ok) ---
+$ uv run alembic current
+0001 (head)
+
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+
+--- MASTER_SPEC hash ---
+41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+
+--- BUILD_STATE.md ---
+# ARGUS Build State
+
+Machine-and-human-readable state for session recovery (MASTER_SPEC.md section 8).
+Every new implementation session must read this file before doing anything else.
+
+```yaml
+current_phase: 0
+last_completed_phase: 0  # implementation-agent build+test+acceptance complete; NOT orchestrator-approved
+last_orchestrator_approved_phase: null
+approved_commit: null
+awaiting_orchestrator_review: true
+
+# PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
+# (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
+# exercised end-to-end. It is DEFERRED, not PASS and not FAIL: functional
+# correctness of the migration/application code was verified against a
+# substitute PostgreSQL 16 server instead (see known_blockers below and
+# docs/DECISION_LOG.md). Per explicit orchestrator instruction (2026-08-30):
+# this deferral does NOT block starting Phase 1, but DOES block approving
+# live readiness until it is closed out with a real postgres:17 run.
+PG17_COMPOSE_VALIDATION: DEFERRED_ENVIRONMENTAL_CHECK
+
+known_blockers:
+  - "PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK. This
+     implementation sandbox's egress policy blocks Docker Hub's image CDN
+     (production.cloudfront.docker.com -> 403 at the proxy), so
+     `docker compose up postgres` (the actual postgres:17 image) could not
+     be pulled or exercised here. compose.yaml is unmodified and still
+     targets postgres:17 as required by TECH-004 -- this is an environment
+     limitation of this sandbox, not an architecture change. As a substitute,
+     Phase 0 functional acceptance (migration-from-zero, DB roles,
+     provider_usage grants, argus health, full pytest suite, missing-credential
+     fail-closed behavior) was verified against the sandbox's
+     locally-installed PostgreSQL 16 server, running the exact same Alembic
+     migration and application code Compose would run against PostgreSQL 17.
+     This PG16 run demonstrates the migration/application logic is correct;
+     it does NOT demonstrate anything PostgreSQL-17-version-specific and
+     must not be cited as PostgreSQL 17 validation. Closing this out requires
+     running `make bootstrap && make up` (or equivalent) on a host with
+     normal Docker Hub access and recording the result here and in
+     docs/DECISION_LOG.md. See docs/DECISION_LOG.md for the full decision
+     record. Per explicit orchestrator instruction, this deferred check does
+     NOT block Phase 1, but IS required before live readiness can be
+     approved."
+```
+
+## Phase history
+
+| Phase | Status | Commit | Notes |
+|-------|--------|--------|-------|
+| 0 | BUILT — remediated, awaiting orchestrator review | 2ad092deb248136d443e4384b9c11dfc17f58135, remediated at d93d8036e81256cb3b51218b4a0fa7f6a9b78a11 | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
+
+## Rules
+
+- This file may be updated by the implementation agent to reflect actual build
+  progress.
+- `last_orchestrator_approved_phase` and `approved_commit` may ONLY be set to a
+  new value after receiving **explicit** orchestrator approval for that phase.
+  The implementation agent must never self-approve a phase here.
+- Do not begin work on `current_phase + 1` while `awaiting_orchestrator_review`
+  is `true` for the current phase.
+
+
+--- DECISION_LOG.md ---
+# ARGUS Decision Log
+
+Append-only record of every orchestrator-approved material change to
+MASTER_SPEC.md or to a decision the spec explicitly delegated to the
+orchestrator (MASTER_SPEC.md section 109). Do not silently edit
+MASTER_SPEC.md — record the change here instead, with the requesting
+party and the git commit that implements it.
+
+Entries are appended chronologically. Do not rewrite or delete prior entries.
+
+## Format
+
+```
+### YYYY-MM-DD — <short title>
+- requirement_id: <MASTER_SPEC section/ID this touches>
+- decision: <what was decided>
+- reason: <why>
+- requested_by: <human operator | orchestrator>
+- impact: <what changes as a result>
+- git_commit: <commit sha implementing it>
+```
+
+## Entries
+
+### 2026-08-30 — Phase 0 checkpoint STATUS discipline + deferred PG17 Docker validation
+- requirement_id: section 104 (STANDARD ORCHESTRATOR CHECKPOINT, field F/STATUS),
+  section 106 (CLEAN SOURCE REQUIREMENT), TECH-004 (PostgreSQL 17)
+- decision: The original Phase 0 checkpoint reported `STATUS: PASS` while also
+  reporting `[PARTIAL] Postgres starts`, which is an internally inconsistent
+  checkpoint. Corrected going forward: Phase 0's PostgreSQL-17-via-Docker-Compose
+  path is tracked as its own explicit state,
+  `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`, recorded in
+  docs/BUILD_STATE.md. The successful PostgreSQL 16 local run is retained as
+  evidence the migration/application code is functionally correct, but is
+  explicitly NOT represented as PostgreSQL 17 validation anywhere. Per
+  explicit orchestrator instruction, this deferred check does not block
+  starting Phase 1, but does block approving live readiness until closed out
+  with a real `postgres:17` run. compose.yaml remains unchanged — still pins
+  `postgres:17` per TECH-004; no architecture change was made.
+- reason: This sandbox's egress policy blocks Docker Hub's image CDN
+  (production.cloudfront.docker.com -> 403 at the proxy), so the postgres:17
+  container image could not be pulled here. Claiming an unconditional
+  checkpoint PASS while a stated acceptance criterion was PARTIAL violates
+  the checkpoint contract; the orchestrator asked for this to be corrected
+  rather than glossed over.
+- requested_by: orchestrator
+- impact: docs/BUILD_STATE.md now carries a `PG17_COMPOSE_VALIDATION` field
+  and an updated `known_blockers` entry so this cannot be silently forgotten
+  in a future session. The replacement Phase 0 checkpoint uses
+  `STATUS: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` instead of an
+  unconditional PASS.
+- git_commit: d93d8036e81256cb3b51218b4a0fa7f6a9b78a11
+
+### 2026-08-30 — Remove hardcoded fallback database passwords
+- requirement_id: SEC-005, section 108 (CREDENTIAL HANDLING), section 72
+  (database privilege separation)
+- decision: Removed all working hardcoded fallback DB role/admin passwords
+  (e.g. literal strings like `"REDACTED_FORMER_DEV_PLACEHOLDER"`) from
+  migrations/versions/0001_baseline_roles_and_provider_usage.py, compose.yaml,
+  and src/argus/db/connection.py. Database role passwords (ingest, research,
+  executor, admin) must now come from required environment variables
+  (`ARGUS_DB_{INGEST,RESEARCH,EXECUTOR,ADMIN}_PASSWORD`, supplied via a local
+  gitignored `.env` or the process environment). A missing required password
+  now raises `argus.db.credentials.MissingCredentialError` with an explicit
+  "LOCAL CREDENTIAL REQUIRED" message (section 108 format) rather than
+  silently substituting a working default; compose.yaml uses Compose's
+  `${VAR:?message}` required-variable syntax for the same reason.
+  `.env.example` already contained empty placeholders only and needed no
+  change. DB role separation and grants (argus_ingest/argus_research/
+  argus_executor least-privilege table grants from migration 0001) are
+  unchanged.
+- reason: A repository must not contain any credential that would let it
+  "just work" against a real database without the operator supplying real
+  secrets, even a clearly-labeled dev-only one — that is a standing
+  liability and inconsistent with SEC-005/section 108's "never commit ...
+  credentials" and "fail rather than silently substitute" posture.
+- requested_by: orchestrator
+- impact: `uv run alembic upgrade head` and any DB connection now fail
+  immediately and clearly if the relevant `ARGUS_DB_*_PASSWORD` variable is
+  unset, instead of silently succeeding with a guessable password. New
+  regression tests (tests/unit/test_db_credentials.py) assert both the
+  fail-closed behavior and that no `dev_only`-style literal remains in the
+  connection-resolution code path.
+- git_commit: d93d8036e81256cb3b51218b4a0fa7f6a9b78a11
+
