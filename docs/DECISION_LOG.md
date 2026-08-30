@@ -49,7 +49,7 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   in a future session. The replacement Phase 0 checkpoint uses
   `STATUS: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` instead of an
   unconditional PASS.
-- git_commit: (this commit — see git log for the remediation commit hash)
+- git_commit: d93d8036e81256cb3b51218b4a0fa7f6a9b78a11
 
 ### 2026-08-30 — Remove hardcoded fallback database passwords
 - requirement_id: SEC-005, section 108 (CREDENTIAL HANDLING), section 72
@@ -81,4 +81,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   regression tests (tests/unit/test_db_credentials.py) assert both the
   fail-closed behavior and that no `dev_only`-style literal remains in the
   connection-resolution code path.
-- git_commit: (this commit — see git log for the remediation commit hash)
+- git_commit: d93d8036e81256cb3b51218b4a0fa7f6a9b78a11
