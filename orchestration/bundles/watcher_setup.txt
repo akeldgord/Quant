@@ -12,7 +12,7 @@ SCOPE: Operational tooling (local orchestrator watcher) — NOT an ARGUS phase.
   current_phase remains 0; no phase gate was crossed.
 STATUS: PASS
 UTC_TIMESTAMP: 2026-08-30T23:09:24Z
-GIT_COMMIT: (this commit — see the COMMIT value returned alongside this checkpoint)
+GIT_COMMIT: 9df37f9e8e77bf538dcb99c08d16fa96827229b7
 PRE-COMMIT_BASE: aebb33aa39fbd18ef60c3071fb75ef44c2ef8dcf
 CONFIG_HASH: 4be41f34b83f1841299ccef8c244362f10beb31ccc1c1bfd3ba819dc1e323b0e
 

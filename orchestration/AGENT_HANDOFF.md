@@ -9,7 +9,7 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 HANDOFF_ID: handoff-0003-watcher-setup
 UTC_TIMESTAMP: 2026-08-30T23:09:24Z
-CURRENT_COMMIT: (this commit — see `git log -1` / the COMMIT value returned alongside this handoff)
+CURRENT_COMMIT: 9df37f9e8e77bf538dcb99c08d16fa96827229b7
 CURRENT_PHASE: 0
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
 LAST_ORCHESTRATOR_INSTRUCTION_ID: none (no instruction has been issued through GitHub yet — see orchestration/ORCHESTRATOR_INSTRUCTIONS.md, STATUS: NO_INSTRUCTION; this handoff is for operational tooling work the human operator authorized directly, not an ORCHESTRATOR_INSTRUCTIONS.md-authorized task)
