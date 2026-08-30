@@ -5,33 +5,50 @@ Revises:
 Create Date: 2026-08-30
 
 Implements MASTER_SPEC.md section 72 (database privilege separation) and the
-provider_usage schema from section 14. Role passwords are read from the
-environment at migration time (ARGUS_DB_{INGEST,RESEARCH,EXECUTOR}_PASSWORD)
-so no credential value is ever written into this file or committed to git;
-a local-dev fallback password is used only if the environment variable is
-unset (safe only because the local Postgres container is not
-internet-exposed — production deployments must set real passwords).
+provider_usage schema from section 14. Role passwords are read from required
+environment variables (ARGUS_DB_{INGEST,RESEARCH,EXECUTOR}_PASSWORD) at
+migration time via ``argus.db.credentials.require_password`` — there is no
+fallback/default password anywhere in this file or elsewhere in the
+repository (SEC-005 / section 108). If a required variable is missing, the
+migration fails immediately with a ``LOCAL CREDENTIAL REQUIRED`` error
+instead of silently substituting a working password.
 """
 
 from __future__ import annotations
 
-import os
+import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from argus.config import load_config  # noqa: E402
+from argus.db.credentials import PASSWORD_ENV_VARS, require_password  # noqa: E402
+from argus.db.roles import DbRole  # noqa: E402
 
 revision: str = "0001"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_ROLE_PASSWORDS = {
-    "argus_ingest": os.environ.get("ARGUS_DB_INGEST_PASSWORD") or "REDACTED_FORMER_DEV_PLACEHOLDER",
-    "argus_research": os.environ.get("ARGUS_DB_RESEARCH_PASSWORD") or "REDACTED_FORMER_DEV_PLACEHOLDER",
-    "argus_executor": os.environ.get("ARGUS_DB_EXECUTOR_PASSWORD") or "REDACTED_FORMER_DEV_PLACEHOLDER",
-}
+_ROLE_NAMES: tuple[str, ...] = (
+    DbRole.INGEST.value,
+    DbRole.RESEARCH.value,
+    DbRole.EXECUTOR.value,
+)
+
+
+def _required_role_passwords() -> dict[str, str]:
+    """Read each role's password from a required env var. Raises
+    MissingCredentialError immediately if any is unset -- fail closed, no
+    fallback (see module docstring).
+    """
+    env = load_config().env
+    return {role.value: require_password(env, var) for role, var in PASSWORD_ENV_VARS.items()}
 
 
 def _quote_literal(value: str) -> str:
@@ -54,12 +71,13 @@ def _create_role_if_missing(role: str, password: str) -> None:
 
 
 def upgrade() -> None:
-    for role, password in _ROLE_PASSWORDS.items():
+    role_passwords = _required_role_passwords()
+    for role, password in role_passwords.items():
         _create_role_if_missing(role, password)
 
     # GRANT CONNECT ON DATABASE requires a literal database name.
     current_db = op.get_bind().engine.url.database
-    for role in _ROLE_PASSWORDS:
+    for role in _ROLE_NAMES:
         op.execute(f'GRANT CONNECT ON DATABASE "{current_db}" TO {role};')
         op.execute(f"GRANT USAGE ON SCHEMA public TO {role};")
 
@@ -105,5 +123,5 @@ def downgrade() -> None:
     op.drop_index("ix_provider_usage_request_class", table_name="provider_usage")
     op.drop_index("ix_provider_usage_provider", table_name="provider_usage")
     op.drop_table("provider_usage")
-    for role in _ROLE_PASSWORDS:
+    for role in _ROLE_NAMES:
         op.execute(f"REVOKE USAGE ON SCHEMA public FROM {role};")

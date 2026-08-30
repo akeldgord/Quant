@@ -16,8 +16,16 @@ echo "==> syncing dependencies (uv sync)"
 uv sync
 
 if [ ! -f .env ]; then
-  echo "==> creating .env from .env.example (fill in real values before Phase 1)"
+  echo "==> creating .env from .env.example"
   cp .env.example .env
+  echo
+  echo "!! .env now contains empty DB password placeholders only — there is no"
+  echo "   working fallback password anywhere in this repository (SEC-005)."
+  echo "   Fill in ARGUS_DB_INGEST_PASSWORD, ARGUS_DB_RESEARCH_PASSWORD,"
+  echo "   ARGUS_DB_EXECUTOR_PASSWORD, and ARGUS_DB_ADMIN_PASSWORD in .env"
+  echo "   (any local dev values you choose) before re-running this script."
+  echo "   .env is gitignored — never commit it."
+  exit 1
 fi
 
 echo "==> starting Postgres"

@@ -66,6 +66,12 @@ compose.yaml
   `LIVE_MAX_TOTAL_EXPOSURE_SOL`, and `LIVE_MAX_DAILY_LOSS_SOL` all default to
   `0` (section 74). Nothing in Phase 0 can place a trade — there is no
   executor, no provider capable of executing, and no key.
+- No DB role/admin password has a working hardcoded fallback anywhere in the
+  codebase (`src/argus/db/credentials.py`, SEC-005/section 108). Every
+  password must come from a required environment variable
+  (`ARGUS_DB_{INGEST,RESEARCH,EXECUTOR,ADMIN}_PASSWORD`); a missing one fails
+  immediately with `MissingCredentialError` rather than silently connecting
+  with a guessable default.
 
 ## Why this layout
 

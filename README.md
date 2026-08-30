@@ -23,6 +23,16 @@ live-arm mechanism anywhere in this repository.
 ```bash
 make bootstrap   # installs Python 3.12 via uv, syncs deps, starts Postgres, runs migrations
 make up          # start Postgres + apply migrations (subsequent runs)
+```
+
+`make bootstrap` creates `.env` from `.env.example` on first run and then
+stops: there is no working fallback database password anywhere in this
+repository (SEC-005), so fill in `ARGUS_DB_{INGEST,RESEARCH,EXECUTOR,ADMIN}_PASSWORD`
+in `.env` (any local dev values) before re-running it. A missing required
+password fails immediately and clearly (`MissingCredentialError`) rather than
+silently connecting with a guessed default.
+
+```bash
 make health      # argus health — Postgres/clock/config/live-readiness report
 make test        # pytest with coverage
 make lint        # ruff check + format --check

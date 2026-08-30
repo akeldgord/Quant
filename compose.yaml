@@ -6,7 +6,10 @@ services:
     environment:
       POSTGRES_DB: ${ARGUS_DB_NAME:-argus}
       POSTGRES_USER: ${ARGUS_DB_ADMIN_USER:-argus_admin}
-      POSTGRES_PASSWORD: ${ARGUS_DB_ADMIN_PASSWORD:-REDACTED_FORMER_DEV_PLACEHOLDER}
+      # No fallback password (SEC-005 / section 108): Compose refuses to start
+      # rather than silently using a working default. Set ARGUS_DB_ADMIN_PASSWORD
+      # in your local .env (gitignored; see .env.example) before running this.
+      POSTGRES_PASSWORD: ${ARGUS_DB_ADMIN_PASSWORD:?ARGUS_DB_ADMIN_PASSWORD must be set in .env — see .env.example. No fallback password is provided.}
     ports:
       - "${ARGUS_DB_PORT:-5432}:5432"
     volumes:

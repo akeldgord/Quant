@@ -9,27 +9,46 @@ last_completed_phase: 0  # implementation-agent build+test+acceptance complete; 
 last_orchestrator_approved_phase: null
 approved_commit: null
 awaiting_orchestrator_review: true
+
+# PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
+# (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
+# exercised end-to-end. It is DEFERRED, not PASS and not FAIL: functional
+# correctness of the migration/application code was verified against a
+# substitute PostgreSQL 16 server instead (see known_blockers below and
+# docs/DECISION_LOG.md). Per explicit orchestrator instruction (2026-08-30):
+# this deferral does NOT block starting Phase 1, but DOES block approving
+# live readiness until it is closed out with a real postgres:17 run.
+PG17_COMPOSE_VALIDATION: DEFERRED_ENVIRONMENTAL_CHECK
+
 known_blockers:
-  - "This implementation sandbox's egress policy blocks Docker Hub's image
-     CDN (production.cloudfront.docker.com -> 403), so `docker compose up
-     postgres` (postgres:17 image) could not be pulled/verified here.
-     compose.yaml is unmodified and still targets postgres:17 as required by
-     TECH-004. Phase 0 acceptance (migration-from-zero, DB roles, provider_usage
-     grants, argus health, full pytest suite) was instead verified against the
-     sandbox's locally-installed PostgreSQL 16 server, using the exact same
-     Alembic migration and application code that Compose would run against
-     PostgreSQL 17. This is a sandbox verification substitution only, not a
-     spec or architecture change -- record any further action in
-     docs/DECISION_LOG.md. On a normal host with unrestricted Docker Hub
-     access, `make bootstrap && make up` runs against real Postgres 17 with
-     no code changes needed."
+  - "PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK. This
+     implementation sandbox's egress policy blocks Docker Hub's image CDN
+     (production.cloudfront.docker.com -> 403 at the proxy), so
+     `docker compose up postgres` (the actual postgres:17 image) could not
+     be pulled or exercised here. compose.yaml is unmodified and still
+     targets postgres:17 as required by TECH-004 -- this is an environment
+     limitation of this sandbox, not an architecture change. As a substitute,
+     Phase 0 functional acceptance (migration-from-zero, DB roles,
+     provider_usage grants, argus health, full pytest suite, missing-credential
+     fail-closed behavior) was verified against the sandbox's
+     locally-installed PostgreSQL 16 server, running the exact same Alembic
+     migration and application code Compose would run against PostgreSQL 17.
+     This PG16 run demonstrates the migration/application logic is correct;
+     it does NOT demonstrate anything PostgreSQL-17-version-specific and
+     must not be cited as PostgreSQL 17 validation. Closing this out requires
+     running `make bootstrap && make up` (or equivalent) on a host with
+     normal Docker Hub access and recording the result here and in
+     docs/DECISION_LOG.md. See docs/DECISION_LOG.md for the full decision
+     record. Per explicit orchestrator instruction, this deferred check does
+     NOT block Phase 1, but IS required before live readiness can be
+     approved."
 ```
 
 ## Phase history
 
 | Phase | Status | Commit | Notes |
 |-------|--------|--------|-------|
-| 0 | BUILT — awaiting orchestrator review | 2ad092deb248136d443e4384b9c11dfc17f58135 | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. 29/29 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
+| 0 | BUILT — remediated, awaiting orchestrator review | 2ad092deb248136d443e4384b9c11dfc17f58135 (+ remediation commit, see git log) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
 
 ## Rules
 
