@@ -50,6 +50,18 @@ known_blockers:
 |-------|--------|--------|-------|
 | 0 | BUILT — remediated, awaiting orchestrator review | b838558f7eae1eac8d3559c7826ab340d604d916, remediated at ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (history rewritten 2026-08-30 to scrub inert dev-only placeholder credential strings — see docs/DECISION_LOG.md; these are the post-rewrite hashes) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
 
+## Operational tooling
+
+- `scripts/argus_orchestrator_watch.py` (`make orchestrator-watch`) — local
+  "no-nudge" watcher: polls `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` for
+  a new `ACTIVE` instruction and, when one appears and passes the
+  TARGET_COMMIT check, launches the local Claude CLI non-interactively to
+  execute exactly that instruction under `orchestration/PROTOCOL.md`. Not
+  running by default — the human operator starts it explicitly. See
+  `docs/OPERATIONS.md` for usage and `orchestration/checkpoints/
+  watcher_setup.md` for the build/test record. This is operational tooling,
+  not ARGUS phase work — `current_phase` above is unaffected.
+
 ## Rules
 
 - This file may be updated by the implementation agent to reflect actual build

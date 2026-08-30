@@ -1,4 +1,4 @@
-.PHONY: bootstrap up down test lint typecheck backup smoke health checkpoint
+.PHONY: bootstrap up down test lint typecheck backup smoke health checkpoint orchestrator-watch
 
 UV := uv
 
@@ -33,3 +33,6 @@ health:
 
 checkpoint:
 	./scripts/checkpoint.sh $(PHASE)
+
+orchestrator-watch:
+	$(UV) run python scripts/argus_orchestrator_watch.py

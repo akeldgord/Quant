@@ -35,6 +35,11 @@ runtime/state/*
 runtime/reports/*
 !runtime/reports/.gitkeep
 
+# --- Local orchestrator watcher runtime files (scripts/argus_orchestrator_watch.py) ---
+runtime/orchestrator_watcher_state.json
+runtime/orchestrator_watcher.lock
+runtime/ORCHESTRATION_PAUSED
+
 # --- Local/analytical datasets ---
 data/raw/*
 !data/raw/.gitkeep
