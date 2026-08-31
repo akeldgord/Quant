@@ -1996,6 +1996,159 @@ def test_second_watcher_instance_cannot_acquire_lock(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------
+# Round 6 finding #5: final pre-launch remote-freshness barrier. The early
+# `git_fetch()` near the top of tick() happens well before instruction
+# parsing/target-commit/phase checks and the CLAIMED-state write, so by the
+# time launch is about to happen, `origin/{branch}` may be stale. Each test
+# below injects a change into that specific window -- between the *first*
+# call to `watch.git_fetch` (the early one) and the *second* (the new final
+# barrier) -- via a wrapper around the real `watch.git_fetch`, so the rest
+# of the scenario still exercises real git plumbing exactly like every
+# other test in this file.
+# ---------------------------------------------------------------------
+
+
+def test_remote_moves_after_first_fetch_blocks_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-race",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+    )
+
+    original_git_pull_ff_only = watch.git_pull_ff_only
+    calls = {"n": 0}
+
+    def racing_git_pull_ff_only(repo_root: Path, branch: str) -> bool:
+        calls["n"] += 1
+        ok = original_git_pull_ff_only(repo_root, branch)
+        if calls["n"] == 1:
+            # Simulate the orchestrator pushing a new commit to origin in
+            # the window between the tick's initial fetch/pull and the new
+            # final pre-launch barrier -- e.g. superseding or re-issuing the
+            # instruction. The local `work` clone has already pulled the
+            # pre-race state at this point, exactly like the real timing
+            # gap this finding closes.
+            push_instruction(
+                origin,
+                tmp_path,
+                instruction_id="instr-race",
+                status="ACTIVE",
+                target_commit=head,
+                label="race",
+                issued_at="2026-01-01T00:00:01Z",
+            )
+        return ok
+
+    monkeypatch.setattr(watch, "git_pull_ff_only", racing_git_pull_ff_only)
+
+    runner = FakeClaudeRunner()
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert calls["n"] == 1
+    assert runner.calls == 0
+    assert state.current_status == "IDLE"
+    assert state.current_instruction_id is None
+    assert state.last_processed_instruction_id is None
+
+
+def test_final_pre_launch_fetch_failure_blocks_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-fetchfail",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+    )
+
+    original_git_fetch = watch.git_fetch
+    calls = {"n": 0}
+
+    def flaky_git_fetch(repo_root: Path, branch: str) -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original_git_fetch(repo_root, branch)
+        return False
+
+    monkeypatch.setattr(watch, "git_fetch", flaky_git_fetch)
+
+    runner = FakeClaudeRunner()
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert calls["n"] >= 2
+    assert runner.calls == 0
+    assert state.current_status == "IDLE"
+    assert state.current_instruction_id is None
+    assert state.last_processed_instruction_id is None
+
+
+def test_local_instructions_mutation_before_final_barrier_blocks_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local (uncommitted) edit to ORCHESTRATOR_INSTRUCTIONS.md landing
+    between the tick's initial parse and the final pre-launch barrier must
+    block launch, whether or not it happens to change the parsed fields --
+    the barrier's dirty-worktree re-check catches it independent of the
+    file-content comparison."""
+    origin, work = make_repo(tmp_path)
+    head = _run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    push_instruction(
+        origin,
+        tmp_path,
+        instruction_id="instr-localmut",
+        status="ACTIVE",
+        target_commit=head,
+        label="a",
+    )
+
+    # read_build_state() runs after the instructions have already been
+    # parsed and target-commit-checked, and is the last thing called before
+    # the CLAIMED-state write and the new final barrier -- exactly the
+    # "between initial parse and final barrier" window this test targets.
+    # (The pre-existing *initial* dirty-worktree check, earlier in tick(),
+    # runs before instructions are even read, so mutating any earlier than
+    # this would just re-exercise that older check instead of the new one.)
+    original_read_build_state = watch.read_build_state
+    calls = {"n": 0}
+
+    def mutating_read_build_state(build_state_path: Path) -> Any:
+        calls["n"] += 1
+        result = original_read_build_state(build_state_path)
+        (work / "orchestration" / "ORCHESTRATOR_INSTRUCTIONS.md").write_text(
+            "tampered locally, never committed\n"
+        )
+        return result
+
+    monkeypatch.setattr(watch, "read_build_state", mutating_read_build_state)
+
+    runner = FakeClaudeRunner()
+    config = make_config(work)
+
+    state = watch.tick(config, claude_runner=runner)
+
+    assert calls["n"] == 1
+    assert runner.calls == 0
+    assert state.current_status == "IDLE"
+    assert state.current_instruction_id is None
+    assert state.last_processed_instruction_id is None
+
+
+# ---------------------------------------------------------------------
 # Pure parsing / validation unit tests
 # ---------------------------------------------------------------------
 

@@ -1637,15 +1637,79 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     state.last_failure_reason = None
     write_state(config.state_path, state)
 
-    head_before = git_head(config.repo_root)
-    remote_before = git_remote_head(config.repo_root, config.branch)
-    if head_before is None or remote_before is None or head_before != remote_before:
-        reason = "local HEAD does not match origin HEAD immediately before launch"
-        log_event(config, "RUN_FAILED", reason)
-        state.current_status = "FAILED"
+    # Final pre-launch barrier. The fetch/pull/parse/target-commit/phase
+    # checks above all happened well before this point -- the early
+    # `git_fetch()` (long before instruction parsing, the CLAIMED-state
+    # write, etc.) leaves `origin/{branch}` cached and stale by however much
+    # wall-clock time has elapsed since. A remote change landing in that gap
+    # (a new push, a superseding or withdrawn instruction) must never be
+    # silently launched against, so everything safety-relevant is
+    # re-verified here, "as close to process launch as practical" (round 6
+    # finding #5). Any failure here reverts to IDLE (never FAILED) and does
+    # NOT consume/mark the instruction: the next tick is free to re-fetch,
+    # re-pull, and re-evaluate from scratch, per the instruction's explicit
+    # "do not consume or mark the stale instruction complete" requirement --
+    # a brand-new INSTRUCTION_ID must not be required merely because the
+    # remote moved during evaluation.
+    def _revert_to_idle(event: str, reason: str) -> WatcherState:
+        log_event(config, event, reason)
+        state.current_instruction_id = None
+        state.current_status = "IDLE"
         state.last_failure_reason = reason
         write_state(config.state_path, state)
         return state
+
+    if not git_fetch(config.repo_root, config.branch):
+        return _revert_to_idle(
+            "GIT_PULL_FAILED", "final pre-launch git fetch failed; not launching"
+        )
+
+    final_dirty = is_worktree_dirty(config.repo_root)
+    if final_dirty is None:
+        return _revert_to_idle(
+            "GIT_STATUS_FAILED", "final pre-launch git status failed; not launching"
+        )
+    if final_dirty:
+        return _revert_to_idle(
+            "DIRTY_WORKTREE",
+            "worktree became dirty between initial checks and final pre-launch barrier",
+        )
+
+    head_before = git_head(config.repo_root)
+    remote_before = git_remote_head(config.repo_root, config.branch)
+    if head_before is None or remote_before is None or head_before != remote_before:
+        return _revert_to_idle(
+            "RUN_FAILED",
+            "local HEAD does not match freshly-fetched origin HEAD immediately before launch",
+        )
+
+    final_parsed = read_instructions(config.instructions_path)
+    if not final_parsed.ok or final_parsed.fields != instructions:
+        return _revert_to_idle(
+            "INSTRUCTIONS_INVALID" if not final_parsed.ok else "RUN_FAILED",
+            "orchestration/ORCHESTRATOR_INSTRUCTIONS.md changed between initial parse and "
+            "final pre-launch barrier"
+            + (f": {final_parsed.reason}" if not final_parsed.ok else ""),
+        )
+
+    final_target_check = verify_target_commit(config.repo_root, instructions.target_commit)
+    if not final_target_check.ok:
+        return _revert_to_idle(
+            "TARGET_COMMIT_MISMATCH",
+            "target-commit provenance failed re-check at final pre-launch barrier: "
+            f"{final_target_check.reason}",
+        )
+
+    final_build_state = read_build_state(config.build_state_path)
+    final_phase_check = verify_phase_authorization(
+        final_build_state, instructions.authorized_phase, instructions.approves_phase
+    )
+    if not final_phase_check.ok:
+        return _revert_to_idle(
+            "PHASE_AUTHORIZATION_INVALID",
+            "phase authorization failed re-check at final pre-launch barrier: "
+            f"{final_phase_check.reason}",
+        )
 
     handoff_id_before = read_handoff_fields_lenient(config.handoff_path).get("HANDOFF_ID")
     instructions_blob_before = git_blob_at(
