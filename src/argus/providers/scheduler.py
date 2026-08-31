@@ -25,6 +25,27 @@ starved" -- enforced two ways:
    changes ordering for the common case (nothing near its ceiling) --
    only kicks in once the bound would otherwise be violated.
 
+Phase 1 remediation round 2, finding #11: if the caller awaiting
+``submit()`` is itself cancelled (e.g. its own timeout, or the wallet
+task that submitted it shutting down) while its item is still queued,
+asyncio cancels the internal ``future`` returned to that caller directly
+-- but the item stays in ``self._queue`` and still counted in
+``self._pending_by_class`` until *something* processes it. The old
+dispatch loop had no way to notice this: once the item was eventually
+selected, it unconditionally awaited ``coro_factory()`` -- meaning a
+submission nobody is waiting on anymore could still fire off a real
+outbound request, waste a real concurrency slot, and (if it happened to
+be a safety-class item) even count toward -- and be selected by -- the
+starvation-aging bound meant for genuinely still-waited-on work. A
+cancelled ``future`` is caught two ways now: a done-callback registered
+on every accepted item's future proactively removes it from the queue
+(and decrements its pending count exactly once) the moment cancellation
+happens, so it is normally gone before dispatch ever looks at it; and
+``_dispatch_next`` itself refuses to run ``coro_factory`` for an
+already-cancelled item even in the race where dispatch reaches it first,
+retrying the next queued item on the same already-acquired concurrency
+slot instead of wasting it.
+
 Nothing here executes a live trade or holds any credential -- it only
 governs the ORDER in which injected async callables (``coro_factory``) run.
 """
@@ -143,8 +164,33 @@ class PriorityScheduler:
             heapq.heappush(self._queue, item)
             self._pending_by_class[priority_class] += 1
 
+        # Registered before the first `await` below (there is none between
+        # here and the push above either), so it is guaranteed to already
+        # be attached by the time anything could cancel this submission --
+        # finding #11.
+        future.add_done_callback(self._make_cancellation_cleanup(item))
         asyncio.ensure_future(self._dispatch_next())
         return await future
+
+    def _make_cancellation_cleanup(self, item: _QueueItem) -> Callable[[asyncio.Future[Any]], None]:
+        def _on_done(done_future: asyncio.Future[Any]) -> None:
+            if done_future.cancelled():
+                asyncio.ensure_future(self._remove_cancelled_item(item))
+
+        return _on_done
+
+    async def _remove_cancelled_item(self, item: _QueueItem) -> None:
+        """Removes a since-cancelled item from the queue and decrements its
+        pending count -- exactly once, and only if it is still genuinely
+        queued (a concurrent dispatch may have already popped it, in which
+        case there is nothing left to clean up here)."""
+        async with self._lock:
+            remaining = [candidate for candidate in self._queue if candidate is not item]
+            if len(remaining) == len(self._queue):
+                return
+            self._queue = remaining
+            heapq.heapify(self._queue)
+            self._pending_by_class[item.priority_class] -= 1
 
     def _select_next_locked(self) -> _QueueItem:
         """Must be called with ``self._lock`` held and ``self._queue``
@@ -161,6 +207,14 @@ class PriorityScheduler:
         for candidate in self._queue:
             if candidate.priority_class not in self._safety_classes:
                 continue
+            if candidate.future.cancelled():
+                # A cancelled item is normally already gone from the queue
+                # (the done-callback removes it) before we'd ever see it
+                # here; this is defense-in-depth against the narrow race
+                # where cleanup hasn't run yet -- it must never be able to
+                # force itself ahead of a still-genuinely-waiting item via
+                # the starvation bound meant for that item (finding #11).
+                continue
             age = self._dispatch_count - candidate.enqueued_at_dispatch_count
             if age >= self._starvation_ceiling and (
                 aged_item is None or candidate.sort_key < aged_item.sort_key
@@ -174,31 +228,43 @@ class PriorityScheduler:
 
     async def _dispatch_next(self) -> None:
         await self._capacity.acquire()
-        item: _QueueItem | None = None
         try:
-            async with self._lock:
-                if not self._queue:
-                    return
-                item = self._select_next_locked()
-                self._pending_by_class[item.priority_class] -= 1
-                self._dispatch_count += 1
+            while True:
+                async with self._lock:
+                    if not self._queue:
+                        return
+                    item = self._select_next_locked()
+                    self._pending_by_class[item.priority_class] -= 1
+                    self._dispatch_count += 1
 
-            try:
-                result = await item.coro_factory()
-            except asyncio.CancelledError:
-                # This dispatch task itself was cancelled mid-flight (e.g.
-                # scheduler shutdown) -- never leave the submitter's future
-                # permanently wedged waiting for a resolution that will
-                # never come.
-                if not item.future.done():
-                    item.future.cancel()
-                raise
-            except Exception as exc:  # noqa: BLE001 - propagate to the submitter, never swallow
-                if not item.future.done():
-                    item.future.set_exception(exc)
-            else:
-                if not item.future.done():
-                    item.future.set_result(result)
+                if item.future.cancelled():
+                    # The submitter gave up before this item was dispatched
+                    # -- coro_factory must never run for cancelled-away
+                    # work (finding #11). Its pending count is already
+                    # decremented above (unconditionally, exactly once per
+                    # pop); nothing else to resolve on an already-cancelled
+                    # future. Retry with the next queued item on this same
+                    # already-acquired concurrency slot instead of wasting
+                    # it on a round trip through the semaphore.
+                    continue
+
+                try:
+                    result = await item.coro_factory()
+                except asyncio.CancelledError:
+                    # This dispatch task itself was cancelled mid-flight
+                    # (e.g. scheduler shutdown) -- never leave the
+                    # submitter's future permanently wedged waiting for a
+                    # resolution that will never come.
+                    if not item.future.done():
+                        item.future.cancel()
+                    raise
+                except Exception as exc:  # noqa: BLE001 - propagate, never swallow
+                    if not item.future.done():
+                        item.future.set_exception(exc)
+                else:
+                    if not item.future.done():
+                        item.future.set_result(result)
+                return
         finally:
             # Always releases -- including when cancelled before an item
             # was even popped (capacity was still acquired above) -- so a

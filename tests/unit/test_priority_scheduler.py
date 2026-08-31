@@ -274,6 +274,180 @@ async def test_dispatch_cancellation_releases_capacity_and_does_not_wedge_future
     assert ran.is_set()
 
 
+# --- Finding #11: a cancelled submission can never execute -------------
+
+
+async def test_cancelled_submission_never_executes_coro_factory() -> None:
+    """The core guarantee: once the submitter's own await is cancelled
+    while its item is still queued, coro_factory must never run for it --
+    the old code ran it unconditionally once dispatch got around to it."""
+    scheduler = PriorityScheduler(max_concurrency=1)
+    blocker_hold = asyncio.Event()
+    executed: list[str] = []
+
+    async def blocker_run() -> None:
+        await blocker_hold.wait()
+        executed.append("blocker")
+
+    blocker = asyncio.ensure_future(scheduler.submit("P6_background_research", blocker_run))
+    await asyncio.sleep(0)  # blocker now holds the single concurrency slot
+
+    async def should_never_run() -> None:
+        executed.append("should-never-run")
+
+    cancel_me = asyncio.ensure_future(scheduler.submit("P0_emergency_live_exit", should_never_run))
+    await asyncio.sleep(0)  # genuinely queued, not yet dispatched (blocker holds capacity)
+
+    cancel_me.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_me
+    await asyncio.sleep(0)  # let the cancellation-cleanup task run
+
+    blocker_hold.set()
+    await blocker
+
+    async def final_run() -> None:
+        executed.append("final")
+
+    await scheduler.submit("P0_emergency_live_exit", final_run)
+
+    assert executed == ["blocker", "final"]
+
+
+async def test_cancelled_item_proactively_removed_from_queue_before_dispatch() -> None:
+    """The done-callback removes a cancelled item from the queue (and its
+    pending count) on its own -- independent of any dispatch attempt ever
+    reaching it -- so it can't linger as phantom occupancy."""
+    scheduler = PriorityScheduler(max_concurrency=1)
+    blocker_hold = asyncio.Event()
+
+    async def blocker_run() -> None:
+        await blocker_hold.wait()
+
+    blocker = asyncio.ensure_future(scheduler.submit("P6_background_research", blocker_run))
+    await asyncio.sleep(0)
+
+    async def noop() -> None:
+        return None
+
+    cancel_me = asyncio.ensure_future(scheduler.submit("P5_shadow_exit_quote", noop))
+    await asyncio.sleep(0)
+    assert len(scheduler._queue) == 1
+    assert scheduler.pending_count("P5_shadow_exit_quote") == 1
+
+    cancel_me.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_me
+    await asyncio.sleep(0)  # let the scheduled cleanup task run
+
+    assert scheduler._queue == []  # removed proactively, not merely skipped later at dispatch
+    assert scheduler.pending_count("P5_shadow_exit_quote") == 0
+
+    blocker_hold.set()
+    await blocker
+
+
+async def test_cancelled_item_never_selected_by_starvation_aging() -> None:
+    """A cancelled safety-class item must never win the aging tie-break
+    ahead of a genuinely still-waiting one -- exercised directly against
+    `_select_next_locked` with both items aged past the ceiling, so the
+    cancelled item's naturally-lower sort_key (P0 vs P3) would otherwise
+    win without the fix's explicit `future.cancelled()` filter."""
+    from argus.providers.scheduler import _QueueItem
+
+    scheduler = PriorityScheduler(max_concurrency=1, starvation_ceiling=3)
+
+    async def noop() -> None:
+        return None
+
+    cancelled_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    cancelled_future.cancel()
+    cancelled_item = _QueueItem(
+        sort_key=(scheduler._rank["P0_emergency_live_exit"], 0),
+        priority_class="P0_emergency_live_exit",
+        coro_factory=noop,
+        future=cancelled_future,
+        enqueued_at_dispatch_count=0,
+    )
+    scheduler._queue.append(cancelled_item)
+
+    live_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    live_item = _QueueItem(
+        sort_key=(scheduler._rank["P3_live_safety_check"], 1),
+        priority_class="P3_live_safety_check",
+        coro_factory=noop,
+        future=live_future,
+        enqueued_at_dispatch_count=0,
+    )
+    scheduler._queue.append(live_item)
+
+    scheduler._dispatch_count = 10  # both candidates are now aged well past the ceiling
+
+    chosen = scheduler._select_next_locked()
+    assert chosen is live_item  # never the cancelled one, despite its lower (higher-priority) rank
+
+
+async def test_dispatch_skips_cancelled_item_and_runs_next_on_same_capacity_slot() -> None:
+    """Defense-in-depth: even if a cancelled item is still physically in
+    the queue when `_dispatch_next` reaches it (the queue is manipulated
+    directly here to force exactly that race, bypassing the normal
+    done-callback cleanup), dispatch must skip it without running
+    coro_factory, then go on to run the next genuinely-queued item using
+    the SAME already-acquired concurrency slot -- never leaking or
+    wasting it."""
+    from argus.providers.scheduler import _QueueItem
+
+    scheduler = PriorityScheduler(max_concurrency=1)
+    executed: list[str] = []
+
+    cancelled_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    cancelled_future.cancel()
+
+    async def should_never_run() -> None:
+        executed.append("should-never-run")
+
+    cancelled_item = _QueueItem(
+        sort_key=(0, 0),
+        priority_class="P0_emergency_live_exit",
+        coro_factory=should_never_run,
+        future=cancelled_future,
+        enqueued_at_dispatch_count=0,
+    )
+
+    real_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    async def real_run() -> None:
+        executed.append("real")
+
+    real_item = _QueueItem(
+        sort_key=(0, 1),
+        priority_class="P0_emergency_live_exit",
+        coro_factory=real_run,
+        future=real_future,
+        enqueued_at_dispatch_count=0,
+    )
+    scheduler._queue.append(cancelled_item)
+    scheduler._queue.append(real_item)
+    scheduler._pending_by_class["P0_emergency_live_exit"] = 2
+
+    await scheduler._dispatch_next()
+
+    assert executed == ["real"]
+    assert real_future.result() is None
+    # Both entries were consumed by this single dispatch call (the
+    # cancelled one skipped, the real one actually run) -- the queue is
+    # now empty and the capacity slot is free again for a fresh submission.
+    assert scheduler._queue == []
+
+    ran_again = asyncio.Event()
+
+    async def quick() -> None:
+        ran_again.set()
+
+    await asyncio.wait_for(scheduler.submit("P0_emergency_live_exit", quick), timeout=1.0)
+    assert ran_again.is_set()
+
+
 async def test_dispatch_cancelled_before_item_popped_still_releases_capacity() -> None:
     """Cancellation while waiting on the lock (before any item is even
     selected) must still release the semaphore -- otherwise a slot leaks
