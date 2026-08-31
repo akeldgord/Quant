@@ -84,7 +84,11 @@ def test_multi_hop_swap_is_swap_complex() -> None:
     assert result.input_amount_raw == 500_000_000
     assert result.output_mint == TOKEN_C_MINT
     assert result.output_amount_raw == 750_000_000
-    assert result.is_copy_eligible is True
+    # Phase 1 remediation round 5, finding #4: SWAP_COMPLEX is real,
+    # useful research evidence, but balance deltas alone cannot prove
+    # which leg of a multi-hop route is the "real" trade -- never
+    # copy-eligible in v1 absent a separate deterministic proof rule.
+    assert result.is_copy_eligible is False
 
 
 def test_simple_transfer_is_transfer_in() -> None:
@@ -150,6 +154,55 @@ def test_token_create_is_token_create_not_a_swap() -> None:
     assert result.is_copy_eligible is False
 
 
+# --- Phase 1 remediation round 5, finding #4: fail-closed v1 eligibility ---
+
+
+def test_ambiguous_multi_asset_dual_inflow_is_unknown_and_ineligible() -> None:
+    """A native-SOL rent refund alongside an unrelated token release, both
+    received with nothing given up, is genuinely ambiguous -- the same
+    structural shape as this project's real DCA-order-close fixture. Must
+    be UNKNOWN, never a confident TRANSFER_IN that silently picks the
+    larger leg."""
+    result = _parse("ambiguous_multi_asset_dual_inflow")
+    assert result.classification == "UNKNOWN"
+    assert result.confidence == Decimal("0.000")
+    assert "ambiguous multi-asset inflow" in result.reason
+    assert result.is_copy_eligible is False
+
+
+def test_nft_purchase_decimals_zero_swap_simple_but_ineligible() -> None:
+    """A one-for-one balance-delta shape looks identical for "bought a
+    fungible token" and "bought a single NFT" (decimals == 0) -- the
+    classification is still the honest SWAP_SIMPLE research evidence, but
+    it must never be automatically copy-eligible."""
+    result = _parse("nft_purchase_decimals_zero")
+    assert result.classification == "SWAP_SIMPLE"
+    assert result.confidence == Decimal("1.000")
+    assert result.output_decimals == 0
+    assert result.output_amount_raw == 1
+    assert result.is_copy_eligible is False
+
+
+def test_no_ambiguous_or_ineligible_classification_ever_reports_eligible() -> None:
+    """Demonstrates the fail-closed invariant across every fixture that
+    is NOT a clean fungible SWAP_SIMPLE: no ambiguous, LP, multi-hop, NFT,
+    failed, or plain-transfer event can ever emit an eligible signal."""
+    never_eligible = [
+        "multi_hop_swap",  # SWAP_COMPLEX
+        "simple_transfer",  # TRANSFER_IN
+        "multiple_token_accounts_lp_add",  # LP_ACTION
+        "ambiguous_fee_payer_only",  # UNKNOWN (no wallet-relevant delta)
+        "ambiguous_multi_asset_dual_inflow",  # UNKNOWN (genuine multi-asset ambiguity)
+        "failed_transaction",  # UNKNOWN (meta.err)
+        "transfer_out",  # TRANSFER_OUT
+        "token_create",  # TOKEN_CREATE
+        "nft_purchase_decimals_zero",  # SWAP_SIMPLE but decimals == 0
+    ]
+    for name in never_eligible:
+        result = _parse(name)
+        assert result.is_copy_eligible is False, f"{name} must never be copy-eligible"
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -164,6 +217,8 @@ def test_token_create_is_token_create_not_a_swap() -> None:
         "failed_transaction",
         "transfer_out",
         "token_create",
+        "ambiguous_multi_asset_dual_inflow",
+        "nft_purchase_decimals_zero",
     ],
 )
 def test_all_fixtures_parse_without_raising(name: str) -> None:

@@ -26,6 +26,7 @@ TOKEN_A_MINT = "TokenAFixtureMintAddressNotReal1111111111"
 TOKEN_B_MINT = "TokenBFixtureMintAddressNotReal1111111111"
 TOKEN_C_MINT = "TokenCFixtureMintAddressNotReal1111111111"
 NEW_TOKEN_MINT = "NewlyCreatedTokenMintFixtureNotReal111111"
+NFT_MINT = "NonFungibleFixtureMintAddressNotReal11111"
 
 
 def _account_keys(*extra: str) -> list[str]:
@@ -240,6 +241,42 @@ FIXTURES["token_create"] = _tx(
     fee=5000,
     pre_token_balances=[],
     post_token_balances=[_tok(0, NEW_TOKEN_MINT, WALLET, "0", 6)],
+)
+
+# 12. genuinely ambiguous multi-asset transaction (Phase 1 remediation
+#     round 5, finding #4): wallet receives a native-SOL rent refund AND
+#     an unrelated token release in the same instruction, with nothing
+#     given up -- structurally identical to the real DCA-order-close case
+#     this project's real-chain fixtures already document. Two distinct
+#     assets inflow together must be UNKNOWN, never a confident TRANSFER_IN
+#     that silently picks the larger leg.
+FIXTURES["ambiguous_multi_asset_dual_inflow"] = _tx(
+    signature="golden-ambiguous-multi-asset-00000000000000",
+    slot=100_000_012,
+    block_time=1_735_000_012,
+    account_keys=_account_keys(COUNTERPARTY),
+    pre_balances=[3_000_000_000, 500_000_000],
+    post_balances=[3_000_000_000, 1_000_000_000],  # +0.5 SOL, wallet not fee payer
+    fee=5000,
+    pre_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "0", 6)],
+    post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "100000000", 6)],
+)
+
+# 13. NFT purchase (decimals == 0): wallet spends SOL, receives exactly one
+#     unit of a non-fungible (decimals=0) mint -- a "clean" one-for-one
+#     balance-delta shape identical to an ordinary fungible SWAP_SIMPLE,
+#     but must never be automatically copy-eligible (Phase 1 remediation
+#     round 5, finding #4).
+FIXTURES["nft_purchase_decimals_zero"] = _tx(
+    signature="golden-nft-purchase-000000000000000000000000",
+    slot=100_000_013,
+    block_time=1_735_000_013,
+    account_keys=_account_keys(COUNTERPARTY),
+    pre_balances=[5_000_000_000, 1_000_000_000],
+    post_balances=[2_999_995_000, 3_000_000_000],  # spent 2.0 SOL + fee
+    fee=5000,
+    pre_token_balances=[],
+    post_token_balances=[_tok(0, NFT_MINT, WALLET, "1", 0)],
 )
 
 

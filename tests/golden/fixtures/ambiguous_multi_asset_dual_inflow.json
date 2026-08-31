@@ -1,0 +1,51 @@
+{
+  "blockTime": 1735000012,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "postBalances": [
+      3000000000,
+      1000000000
+    ],
+    "postTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenAFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "100000000",
+          "decimals": 6,
+          "uiAmount": 100.0
+        }
+      }
+    ],
+    "preBalances": [
+      3000000000,
+      500000000
+    ],
+    "preTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenAFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "0",
+          "decimals": 6,
+          "uiAmount": 0.0
+        }
+      }
+    ]
+  },
+  "slot": 100000012,
+  "transaction": {
+    "message": {
+      "accountKeys": [
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ]
+    },
+    "signatures": [
+      "golden-ambiguous-multi-asset-00000000000000"
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "blockTime": 1735000013,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "postBalances": [
+      2999995000,
+      3000000000
+    ],
+    "postTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "NonFungibleFixtureMintAddressNotReal11111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "1",
+          "decimals": 0,
+          "uiAmount": 1.0
+        }
+      }
+    ],
+    "preBalances": [
+      5000000000,
+      1000000000
+    ],
+    "preTokenBalances": []
+  },
+  "slot": 100000013,
+  "transaction": {
+    "message": {
+      "accountKeys": [
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ]
+    },
+    "signatures": [
+      "golden-nft-purchase-000000000000000000000000"
+    ]
+  }
+}

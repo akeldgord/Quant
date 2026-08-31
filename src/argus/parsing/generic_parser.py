@@ -35,6 +35,33 @@ Any transaction that fails on-chain (``meta.err`` set), or whose deltas
 don't fit a confident pattern, is classified ``UNKNOWN``: preserved for
 research (MASTER_SPEC section 21) but never copy-eligible (see
 ``ParsedTransaction.is_copy_eligible``).
+
+Phase 1 remediation round 5, finding #4 -- fail-closed v1 eligibility
+semantics, since a purely balance-delta parser cannot *prove* a route is a
+genuine fungible-asset trade, only observe a shape consistent with one:
+
+- a failed transaction, or one whose deltas don't fit a confident single-
+  asset-in/single-asset-out or pure-inflow/pure-outflow pattern, is
+  ``UNKNOWN`` and never eligible;
+- two or more *distinct* assets moving in the same direction with nothing
+  offsetting them (e.g. a native-SOL rent refund alongside an unrelated
+  token release in the same instruction) is genuinely ambiguous -- this is
+  now its own ``UNKNOWN`` case, not silently collapsed into
+  ``TRANSFER_IN``/``TRANSFER_OUT`` by picking the largest leg;
+- ``LP_ACTION`` (two or more non-SOL assets moving together) and
+  ``SWAP_COMPLEX`` (assets moving on both sides, more than one per side)
+  both preserve real research evidence but are never copy-eligible in v1
+  -- balance deltas alone cannot prove which leg is the "real" trade route
+  through a multi-hop or liquidity action;
+- a "clean" one-for-one ``SWAP_SIMPLE`` is still never automatically
+  eligible if either leg is a decimals-zero (non-fungible/NFT-shaped)
+  asset movement -- a one-for-one balance-delta shape looks identical for
+  "bought a fungible token" and "bought an NFT", and only the latter is
+  never a fungible copy-trade signal.
+
+Only ``SWAP_SIMPLE`` with both legs having nonzero decimals, at or above
+the confidence floor, is copy-eligible in v1 (see
+``ParsedTransaction.is_copy_eligible``).
 """
 
 from __future__ import annotations
@@ -77,8 +104,13 @@ Classification = Literal[
 # trade signal. Deliberately narrow: TRANSFER_IN/OUT/TOKEN_CREATE/LP_ACTION
 # are not trades to mirror, and UNKNOWN is never eligible regardless of
 # confidence (MASTER_SPEC section 21: "no automatic copy trade" for
-# ambiguous transactions).
-_COPY_ELIGIBLE_CLASSIFICATIONS: Final[frozenset[str]] = frozenset({"SWAP_SIMPLE", "SWAP_COMPLEX"})
+# ambiguous transactions). Phase 1 remediation round 5, finding #4:
+# SWAP_COMPLEX is deliberately excluded here too -- balance deltas alone
+# cannot prove which leg of a multi-hop route is the "real" trade, only
+# report the largest one as a heuristic; it stays a real, useful
+# classification for research evidence, but is never copy-eligible in v1
+# absent a separate, deterministic, fixture-demonstrated proof rule.
+_COPY_ELIGIBLE_CLASSIFICATIONS: Final[frozenset[str]] = frozenset({"SWAP_SIMPLE"})
 _MIN_COPY_ELIGIBLE_CONFIDENCE: Final[Decimal] = Decimal("0.500")
 
 
@@ -103,22 +135,30 @@ class ParsedTransaction:
     input_mint: str | None
     input_amount_raw: int | None
     input_amount_ui: Decimal | None
+    input_decimals: int | None
 
     output_mint: str | None
     output_amount_raw: int | None
     output_amount_ui: Decimal | None
+    output_decimals: int | None
 
     network_fee_raw: int
 
     @property
     def is_copy_eligible(self) -> bool:
-        """Mechanical gate: an ambiguous/UNKNOWN or low-confidence result
-        can never create a live-copy signal, regardless of what any
-        downstream code does or forgets to check."""
-        return (
-            self.classification in _COPY_ELIGIBLE_CLASSIFICATIONS
-            and self.confidence >= _MIN_COPY_ELIGIBLE_CONFIDENCE
-        )
+        """Mechanical gate: an ambiguous/UNKNOWN, low-confidence, or
+        decimals-zero (non-fungible/NFT-shaped) leg can never create a
+        live-copy signal, regardless of what any downstream code does or
+        forgets to check (Phase 1 remediation round 5, finding #4)."""
+        if self.classification not in _COPY_ELIGIBLE_CLASSIFICATIONS:
+            return False
+        if self.confidence < _MIN_COPY_ELIGIBLE_CONFIDENCE:
+            return False
+        # A one-for-one balance-delta shape looks identical whether the
+        # asset received is a fungible token or a single non-fungible
+        # unit (decimals == 0) -- never automatically a fungible
+        # copy-trade swap signal.
+        return self.input_decimals != 0 and self.output_decimals != 0
 
 
 def _canonical_asset(mint: str) -> str:
@@ -262,6 +302,7 @@ def parse_transaction(
                 if input_amount is not None and input_asset is not None
                 else None
             ),
+            input_decimals=(_decimals(input_asset) if input_asset is not None else None),
             output_mint=output_asset,
             output_amount_raw=output_amount if output_amount is not None else None,
             output_amount_ui=(
@@ -269,6 +310,7 @@ def parse_transaction(
                 if output_amount is not None and output_asset is not None
                 else None
             ),
+            output_decimals=(_decimals(output_asset) if output_asset is not None else None),
             network_fee_raw=network_fee_raw,
         )
 
@@ -369,7 +411,25 @@ def parse_transaction(
         )
 
     if positives and not negatives:
-        out_asset, out_amount = max(positives.items(), key=lambda kv: kv[1])
+        # Phase 1 remediation round 5, finding #4: two or more DISTINCT
+        # assets received together with nothing given up (e.g. a
+        # native-SOL rent refund alongside an unrelated released token in
+        # the same instruction) is genuinely ambiguous -- not caught by
+        # the LP_ACTION heuristic above, which only looks at non-SOL
+        # assets, so "SOL + exactly one non-SOL asset" fell through here
+        # and was previously silently collapsed into TRANSFER_IN by
+        # picking the largest leg. Real multi-asset ambiguity must
+        # surface as UNKNOWN, never as a confident single-asset guess.
+        if len(positives) >= 2:
+            return _result(
+                "UNKNOWN",
+                "0.000",
+                "ambiguous multi-asset inflow: two or more distinct assets received "
+                "together with no offsetting outflow -- cannot be resolved to a single "
+                "confident inflow without instruction-level evidence",
+                decimals_by_asset=decimals_by_asset,
+            )
+        out_asset, out_amount = next(iter(positives.items()))
         return _result(
             "TRANSFER_IN",
             "1.000",
@@ -380,7 +440,16 @@ def parse_transaction(
         )
 
     if negatives and not positives:
-        in_asset, in_amount = max(negatives.items(), key=lambda kv: abs(kv[1]))
+        if len(negatives) >= 2:
+            return _result(
+                "UNKNOWN",
+                "0.000",
+                "ambiguous multi-asset outflow: two or more distinct assets given up "
+                "together with no offsetting inflow -- cannot be resolved to a single "
+                "confident outflow without instruction-level evidence",
+                decimals_by_asset=decimals_by_asset,
+            )
+        in_asset, in_amount = next(iter(negatives.items()))
         return _result(
             "TRANSFER_OUT",
             "1.000",

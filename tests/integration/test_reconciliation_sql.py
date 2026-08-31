@@ -551,9 +551,11 @@ def _parsed_transaction(*, wallet: str, parser_version: str) -> ParsedTransactio
         input_mint=None,
         input_amount_raw=None,
         input_amount_ui=None,
+        input_decimals=None,
         output_mint="So11111111111111111111111111111111111111112",
         output_amount_raw=1_000,
         output_amount_ui=Decimal("0.000001"),
+        output_decimals=9,
         network_fee_raw=5000,
     )
 
