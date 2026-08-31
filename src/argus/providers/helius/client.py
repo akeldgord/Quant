@@ -23,7 +23,7 @@ import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any, Protocol, TypeGuard
+from typing import Any, Final, Protocol, TypeGuard
 
 import httpx
 
@@ -47,6 +47,11 @@ _DEFAULT_SEND_TIMEOUT_SECONDS = 10.0
 _DEFAULT_ACK_TIMEOUT_SECONDS = 10.0
 _DEFAULT_CLOSE_TIMEOUT_SECONDS = 10.0
 
+# Every HTTP RPC call this client makes sends this exact request id --
+# the JSON-RPC envelope validator checks the response's own 'id' against
+# this literal (Phase 1 remediation round 6, finding #4).
+_JSON_RPC_REQUEST_ID: Final[int] = 1
+
 
 def _is_strict_int(value: Any) -> TypeGuard[int]:
     """``True``/``False`` are ``int`` subclasses in Python -- a provider
@@ -64,10 +69,68 @@ def _is_strict_nonneg_int(value: Any) -> TypeGuard[int]:
     return _is_strict_int(value) and value >= 0
 
 
+# Every Solana slot, lamport balance, and raw SPL token amount is stored
+# on-chain as an unsigned 64-bit integer -- an on-the-wire value outside
+# that range is definitionally impossible, not merely implausible (Phase
+# 1 remediation round 6, finding #4).
+_MAX_U64: int = (1 << 64) - 1
+
+
+def _is_strict_u64(value: Any) -> TypeGuard[int]:
+    """As :func:`_is_strict_nonneg_int`, plus enforcing the on-chain
+    unsigned 64-bit width bound every slot/lamport-balance/fee field
+    actually has (Phase 1 remediation round 6, finding #4)."""
+    return _is_strict_nonneg_int(value) and value <= _MAX_U64
+
+
 # SPL token decimals is stored on-chain as a single unsigned byte
 # (Solana's Mint account layout) -- any larger value is definitionally
 # impossible, not merely implausible.
 _MAX_TOKEN_DECIMALS = 255
+
+# A raw SPL token amount is an unsigned 64-bit integer; its longest
+# possible decimal representation (2**64 - 1) is 20 ASCII digits. Bounding
+# the digit count before ever calling int() on caller-controlled text
+# means a maliciously huge numeric string can never reach an expensive
+# arbitrary-precision parse in the first place (Phase 1 remediation round
+# 6, finding #4).
+_MAX_RAW_AMOUNT_DIGITS = 20
+_ASCII_DIGITS = frozenset("0123456789")
+
+
+def _is_valid_raw_amount_string(value: Any) -> TypeGuard[str]:
+    """A raw SPL token amount string, as Helius reports it
+    (``uiTokenAmount.amount``), must be composed *only* of ASCII decimal
+    digits -- Python's ``str.isdigit()``/``int()`` both accept a wide
+    range of non-ASCII Unicode digit characters (superscripts, Arabic-
+    Indic digits, etc.), which is not what any real Solana RPC response
+    ever emits and is not a value this client should ever normalize
+    on-the-fly (Phase 1 remediation round 6, finding #4). Also bounds the
+    digit count (and, following that, the numeric value) to the real
+    unsigned-64-bit range a raw amount can ever actually have, so a huge
+    caller-controlled numeric string is rejected before an expensive
+    arbitrary-precision ``int()`` conversion, not after."""
+    if not isinstance(value, str) or not value:
+        return False
+    if len(value) > _MAX_RAW_AMOUNT_DIGITS:
+        return False
+    if not all(c in _ASCII_DIGITS for c in value):
+        return False
+    return int(value) <= _MAX_U64
+
+
+def _is_nonempty_identity_string(value: Any) -> TypeGuard[str]:
+    """The minimal, deterministic, network-free syntactic check every
+    signature/pubkey/mint/owner/token-account-pubkey identity string on
+    this client's contract must pass before it is ever persisted or
+    consumed downstream: it must be a non-empty string (Phase 1
+    remediation round 6, finding #4). This does not attempt base58/length
+    validation -- a stricter check risks rejecting a legitimate future
+    Solana identity encoding this client hasn't seen yet, and no network
+    lookup is available to verify an identity actually exists on-chain;
+    "non-empty string" is the one property every real identity always has
+    and no malformed/placeholder value does."""
+    return isinstance(value, str) and value != ""
 
 
 def _is_matching_request_id(value: Any, expected: int) -> bool:
@@ -87,6 +150,30 @@ def _is_valid_tx_err(value: Any) -> bool:
     return value is None or isinstance(value, str | dict)
 
 
+def _deep_freeze(value: Any) -> Any:
+    """Recursively converts a JSON-decoded structure (dicts/lists/
+    primitives) into a genuinely immutable, alias-free equivalent: every
+    dict becomes a :class:`~types.MappingProxyType` wrapping a *freshly
+    built* dict of recursively-frozen values, every list becomes a tuple
+    of recursively-frozen values, and every other value (``str``/``int``/
+    ``float``/``bool``/``None``) is already immutable and returned as-is.
+
+    Round 5, finding #5's ``MappingProxyType(entry)`` only froze the top
+    level: it wrapped the *original* dict object, so any nested dict/list
+    value inside it remained the same plain, mutable object -- reachable
+    both by mutating the source ``entry`` a caller still held a reference
+    to, and by reading it back out through the supposedly-frozen
+    ``TokenAccountInfo.raw`` itself and mutating it there. Building fresh
+    immutable structures at every level, rather than wrapping the
+    original object, closes both paths (Phase 1 remediation round 6,
+    finding #4)."""
+    if isinstance(value, dict):
+        return MappingProxyType({key: _deep_freeze(v) for key, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze(v) for v in value)
+    return value
+
+
 def _resolved_account_keys(value: Any) -> list[str] | None:
     """``transaction.message.accountKeys`` is either a bare list of
     base58 pubkey strings, or (``jsonParsed``/versioned-transaction
@@ -94,14 +181,16 @@ def _resolved_account_keys(value: Any) -> list[str] | None:
     shapes :func:`argus.parsing.generic_parser._account_keys` and
     :func:`argus.golden_fixtures._account_keys` already accept. Returns
     the resolved pubkey strings, or ``None`` if the shape is invalid
-    (Phase 1 remediation round 5, finding #5)."""
+    (Phase 1 remediation round 5, finding #5; round 6, finding #4: an
+    empty-string pubkey in either shape is also rejected -- a syntactically
+    present-but-empty identity string is not a valid account key)."""
     if not isinstance(value, list):
         return None
     resolved: list[str] = []
     for key in value:
-        if isinstance(key, str):
+        if _is_nonempty_identity_string(key):
             resolved.append(key)
-        elif isinstance(key, dict) and isinstance(key.get("pubkey"), str):
+        elif isinstance(key, dict) and _is_nonempty_identity_string(key.get("pubkey")):
             resolved.append(key["pubkey"])
         else:
             return None
@@ -163,14 +252,45 @@ class HeliusRpcClient:
         # result is classified as a genuine terminal outcome of this same
         # call (see ``send_with_usage``'s ``process`` contract), never a
         # second, unaccounted failure after an "ok" was already recorded.
-        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        payload = {"jsonrpc": "2.0", "id": _JSON_RPC_REQUEST_ID, "method": method, "params": params}
 
         def _process(response: httpx.Response) -> T:
             response.raise_for_status()
             data = response.json()
-            if "error" in data:
+            # Phase 1 remediation round 6, finding #4: the JSON-RPC
+            # envelope itself is now validated for every call, not only
+            # the method-specific 'result' shape -- an exact 'jsonrpc'
+            # version, an 'id' that exactly matches (type and value) the
+            # id this client actually sent, and 'result'/'error' mutual
+            # exclusivity (a response carrying both is never accepted,
+            # regardless of which one a caller might prefer to trust).
+            if not isinstance(data, dict):
+                raise HeliusRpcError(
+                    f"{method}: malformed response, expected a JSON object envelope: {data!r}",
+                    usage_status="contract_error",
+                )
+            if data.get("jsonrpc") != "2.0":
+                raise HeliusRpcError(
+                    f"{method}: malformed response, unsupported/missing 'jsonrpc' version: "
+                    f"{data!r}",
+                    usage_status="contract_error",
+                )
+            if not _is_matching_request_id(data.get("id"), _JSON_RPC_REQUEST_ID):
+                raise HeliusRpcError(
+                    f"{method}: response 'id' {data.get('id')!r} does not match the request id "
+                    f"{_JSON_RPC_REQUEST_ID!r} this client sent",
+                    usage_status="contract_error",
+                )
+            has_error = "error" in data
+            has_result = "result" in data
+            if has_error and has_result:
+                raise HeliusRpcError(
+                    f"{method}: malformed response, both 'result' and 'error' present: {data!r}",
+                    usage_status="contract_error",
+                )
+            if has_error:
                 raise HeliusRpcError(f"{method} failed: {data['error']}")
-            if "result" not in data:
+            if not has_result:
                 # Malformed/unexpected-shape response: neither a well-formed
                 # JSON-RPC error nor a result. Rejected explicitly here rather
                 # than left to raise a bare KeyError below (acceptance
@@ -226,10 +346,12 @@ class HeliusRpcClient:
                     )
                 mint = entry.get("mint")
                 owner = entry.get("owner")
-                if not isinstance(mint, str) or not isinstance(owner, str):
+                if not _is_nonempty_identity_string(mint) or not _is_nonempty_identity_string(
+                    owner
+                ):
                     raise HeliusRpcError(
-                        f"getTransaction: 'meta.{key}' entry is missing a string 'mint'/'owner': "
-                        f"{entry!r}",
+                        f"getTransaction: 'meta.{key}' entry is missing a non-empty 'mint'/"
+                        f"'owner' identity string: {entry!r}",
                         usage_status="contract_error",
                     )
                 ui_token_amount = entry.get("uiTokenAmount")
@@ -239,10 +361,10 @@ class HeliusRpcClient:
                         usage_status="contract_error",
                     )
                 amount = ui_token_amount.get("amount")
-                if not isinstance(amount, str) or not amount.isdigit():
+                if not _is_valid_raw_amount_string(amount):
                     raise HeliusRpcError(
                         f"getTransaction: 'meta.{key}' entry 'uiTokenAmount.amount' is not a "
-                        f"nonnegative decimal string: {entry!r}",
+                        f"valid ASCII-digit, bounded nonnegative decimal string: {entry!r}",
                         usage_status="contract_error",
                     )
                 decimals = ui_token_amount.get("decimals")
@@ -289,11 +411,21 @@ class HeliusRpcClient:
             if (
                 not isinstance(signatures, list)
                 or not signatures
-                or not all(isinstance(sig, str) for sig in signatures)
+                or not all(_is_nonempty_identity_string(sig) for sig in signatures)
             ):
                 raise HeliusRpcError(
                     "getTransaction: 'transaction.signatures' is not a non-empty list of "
-                    f"strings: {signatures!r}",
+                    f"non-empty strings: {signatures!r}",
+                    usage_status="contract_error",
+                )
+            # Phase 1 remediation round 6, finding #4: bind the response's
+            # own identity to the request -- a structurally valid response
+            # for a *different* transaction must never be accepted or
+            # persisted under the signature this call actually requested.
+            if signatures[0] != signature:
+                raise HeliusRpcError(
+                    f"getTransaction: response's primary signature {signatures[0]!r} does not "
+                    f"match the requested signature {signature!r}",
                     usage_status="contract_error",
                 )
 
@@ -315,20 +447,18 @@ class HeliusRpcClient:
                     usage_status="contract_error",
                 )
             fee = meta.get("fee")
-            if not _is_strict_nonneg_int(fee):
+            if not _is_strict_u64(fee):
                 raise HeliusRpcError(
-                    f"getTransaction: 'meta.fee' is not a strict nonnegative integer: {fee!r}",
+                    f"getTransaction: 'meta.fee' is not a valid unsigned-64-bit integer: {fee!r}",
                     usage_status="contract_error",
                 )
             num_accounts = len(account_keys)
             for balances_key in ("preBalances", "postBalances"):
                 balances = meta.get(balances_key)
-                if not isinstance(balances, list) or not all(
-                    _is_strict_nonneg_int(v) for v in balances
-                ):
+                if not isinstance(balances, list) or not all(_is_strict_u64(v) for v in balances):
                     raise HeliusRpcError(
-                        f"getTransaction: 'meta.{balances_key}' is not a list of strict "
-                        f"nonnegative integers: {balances!r}",
+                        f"getTransaction: 'meta.{balances_key}' is not a list of valid "
+                        f"unsigned-64-bit integers: {balances!r}",
                         usage_status="contract_error",
                     )
                 if len(balances) != num_accounts:
@@ -338,16 +468,16 @@ class HeliusRpcClient:
                         usage_status="contract_error",
                     )
             slot = result.get("slot")
-            if not _is_strict_nonneg_int(slot):
+            if not _is_strict_u64(slot):
                 raise HeliusRpcError(
-                    f"getTransaction: 'slot' is not a strict nonnegative integer: {slot!r}",
+                    f"getTransaction: 'slot' is not a valid unsigned-64-bit integer: {slot!r}",
                     usage_status="contract_error",
                 )
             block_time = result.get("blockTime")
-            if block_time is not None and not _is_strict_nonneg_int(block_time):
+            if block_time is not None and not _is_strict_u64(block_time):
                 raise HeliusRpcError(
-                    "getTransaction: 'blockTime' is not null or a strict nonnegative integer: "
-                    f"{block_time!r}",
+                    "getTransaction: 'blockTime' is not null or a valid unsigned-64-bit "
+                    f"integer: {block_time!r}",
                     usage_status="contract_error",
                 )
             _validate_token_balances("preTokenBalances", num_accounts, meta)
@@ -388,15 +518,24 @@ class HeliusRpcClient:
                         f"'signature'/'slot': {entry!r}",
                         usage_status="contract_error",
                     )
-                if not isinstance(entry["signature"], str) or not _is_strict_int(entry["slot"]):
+                # Phase 1 remediation round 6, finding #4: slot/blockTime
+                # are unsigned-64-bit on-chain concepts -- a negative
+                # value is impossible, not merely implausible, and was
+                # previously silently accepted here via the bare
+                # sign-agnostic _is_strict_int check.
+                if not _is_nonempty_identity_string(entry["signature"]) or not _is_strict_u64(
+                    entry["slot"]
+                ):
                     raise HeliusRpcError(
-                        f"getSignaturesForAddress: 'signature'/'slot' have wrong type: {entry!r}",
+                        "getSignaturesForAddress: 'signature'/'slot' are not a non-empty "
+                        f"string / valid unsigned-64-bit integer: {entry!r}",
                         usage_status="contract_error",
                     )
                 block_time_raw = entry.get("blockTime")
-                if block_time_raw is not None and not _is_strict_int(block_time_raw):
+                if block_time_raw is not None and not _is_strict_u64(block_time_raw):
                     raise HeliusRpcError(
-                        f"getSignaturesForAddress: non-integer blockTime: {entry!r}",
+                        f"getSignaturesForAddress: 'blockTime' is not null or a valid "
+                        f"unsigned-64-bit integer: {entry!r}",
                         usage_status="contract_error",
                     )
                 err = entry.get("err")
@@ -405,15 +544,27 @@ class HeliusRpcClient:
                         f"getSignaturesForAddress: 'err' has an invalid type: {entry!r}",
                         usage_status="contract_error",
                     )
+                block_time: datetime | None = None
+                if block_time_raw is not None:
+                    try:
+                        block_time = datetime.fromtimestamp(block_time_raw, tz=UTC)
+                    except (OverflowError, OSError, ValueError) as exc:
+                        # Bounded to u64 by the check above, but still far
+                        # outside any value datetime can represent --
+                        # never let a wildly out-of-range but
+                        # technically-in-bounds timestamp crash the caller
+                        # with an unhandled exception (round 6, finding #4:
+                        # "safely validate conversion to UTC timestamps").
+                        raise HeliusRpcError(
+                            "getSignaturesForAddress: 'blockTime' "
+                            f"{block_time_raw!r} cannot be represented as a UTC timestamp: {exc}",
+                            usage_status="contract_error",
+                        ) from exc
                 entries.append(
                     SignatureInfo(
                         signature=entry["signature"],
                         slot=entry["slot"],
-                        block_time=(
-                            datetime.fromtimestamp(block_time_raw, tz=UTC)
-                            if block_time_raw is not None
-                            else None
-                        ),
+                        block_time=block_time,
                         err=err,
                     )
                 )
@@ -461,14 +612,31 @@ class HeliusRpcClient:
                         f"getSignatureStatuses: unknown confirmationStatus {confirmation_status!r}",
                         usage_status="contract_error",
                     )
-                slot = entry.get("slot")
-                if slot is not None and not _is_strict_nonneg_int(slot):
+                # Phase 1 remediation round 6, finding #4: the real Solana
+                # RPC contract (TransactionStatus) requires both 'slot'
+                # and 'err' as keys on every non-null status entry (only
+                # 'err's *value* may be null) -- 'slot' is not optional,
+                # and a missing 'err' key must never silently become an
+                # implicit successful None via bare .get(), which is
+                # indistinguishable from a genuine null (no error).
+                if "slot" not in entry:
                     raise HeliusRpcError(
-                        f"getSignatureStatuses: 'slot' is not null or a strict nonnegative "
-                        f"integer: {entry!r}",
+                        f"getSignatureStatuses: 'slot' is required but missing: {entry!r}",
                         usage_status="contract_error",
                     )
-                err = entry.get("err")
+                slot = entry["slot"]
+                if not _is_strict_u64(slot):
+                    raise HeliusRpcError(
+                        f"getSignatureStatuses: 'slot' is not a valid unsigned-64-bit integer: "
+                        f"{entry!r}",
+                        usage_status="contract_error",
+                    )
+                if "err" not in entry:
+                    raise HeliusRpcError(
+                        f"getSignatureStatuses: 'err' is required but missing: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                err = entry["err"]
                 if not _is_valid_tx_err(err):
                     raise HeliusRpcError(
                         f"getSignatureStatuses: 'err' has an invalid type: {entry!r}",
@@ -495,10 +663,10 @@ class HeliusRpcClient:
             if (
                 not isinstance(result, dict)
                 or "value" not in result
-                or not _is_strict_nonneg_int(result["value"])
+                or not _is_strict_u64(result["value"])
             ):
                 raise HeliusRpcError(
-                    "getBalance: malformed response, expected {'value': strict nonnegative "
+                    "getBalance: malformed response, expected {'value': valid unsigned-64-bit "
                     f"int}}: {result!r}",
                     usage_status="contract_error",
                 )
@@ -509,9 +677,10 @@ class HeliusRpcClient:
 
     async def get_token_accounts(self, wallet_address: str) -> list[TokenAccountInfo]:
         def _validate_entry(entry: Any) -> TokenAccountInfo:
-            if not isinstance(entry, dict) or not isinstance(entry.get("pubkey"), str):
+            if not isinstance(entry, dict) or not _is_nonempty_identity_string(entry.get("pubkey")):
                 raise HeliusRpcError(
-                    f"getTokenAccountsByOwner: malformed entry, missing 'pubkey': {entry!r}",
+                    "getTokenAccountsByOwner: malformed entry, missing a non-empty 'pubkey': "
+                    f"{entry!r}",
                     usage_status="contract_error",
                 )
             account = entry.get("account")
@@ -532,12 +701,13 @@ class HeliusRpcClient:
             owner = info.get("owner")
             token_amount = info.get("tokenAmount")
             if (
-                not isinstance(mint, str)
-                or not isinstance(owner, str)
+                not _is_nonempty_identity_string(mint)
+                or not _is_nonempty_identity_string(owner)
                 or not isinstance(token_amount, dict)
             ):
                 raise HeliusRpcError(
-                    f"getTokenAccountsByOwner: missing 'mint'/'owner'/'tokenAmount': {entry!r}",
+                    "getTokenAccountsByOwner: missing non-empty 'mint'/'owner' identity strings "
+                    f"or 'tokenAmount': {entry!r}",
                     usage_status="contract_error",
                 )
             # Phase 1 remediation round 5, finding #5: an entry whose own
@@ -554,10 +724,10 @@ class HeliusRpcClient:
                 )
             amount_str = token_amount.get("amount")
             decimals = token_amount.get("decimals")
-            if not isinstance(amount_str, str) or not amount_str.isdigit():
+            if not _is_valid_raw_amount_string(amount_str):
                 raise HeliusRpcError(
-                    f"getTokenAccountsByOwner: 'tokenAmount.amount' is not a nonnegative "
-                    f"decimal string: {entry!r}",
+                    "getTokenAccountsByOwner: 'tokenAmount.amount' is not a valid ASCII-digit, "
+                    f"bounded nonnegative decimal string: {entry!r}",
                     usage_status="contract_error",
                 )
             if not _is_strict_nonneg_int(decimals) or decimals > _MAX_TOKEN_DECIMALS:
@@ -572,11 +742,17 @@ class HeliusRpcClient:
                 owner=owner,
                 amount_raw=int(amount_str),
                 decimals=decimals,
-                # An immutable snapshot, never the same live dict a
-                # caller elsewhere could still hold a mutable reference
-                # to -- TokenAccountInfo's whole point is to be a
-                # canonical, immutable typed model (finding #5).
-                raw=MappingProxyType(entry),
+                # A deeply immutable, alias-safe snapshot -- never the
+                # same live dict/nested structures a caller elsewhere
+                # could still hold a mutable reference to. A shallow
+                # MappingProxyType(entry) (round 5, finding #5) only
+                # freezes the top level: nested dicts/lists inside `entry`
+                # remain plain, mutable, and alias the original object,
+                # so a caller mutating the source `entry` (or a nested
+                # value obtained from `raw` itself) could still alter
+                # this "immutable" evidence after the fact (round 6,
+                # finding #4).
+                raw=_deep_freeze(entry),
             )
 
         def _validate(result: Any) -> list[TokenAccountInfo]:
@@ -600,9 +776,9 @@ class HeliusRpcClient:
 
     async def get_slot(self) -> int:
         def _validate(result: Any) -> int:
-            if not _is_strict_nonneg_int(result):
+            if not _is_strict_u64(result):
                 raise HeliusRpcError(
-                    f"getSlot: expected a strict nonnegative integer, got {result!r}",
+                    f"getSlot: expected a valid unsigned-64-bit integer, got {result!r}",
                     usage_status="contract_error",
                 )
             return result
