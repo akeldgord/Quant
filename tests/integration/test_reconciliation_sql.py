@@ -28,7 +28,7 @@ from argus.config import load_config
 from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
-from argus.domain.commitment import COMMITMENT_CONFIRMED
+from argus.domain.commitment import COMMITMENT_CONFIRMED, COMMITMENT_FINALIZED
 from argus.domain.parse_attempts import PARSE_OUTCOME_SUCCESS, ParseAttempt
 from argus.domain.swaps import Swap
 from argus.ingestion.commitment import derive_current_state
@@ -372,4 +372,88 @@ async def test_concurrent_wallets_use_independent_sessions_no_cross_commit(admin
     finally:
         await _cleanup(admin_engine, wallet_ok)
         await _cleanup(admin_engine, wallet_fail)
+        await ingest_engine.dispose()
+
+
+async def test_concurrent_commitment_writes_serialize_via_real_advisory_lock(admin_engine) -> None:
+    """Finding #5's atomicity mechanism (`pg_advisory_xact_lock`, via
+    `SqlCommitmentObservationStore.lock()`) against genuine concurrent
+    Postgres sessions/transactions -- not the in-memory asyncio.Lock
+    version already covered by
+    `tests/unit/test_commitment.py::test_concurrent_conflicting_writes_serialize_and_only_one_is_appended`.
+    Two independent sessions each try to append a FINALIZED observation
+    for the SAME event with opposite `transaction_succeeded` values,
+    concurrently (FINALIZED specifically because reconcile() itself
+    never writes at that level -- only up through CONFIRMED -- so
+    neither racer starts from a pre-existing same-level observation).
+    Exactly one must be APPENDED and the other REJECTED (never two
+    conflicting same-level rows, never a corrupted read racing ahead of
+    the lock)."""
+    import asyncio
+
+    from argus.ingestion.commitment import CommitmentAppendOutcome, CommitmentTracker
+
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+
+    wallet = f"sql-commitment-race-{uuid.uuid4()}"
+    provider = _FakeChainProvider()
+    provider.add_transaction(
+        "sql-commitment-race-sig",
+        slot=1,
+        raw_payload=_valid_raw_payload(wallet, "sql-commitment-race-sig", 100),
+    )
+
+    try:
+        engine = _engine(provider, sessionmaker)
+        result = await engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
+        assert result.ok is True
+        async with sessionmaker() as session:
+            row = (
+                await session.execute(select(ChainEvent).where(ChainEvent.wallet_address == wallet))
+            ).scalar_one()
+            event_id = row.event_id
+
+        now = Clock().utc_now()
+
+        async def _record(*, transaction_succeeded: bool) -> CommitmentAppendOutcome:
+            async with sessionmaker() as session, session.begin():
+                tracker = CommitmentTracker(SqlCommitmentObservationStore(session))
+                result = await tracker.record(
+                    event_id=event_id,
+                    commitment_level=COMMITMENT_FINALIZED,
+                    transaction_succeeded=transaction_succeeded,
+                    observed_at=now,
+                    provider="sql-race-test",
+                    provider_received_at=now,
+                    created_at=now,
+                )
+                return result.outcome
+
+        outcomes = await asyncio.gather(
+            _record(transaction_succeeded=True), _record(transaction_succeeded=False)
+        )
+
+        assert sorted(o.value for o in outcomes) == sorted(
+            [CommitmentAppendOutcome.APPENDED.value, CommitmentAppendOutcome.REJECTED.value]
+        )
+
+        async with sessionmaker() as session:
+            observations = await SqlCommitmentObservationStore(session).list_for_event(event_id)
+            finalized = [o for o in observations if o.commitment_level == COMMITMENT_FINALIZED]
+            assert len(finalized) == 1  # never two conflicting same-level rows
+
+            rejection_rows = (
+                await session.execute(
+                    text(
+                        "SELECT COUNT(*) FROM commitment_observation_rejections WHERE event_id = :e"
+                    ),
+                    {"e": event_id},
+                )
+            ).scalar_one()
+            assert rejection_rows == 1  # the losing write is durably audited, not silently dropped
+    finally:
+        await _cleanup(admin_engine, wallet)
         await ingest_engine.dispose()
