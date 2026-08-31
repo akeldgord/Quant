@@ -18,6 +18,7 @@ persistence (finding #3), and parser-to-persistence wiring (finding #4).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import uuid
@@ -101,6 +102,7 @@ class FakeChainProvider:
         self._transactions: dict[str, dict[str, Any]] = {}
         self.raise_on_list: Exception | None = None
         self.raise_on_fetch: dict[str, Exception] = {}
+        self.raise_on_statuses: BaseException | None = None
         self.signature_statuses: dict[str, SignatureStatusInfo] = {}
         self.list_calls: list[tuple[str | None, str | None, int]] = []
 
@@ -148,6 +150,8 @@ class FakeChainProvider:
         return self._transactions[signature]
 
     async def get_signature_statuses(self, signatures: list[str]) -> list[SignatureStatusInfo]:
+        if self.raise_on_statuses is not None:
+            raise self.raise_on_statuses
         return [
             self.signature_statuses.get(
                 sig,
@@ -1074,9 +1078,11 @@ async def test_sweep_finalization_promotes_confirmed_events() -> None:
     await engine_no_source.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
     event_id = ledger.rows[("sig-A", WALLET, "TRANSACTION_OBSERVED")].event_id
 
-    # Without a RecentEventSource, sweep_finalization is a safe no-op.
-    promoted_none = await engine_no_source.sweep_finalization(WALLET)
-    assert promoted_none == 0
+    # Without a RecentEventSource, sweep_finalization is a safe no-op --
+    # ok=True (this is a legitimate configuration, not a failure).
+    result_none = await engine_no_source.sweep_finalization(WALLET)
+    assert result_none.ok is True
+    assert result_none.promoted == 0
 
     provider.signature_statuses["sig-A"] = SignatureStatusInfo(
         signature="sig-A", confirmation_status="finalized", err=None, slot=1
@@ -1088,10 +1094,246 @@ async def test_sweep_finalization_promotes_confirmed_events() -> None:
         commitment_store=commitment_store,
         recent_event_source=FakeRecentEventSource([(event_id, "sig-A")]),
     )
-    promoted = await engine_with_source.sweep_finalization(WALLET)
-    assert promoted == 1
+    result = await engine_with_source.sweep_finalization(WALLET)
+    assert result.ok is True
+    assert result.promoted == 1
     state = derive_current_state(await commitment_store.list_for_event(event_id))
     assert state.commitment_level == COMMITMENT_FINALIZED
+
+
+# --- R3 finding #6: typed sweep_finalization outcome distinguishing ----
+# --- failure from a genuine zero-promotion sweep -----------------------
+
+
+async def _wallet_ready_for_sweep(
+    provider: FakeChainProvider, ledger: FakeEventLedger, store: FakeWatermarkStore
+) -> uuid.UUID:
+    """Shared setup: a real reconciled transaction, so
+    ``last_reconciled_signature`` is non-None and sweep_finalization's own
+    bootstrap guard doesn't short-circuit before reaching the provider
+    call under test."""
+    provider.add_transaction("sig-ready", slot=1, raw_payload={"tx": "ready"})
+    engine = _engine(provider, ledger, store)
+    await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+    return ledger.rows[("sig-ready", WALLET, "TRANSACTION_OBSERVED")].event_id
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_provider_failure_is_typed_not_a_zero_result() -> None:
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    event_id = await _wallet_ready_for_sweep(provider, ledger, store)
+    provider.raise_on_statuses = RuntimeError("provider is down")
+
+    engine = _engine(
+        provider,
+        ledger,
+        store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+    result = await engine.sweep_finalization(WALLET)
+    assert result.ok is False
+    assert result.promoted == 0
+    assert "provider is down" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_malformed_status_cardinality_is_typed_failure() -> None:
+    """The provider returning a different number of statuses than
+    signatures requested is a malformed response -- must be reported as a
+    typed failure, never crash via an uncaught ``zip(strict=True)``
+    ``ValueError`` and never be silently treated as zero promotions."""
+
+    class _WrongCardinalityProvider(FakeChainProvider):
+        async def get_signature_statuses(self, signatures: list[str]) -> list[Any]:
+            return []  # always empty, regardless of how many were requested
+
+    provider = _WrongCardinalityProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    event_id = await _wallet_ready_for_sweep(provider, ledger, store)
+
+    engine = _engine(
+        provider,
+        ledger,
+        store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+    result = await engine.sweep_finalization(WALLET)
+    assert result.ok is False
+    assert result.promoted == 0
+    assert "malformed status response" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_cancellation_propagates_uncaught() -> None:
+    """Cancellation (a BaseException, not an Exception) must never be
+    swallowed into a typed failure result -- exactly like
+    argus.providers.http.send_with_usage, no terminal outcome actually
+    happened, so propagating it untouched is correct; converting it to
+    ``ok=False`` would fabricate a result for work that never finished."""
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    event_id = await _wallet_ready_for_sweep(provider, ledger, store)
+    provider.raise_on_statuses = asyncio.CancelledError()
+
+    engine = _engine(
+        provider,
+        ledger,
+        store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await engine.sweep_finalization(WALLET)
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_restart_retries_cleanly_after_a_failed_sweep() -> None:
+    """A failed sweep must never leave behind state that blocks the next
+    attempt -- a fresh engine instance (simulating a process restart)
+    against the same already-persisted watermark/commitment state must
+    retry cleanly and succeed once the provider recovers."""
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    commitment_store = FakeCommitmentStore()
+    event_id = await _wallet_ready_for_sweep(provider, ledger, store)
+    provider.raise_on_statuses = RuntimeError("transient provider outage")
+
+    failing_engine = _engine(
+        provider,
+        ledger,
+        store,
+        commitment_store=commitment_store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+    failed_result = await failing_engine.sweep_finalization(WALLET)
+    assert failed_result.ok is False
+
+    # "Restart": a brand-new engine instance, the provider recovered.
+    provider.raise_on_statuses = None
+    provider.signature_statuses["sig-ready"] = SignatureStatusInfo(
+        signature="sig-ready", confirmation_status="finalized", err=None, slot=1
+    )
+    restarted_engine = _engine(
+        provider,
+        ledger,
+        store,
+        commitment_store=commitment_store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+    recovered_result = await restarted_engine.sweep_finalization(WALLET)
+    assert recovered_result.ok is True
+    assert recovered_result.promoted == 1
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_duplicate_observation_not_double_counted() -> None:
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    commitment_store = FakeCommitmentStore()
+    event_id = await _wallet_ready_for_sweep(provider, ledger, store)
+    provider.signature_statuses["sig-ready"] = SignatureStatusInfo(
+        signature="sig-ready", confirmation_status="finalized", err=None, slot=1
+    )
+    engine = _engine(
+        provider,
+        ledger,
+        store,
+        commitment_store=commitment_store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+
+    first = await engine.sweep_finalization(WALLET)
+    assert first.ok is True
+    assert first.promoted == 1
+
+    second = await engine.sweep_finalization(WALLET)
+    assert second.ok is True
+    assert second.promoted == 0  # DUPLICATE_NOOP -- a clean, genuine zero, not a failure
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_clean_zero_when_nothing_is_finalized_yet() -> None:
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    event_id = await _wallet_ready_for_sweep(provider, ledger, store)
+    # No entry in provider.signature_statuses -- get_signature_statuses
+    # returns the default (confirmation_status=None), i.e. genuinely not
+    # yet finalized on-chain.
+    engine = _engine(
+        provider,
+        ledger,
+        store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-ready")]),
+    )
+    result = await engine.sweep_finalization(WALLET)
+    assert result.ok is True
+    assert result.promoted == 0
+    assert result.reason == ""
+
+
+class _AppendFailingCommitmentStore:
+    """Wraps a real in-memory commitment store but raises from
+    ``append()`` for one configured event, simulating a genuine DB
+    failure mid-sweep (as distinct from CommitmentTracker's own typed
+    FAILED/DUPLICATE_NOOP business-rule outcomes, which never raise)."""
+
+    def __init__(self, inner: Any, *, fail_for: uuid.UUID) -> None:
+        self._inner = inner
+        self._fail_for = fail_for
+
+    async def list_for_event(self, event_id: uuid.UUID) -> list[Any]:
+        return await self._inner.list_for_event(event_id)
+
+    async def append(self, observation: Any) -> None:
+        if observation.event_id == self._fail_for:
+            raise RuntimeError("simulated commitment DB failure")
+        await self._inner.append(observation)
+
+    async def append_rejection(self, **kwargs: Any) -> None:
+        await self._inner.append_rejection(**kwargs)
+
+    def lock(self, event_id: uuid.UUID) -> Any:
+        return self._inner.lock(event_id)
+
+
+@pytest.mark.asyncio
+async def test_sweep_finalization_per_event_append_failure_is_typed_and_keeps_other_promotions() -> (
+    None
+):
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    event_id_1 = await _wallet_ready_for_sweep(provider, ledger, store)
+    provider.add_transaction("sig-ready-2", slot=2, raw_payload={"tx": "ready-2"})
+    engine_seed = _engine(provider, ledger, store)
+    await engine_seed.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+    event_id_2 = ledger.rows[("sig-ready-2", WALLET, "TRANSACTION_OBSERVED")].event_id
+
+    for sig in ("sig-ready", "sig-ready-2"):
+        provider.signature_statuses[sig] = SignatureStatusInfo(
+            signature=sig, confirmation_status="finalized", err=None, slot=1
+        )
+
+    failing_store = _AppendFailingCommitmentStore(FakeCommitmentStore(), fail_for=event_id_1)
+    engine = _engine(
+        provider,
+        ledger,
+        store,
+        commitment_store=failing_store,
+        recent_event_source=FakeRecentEventSource(
+            [(event_id_1, "sig-ready"), (event_id_2, "sig-ready-2")]
+        ),
+    )
+    result = await engine.sweep_finalization(WALLET)
+    assert result.ok is False
+    assert result.promoted == 1  # event_id_2 still succeeded despite event_id_1's failure
+    assert "1 of 2" in result.reason
 
 
 @pytest.mark.asyncio

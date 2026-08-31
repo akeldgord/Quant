@@ -297,6 +297,32 @@ class ReconciliationResult:
     reason: str = ""
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class FinalizationSweepResult:
+    """Typed outcome of one :meth:`ReconciliationEngine.sweep_finalization`
+    call (Phase 1 remediation round 3, finding #6).
+
+    ``ok=True`` means the provider check itself genuinely completed --
+    ``promoted`` (which may legitimately be ``0``) is a real, trustworthy
+    result: no candidates to check, no wallet reconciled yet, no
+    ``RecentEventSource`` wired, or a real check that simply found nothing
+    newly finalized are all ``ok=True`` with ``promoted=0``.
+
+    ``ok=False`` means the check itself could not be completed -- a
+    provider failure, a malformed/mismatched-cardinality status response,
+    or a per-event append failure -- and ``reason`` names why.
+    ``promoted`` still reports however many events *did* genuinely get
+    newly promoted before/around the failure (a per-event append failure
+    never discards already-committed sibling promotions from the same
+    sweep), but the caller must never treat ``ok=False`` as equivalent to
+    a clean zero-result sweep, and must never use it to restore wallet
+    health."""
+
+    ok: bool
+    promoted: int
+    reason: str = ""
+
+
 def _payload_hash(raw_payload: dict[str, Any]) -> str:
     canonical = json.dumps(raw_payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
@@ -848,55 +874,95 @@ class ReconciliationEngine:
             )
             await repos.watermark_store.save(failed)
 
-    async def sweep_finalization(self, wallet_address: str, *, max_signatures: int = 200) -> int:
+    async def sweep_finalization(
+        self, wallet_address: str, *, max_signatures: int = 200
+    ) -> FinalizationSweepResult:
         """Real code path for FINALIZED commitment. Batch-checks the most
         recent CONFIRMED-or-better events for this wallet via
         ``getSignatureStatuses`` and appends a FINALIZED observation
-        wherever the provider now reports it. Returns the number of
-        events genuinely newly promoted to FINALIZED -- counted from
+        wherever the provider now reports it. ``promoted`` counts events
+        genuinely newly promoted to FINALIZED -- counted from
         :class:`~argus.ingestion.commitment.CommitmentAppendOutcome`, so a
         DUPLICATE_NOOP re-observation of an already-FINALIZED event is
-        never double-counted (finding #5). Never raises on a lookup
-        failure for an individual event -- it simply isn't promoted this
-        sweep and will be retried on the next one.
+        never double-counted (finding #5).
 
-        A no-op (returns 0) if no :class:`RecentEventSource` is available
-        from the unit of work's repos -- callers that never wire one
-        simply never do this method's real work, rather than it silently
-        pretending to sweep."""
+        Phase 1 remediation round 3, finding #6: returns a typed
+        :class:`FinalizationSweepResult` rather than a bare ``int`` --
+        catching every provider exception and returning ``0`` made
+        "nothing finalized" and "the check failed" indistinguishable to
+        every caller. A genuine provider failure, a malformed response
+        (wrong-cardinality status list), or a per-event append failure
+        all now set ``ok=False`` with a safe operational ``reason``,
+        never silently collapsed into the same shape as a clean
+        zero-promotion sweep. Never raises: every failure mode this
+        method can hit is caught and reported through the typed result
+        instead.
+
+        ``ok=True, promoted=0`` (a legitimate no-op, not a failure) when:
+        no :class:`RecentEventSource` is wired, the wallet has never
+        completed a truth-path reconciliation yet, or there are simply no
+        recent candidate signatures to check."""
         async with self._unit_of_work() as repos:
             if repos.recent_event_source is None:
-                return 0
+                return FinalizationSweepResult(
+                    ok=True, promoted=0, reason="no recent-event source configured"
+                )
             watermark = await self._get_or_init(repos, wallet_address)
             if watermark.last_reconciled_signature is None:
-                return 0
+                return FinalizationSweepResult(
+                    ok=True, promoted=0, reason="wallet has not yet completed reconciliation"
+                )
             candidates = await repos.recent_event_source.recent_signatures(
                 wallet_address, limit=max_signatures
             )
         if not candidates:
-            return 0
+            return FinalizationSweepResult(ok=True, promoted=0)
         try:
             statuses = await self._chain_provider.get_signature_statuses(
                 [sig for _event_id, sig in candidates]
             )
-        except Exception:  # noqa: BLE001 - best-effort sweep, never fatal
-            return 0
+        except Exception as exc:  # noqa: BLE001 - reported via the typed result, never raised
+            return FinalizationSweepResult(
+                ok=False,
+                promoted=0,
+                reason=f"provider status lookup failed: {type(exc).__name__}: {exc}",
+            )
+        if len(statuses) != len(candidates):
+            return FinalizationSweepResult(
+                ok=False,
+                promoted=0,
+                reason=(
+                    f"malformed status response: expected {len(candidates)} statuses, "
+                    f"got {len(statuses)}"
+                ),
+            )
 
         now = self._clock.utc_now()
         promoted = 0
+        append_failures = 0
         for (event_id, _signature), status in zip(candidates, statuses, strict=True):
             if status.confirmation_status != "finalized":
                 continue
-            async with self._unit_of_work() as repos:
-                result = await CommitmentTracker(repos.commitment_store).record(
-                    event_id=event_id,
-                    commitment_level=COMMITMENT_FINALIZED,
-                    transaction_succeeded=status.err is None,
-                    observed_at=now,
-                    provider=self._provider_name,
-                    provider_received_at=now,
-                    created_at=now,
-                )
+            try:
+                async with self._unit_of_work() as repos:
+                    result = await CommitmentTracker(repos.commitment_store).record(
+                        event_id=event_id,
+                        commitment_level=COMMITMENT_FINALIZED,
+                        transaction_succeeded=status.err is None,
+                        observed_at=now,
+                        provider=self._provider_name,
+                        provider_received_at=now,
+                        created_at=now,
+                    )
+            except Exception:  # noqa: BLE001 - one event's failure never aborts the batch
+                append_failures += 1
+                continue
             if result.outcome == CommitmentAppendOutcome.APPENDED:
                 promoted += 1
-        return promoted
+        if append_failures:
+            return FinalizationSweepResult(
+                ok=False,
+                promoted=promoted,
+                reason=f"{append_failures} of {len(candidates)} finalization appends failed",
+            )
+        return FinalizationSweepResult(ok=True, promoted=promoted)

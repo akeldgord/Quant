@@ -989,3 +989,59 @@ async def test_finalization_sweep_runs_from_the_manager_real_code_path() -> None
     state = derive_current_state(await commitment_store.list_for_event(event_id))
     assert state.commitment_level == COMMITMENT_FINALIZED
     assert state.transaction_succeeded is True
+
+
+async def test_finalization_sweep_failure_is_logged_by_the_manager(capsys) -> None:  # noqa: ANN001
+    """Phase 1 remediation round 3, finding #6: a failed sweep
+    (``sweep_finalization`` returning ``ok=False``) must be a visible,
+    logged operational signal from the manager's own real background
+    loop, distinguishable from a genuine zero-promotion sweep -- not
+    silently discarded like the old bare-``int`` return was."""
+    import uuid
+
+    from tests.unit.test_reconciliation import FakeRecentEventSource
+
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-initial", slot=0, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+
+    class _FailingStatusProvider:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(provider, name)
+
+        async def get_signature_statuses(self, signatures: list[str]) -> Any:
+            raise RuntimeError("simulated provider outage")
+
+    failing_provider = _FailingStatusProvider()
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        recent_event_source=FakeRecentEventSource([(uuid.uuid4(), "sig-initial")]),
+        config=IngestionManagerConfig(
+            reconnect_base_delay_seconds=0.001,
+            reconnect_max_delay_seconds=0.005,
+            stream_receive_timeout_seconds=3600,
+            periodic_reconciliation_interval_seconds=3600,
+            clock_heartbeat_interval_seconds=3600,
+            finalization_sweep_interval_seconds=0.01,
+        ),
+    )
+    # Only the reconciliation engine's own provider reference needs to
+    # fail -- sweep_finalization() is the only caller of
+    # get_signature_statuses() in this scenario.
+    manager._reconciliation_engine._chain_provider = failing_provider  # type: ignore[attr-defined]
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.ensure_future(manager.run(stop_event=stop_event))
+    try:
+        async with asyncio.timeout(2.0):
+            while "finalization_sweep_failed" not in capsys.readouterr().out:
+                await asyncio.sleep(0.01)
+    finally:
+        stop_event.set()
+        await run_task

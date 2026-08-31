@@ -356,13 +356,31 @@ class IngestionManager:
     ) -> None:
         """Finding #4's real runtime path for FINALIZED promotion --
         ``ReconciliationEngine.sweep_finalization`` existed and was
-        tested in isolation, but no production loop ever called it."""
+        tested in isolation, but no production loop ever called it.
+
+        Finding #6 (round 3): a failed sweep (``result.ok is False`` --
+        the provider check itself could not be completed, distinct from a
+        genuine zero-promotion sweep) is a visible, logged operational
+        signal, never silently discarded. This loop never crashes the
+        manager over a single wallet's failed sweep -- exactly like
+        periodic reconciliation, a soft per-cycle failure is retried next
+        cycle, not fatal to the whole process -- and never uses the
+        result to touch wallet health in any way (sweep_finalization
+        itself already never does)."""
         while not stop_event.is_set():
             await self._sleep(self._config.finalization_sweep_interval_seconds)
             if stop_event.is_set():
                 return
             for wallet_address in wallets:
-                await self._reconciliation_engine.sweep_finalization(wallet_address)
+                result = await self._reconciliation_engine.sweep_finalization(wallet_address)
+                if not result.ok:
+                    _logger.warning(
+                        "finalization_sweep_failed",
+                        provider=self._provider_name,
+                        wallet_address=wallet_address,
+                        promoted=result.promoted,
+                        reason=result.reason,
+                    )
 
     async def _run_clock_heartbeat(
         self, wallets: tuple[str, ...], stop_event: asyncio.Event
