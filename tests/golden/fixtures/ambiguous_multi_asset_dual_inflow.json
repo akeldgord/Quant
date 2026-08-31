@@ -4,12 +4,12 @@
     "err": null,
     "fee": 5000,
     "postBalances": [
-      3000000000,
+      2994995000,
       1000000000
     ],
     "postTokenBalances": [
       {
-        "accountIndex": 0,
+        "accountIndex": 1,
         "mint": "TokenAFixtureMintAddressNotReal1111111111",
         "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
         "uiTokenAmount": {
@@ -25,7 +25,7 @@
     ],
     "preTokenBalances": [
       {
-        "accountIndex": 0,
+        "accountIndex": 1,
         "mint": "TokenAFixtureMintAddressNotReal1111111111",
         "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
         "uiTokenAmount": {
@@ -40,8 +40,8 @@
   "transaction": {
     "message": {
       "accountKeys": [
-        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
-        "CounterPartyAccounTFixTuReNoTReaL111111111"
+        "CounterPartyAccounTFixTuReNoTReaL111111111",
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111"
       ]
     },
     "signatures": [

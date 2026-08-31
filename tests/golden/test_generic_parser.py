@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
+from argus.parsing.generic_parser import PARSER_VERSION, compute_asset_deltas, parse_transaction
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 WALLET = "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111"
@@ -152,6 +152,43 @@ def test_token_create_is_token_create_not_a_swap() -> None:
     assert result.classification == "TOKEN_CREATE"
     assert result.confidence == Decimal("0.600")
     assert result.is_copy_eligible is False
+
+
+# --- Phase 1 remediation round 5, finding #1: compute_asset_deltas -------
+
+
+def test_compute_asset_deltas_matches_primary_legs_for_a_simple_swap() -> None:
+    raw = _load("sol_to_token")
+    deltas = compute_asset_deltas(raw, WALLET)
+    assets = {d.asset: d for d in deltas}
+    assert set(assets) == {WSOL, TOKEN_A_MINT}
+    assert assets[WSOL].amount_raw == -1_000_000_000
+    assert assets[WSOL].decimals == 9
+    assert assets[TOKEN_A_MINT].amount_raw == 500_000_000
+    assert assets[TOKEN_A_MINT].decimals == 6
+
+
+def test_compute_asset_deltas_captures_the_full_ambiguous_multi_asset_set() -> None:
+    """Unlike ParsedTransaction (which only reports a single primary
+    in/out leg), compute_asset_deltas exposes every asset that actually
+    moved -- exactly what an independent reviewer's typed expectation
+    needs to assert against for a case the classifier itself calls
+    UNKNOWN."""
+    raw = _load("ambiguous_multi_asset_dual_inflow")
+    deltas = compute_asset_deltas(raw, WALLET)
+    assets = {d.asset: d.amount_raw for d in deltas}
+    assert assets == {WSOL: 500_000_000, TOKEN_A_MINT: 100_000_000}
+
+
+def test_compute_asset_deltas_empty_for_failed_transaction() -> None:
+    raw = _load("failed_transaction")
+    assert compute_asset_deltas(raw, WALLET) == ()
+
+
+def test_compute_asset_deltas_is_deterministically_ordered() -> None:
+    raw = _load("ambiguous_multi_asset_dual_inflow")
+    deltas = compute_asset_deltas(raw, WALLET)
+    assert [d.asset for d in deltas] == sorted(d.asset for d in deltas)
 
 
 # --- Phase 1 remediation round 5, finding #4: fail-closed v1 eligibility ---

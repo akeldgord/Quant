@@ -2,13 +2,55 @@
   "real_mainnet_dca_close_dual_asset_transfer_in": {
     "category": "real_mainnet_dca_close_dual_asset_transfer_in",
     "chain": "solana",
-    "expected_classification": "TRANSFER_IN",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T14:00:35.174588+00:00",
-    "observed_classification": "TRANSFER_IN",
-    "observed_confidence": "1.000",
+    "evidence_chain_hash": "562f44ebb6d1c246fa389335869c3819638c860c241059dbdaa68f681c78c207",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "6T44rfi9BDUdZbEvVddZWVfsGrpC6N1sSSKYnCsLpump",
+          "raw_amount": 225000000000,
+          "ui_amount": "225000.000000"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": 6980880,
+          "ui_amount": "0.006980880"
+        }
+      ],
+      "classification": "UNKNOWN",
+      "confidence_rule": "exact: a genuinely ambiguous multi-asset inflow (2+ distinct assets received together, nothing offsetting) always parses at zero confidence, UNKNOWN, in v1 -- see round 5, finding #4",
+      "expected_confidence": "0.000",
+      "expected_input_amount_raw": null,
+      "expected_input_mint": null,
+      "expected_output_amount_raw": null,
+      "expected_output_mint": null,
+      "is_copy_eligible": false,
+      "network_fee_raw": 30715,
+      "reviewer": {
+        "evidence_refs": [
+          "0xjeffro/tx-parser's own jupiterDca_CloseDca_0.json naming -- a Jupiter DCA order close instruction",
+          "tests/golden/fixtures/real/SEARCH_LOG.md's round 3/4/5 sections, documenting this fixture's structural analysis across three rounds"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Two structurally unrelated assets move for this wallet in the same (inflow) direction with nothing given up: SOL increases by 6,980,880 lamports (a rent refund from the DCA order account being closed) and a separate SPL token increases by 225,000,000,000 raw units (the escrowed balance released by the order close). Neither is a counter-asset to the other -- there is no single coherent 'asset X for asset Y' story here, only two independent inflows that happen to land in the same transaction. Balance deltas alone cannot determine which (if either) represents a genuine trade signal; a naive largest-leg heuristic would misread this as a confident TRANSFER_IN of the token, silently discarding the SOL leg. Genuinely UNKNOWN and ineligible, not a confident guess."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and DCA order owner.",
+        "wallet_address": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.295805+00:00",
+    "observed_classification": "UNKNOWN",
+    "observed_confidence": "0.000",
+    "observed_is_copy_eligible": false,
     "original_sha256": "22e5dea87dd24c63c69a3bbf0f97ab914a2ea010cd98eb5b6b2cebabd514c860",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "ac0eb32ac7d4acb5beaaa2e6204e50213b9253670c4bbc9eb9c33a0501397314",
     "signature": "5EZNycMMgz8k1RNxVPxoMB2pCh97qUZ9R4PoxbgGvigsM26poK2AHSXYdHUetWKzsP7QchVfBPixqzwx2HULaSpb",
     "slot": 292574497,
@@ -32,21 +74,91 @@
     ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
     "upstream_git_blob_sha1": "4afec180d7a7ab59a637a93bf7d60283f09514ba",
-    "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/jupiterDca_CloseDca_0.json (Jupiter DCA order close: signer receives two independent asset inflows -- an SOL rent refund and a released escrowed token balance -- from a program-owned account, with no counter-asset given up in this instruction; not a market swap, and NOT claimed to satisfy the 'ambiguous multi-asset transaction' required category since the parser resolves it decisively to TRANSFER_IN, not UNKNOWN -- see round 4 finding #1. Single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
+    "upstream_license": {
+      "attribution": "0xjeffro/tx-parser contributors, https://github.com/0xjeffro/tx-parser",
+      "bytes_sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "compatibility_decision": "MPL-2.0 is a weak, file-level copyleft: reusing one individual data file verbatim, with full attribution (upstream repo, exact immutable commit, exact path, license) recorded here, is squarely within its terms. No source code from the upstream repository is used, modified, or redistributed -- only immutable, already-public on-chain transaction bytes the repository itself captured and committed.",
+      "path": "LICENSE",
+      "spdx_id": "MPL-2.0",
+      "tree_attestation": {
+        "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+      }
+    },
+    "upstream_path": "solana/data/jupiterDca_CloseDca_0.json",
+    "upstream_path_note": "Jupiter DCA order close: signer receives two independent, simultaneous asset inflows (a native-SOL rent refund from a closed program account, and a released escrowed SPL token balance) with no counter-asset given up. Round 5, finding #4 fixed the parser to recognize this exact shape (2+ distinct assets moving the same direction with nothing offsetting them) as genuinely ambiguous UNKNOWN rather than silently picking the larger leg as TRANSFER_IN -- this fixture is now the authentic 'ambiguous multi-asset transaction' required category, not merely an additional data point (correcting round 4's own disposition, which excluded it after round 3 had incorrectly counted it while the pre-round-5 parser still confidently resolved it to TRANSFER_IN). Single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
-    "wallet_address": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ"
+    "upstream_tree_attestation": {
+      "blob_sha1": "4afec180d7a7ab59a637a93bf7d60283f09514ba",
+      "captured_at": "2026-08-31T15:31:19.069103+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "solana/data/jupiterDca_CloseDca_0.json",
+      "raw_ls_tree_line": "100644 blob 4afec180d7a7ab59a637a93bf7d60283f09514ba\tsolana/data/jupiterDca_CloseDca_0.json"
+    }
   },
   "real_mainnet_multi_hop_swap": {
     "category": "real_mainnet_multi_hop_swap",
     "chain": "solana",
-    "expected_classification": "SWAP_COMPLEX",
-    "expected_confidence": "0.700",
-    "imported_at": "2026-08-31T14:00:35.169362+00:00",
+    "evidence_chain_hash": "2d6dbd6cbee993fe88f25e380e921a6ca643406d670b75c7f5ae4716d43364da",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "raw_amount": -100000000,
+          "ui_amount": "-100.000000"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": -2039280,
+          "ui_amount": "-0.002039280"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "oreoN2tQbHXVaZsr3pf66A48miqcBXCDJozganhEJgz",
+          "raw_amount": 944945170,
+          "ui_amount": "0.944945170"
+        }
+      ],
+      "classification": "SWAP_COMPLEX",
+      "confidence_rule": "bounded: multi-leg routes (assets moving on both sides, more than one per side or with an incidental SOL leg alongside the primary pair) parse at 0.700 in v1 -- lower than a clean one-for-one match, reflecting the genuine ambiguity of which leg is 'the' trade",
+      "expected_confidence": "0.700",
+      "expected_input_amount_raw": 100000000,
+      "expected_input_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expected_output_amount_raw": 944945170,
+      "expected_output_mint": "oreoN2tQbHXVaZsr3pf66A48miqcBXCDJozganhEJgz",
+      "is_copy_eligible": false,
+      "network_fee_raw": 8898,
+      "reviewer": {
+        "evidence_refs": [
+          "0xjeffro/tx-parser's own jupiterAggregatorV6_sharedAccountsRoute_1.json naming -- Jupiter's own multi-hop routing mechanism"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Three distinct assets move for this wallet: USDC decreases by 100,000,000 raw units (the primary input), SOL decreases by 2,039,280 lamports (an incidental rent/account-creation leg, not the primary trade), and the ORE token increases by 944,945,170 raw units (the primary output). Balance deltas alone cannot prove which of the two outflows is 'the' input leg of the real trade -- the largest-magnitude legs (USDC in, ORE out) are reported as primary, but this is a heuristic, not a proof. Never copy-eligible in v1 per the fail-closed SWAP_COMPLEX policy (round 5, finding #4): balance deltas alone cannot prove a multi-hop route is a genuine single fungible-asset trade."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.289142+00:00",
     "observed_classification": "SWAP_COMPLEX",
     "observed_confidence": "0.700",
+    "observed_is_copy_eligible": false,
     "original_sha256": "86187b5e4d46a259faed6d48927fabdccc203a59ac827d1ddcb3ac4c27faeb0e",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "985270af240b7652dcd8995c45e8605483496f136592f847a95995f5480c6099",
     "signature": "51SfoFAgv3nxEaajLFPCcQpnYaqoLdfZh3ZBWGdNB6c4VSRLcfNzxTnK77ggbsR5HjhDzakQsy35uFZg8KtFAkSj",
     "slot": 260327797,
@@ -70,21 +182,84 @@
     ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
     "upstream_git_blob_sha1": "b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35",
-    "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json (Jupiter Aggregator V6 sharedAccountsRoute -- Jupiter's own multi-hop routing instruction, touching 4 distinct mints incl. wSOL/USDC/ORE/an intermediate token; single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
+    "upstream_license": {
+      "attribution": "0xjeffro/tx-parser contributors, https://github.com/0xjeffro/tx-parser",
+      "bytes_sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "compatibility_decision": "MPL-2.0 is a weak, file-level copyleft: reusing one individual data file verbatim, with full attribution (upstream repo, exact immutable commit, exact path, license) recorded here, is squarely within its terms. No source code from the upstream repository is used, modified, or redistributed -- only immutable, already-public on-chain transaction bytes the repository itself captured and committed.",
+      "path": "LICENSE",
+      "spdx_id": "MPL-2.0",
+      "tree_attestation": {
+        "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+      }
+    },
+    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json",
+    "upstream_path_note": "Jupiter Aggregator V6 sharedAccountsRoute -- Jupiter's own multi-hop routing instruction, touching 3 distinct assets; single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
-    "wallet_address": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS"
+    "upstream_tree_attestation": {
+      "blob_sha1": "b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35",
+      "captured_at": "2026-08-31T15:31:19.071484+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json",
+      "raw_ls_tree_line": "100644 blob b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35\tsolana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json"
+    }
   },
   "real_mainnet_partial_sell": {
     "category": "real_mainnet_partial_sell",
     "chain": "solana",
-    "expected_classification": "SWAP_SIMPLE",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T14:00:35.172132+00:00",
+    "evidence_chain_hash": "b825a4f6c981bbadd569e92918784190a377322a77ea0a35dcaa6be015b62c89",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "AaJ6gmTzaQw9zxfK6BD9N89wzZLuSuwTRbi8YrTCpump",
+          "raw_amount": -22254340082,
+          "ui_amount": "-22254.340082"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": 1615104,
+          "ui_amount": "0.001615104"
+        }
+      ],
+      "classification": "SWAP_SIMPLE",
+      "confidence_rule": "exact: exactly one asset given up and exactly one asset received always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 22254340082,
+      "expected_input_mint": "AaJ6gmTzaQw9zxfK6BD9N89wzZLuSuwTRbi8YrTCpump",
+      "expected_output_amount_raw": 1615104,
+      "expected_output_mint": "SOL",
+      "is_copy_eligible": true,
+      "network_fee_raw": 205002,
+      "reviewer": {
+        "evidence_refs": [
+          "0xjeffro/tx-parser's own raydiumLiquidityPoolV4_swap_2.json naming"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Exactly two assets move for this wallet: a single SPL token (AaJ6gmTz..., 6 decimals, fungible) decreases by 22,254,340,082 raw units out of a much larger pre-transaction holding (a genuine partial, not full, liquidation), and SOL increases by 1,615,104 lamports net of the 205,002-lamport fee it paid as fee payer. A clean one-for-one fungible swap regardless of the partial-position size."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.292533+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": true,
     "original_sha256": "fd5d50ac17558513a4e6880cb27326f44cc3adf8611460969a5ecd6e2aa6b662",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "4c9cc0cea335e59930a5a18b3cf76a1f1a368877ba1a97779f6ecfdd2fa72b14",
     "signature": "2XgzfkWeDeua4oemWXrj3JzhxVsV4mGsqVZfETSbhn6hGFuLvi2fjdK2TGcmuQQnZSEjUmMmPjUnCFWDebGJcgWQ",
     "slot": 305539244,
@@ -108,21 +283,84 @@
     ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
     "upstream_git_blob_sha1": "eb7e24823b36abbcfd049942b3fcf6b27763fa12",
-    "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_2.json (signer sells ~1% of a large token holding for SOL, keeping the remainder; single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
+    "upstream_license": {
+      "attribution": "0xjeffro/tx-parser contributors, https://github.com/0xjeffro/tx-parser",
+      "bytes_sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "compatibility_decision": "MPL-2.0 is a weak, file-level copyleft: reusing one individual data file verbatim, with full attribution (upstream repo, exact immutable commit, exact path, license) recorded here, is squarely within its terms. No source code from the upstream repository is used, modified, or redistributed -- only immutable, already-public on-chain transaction bytes the repository itself captured and committed.",
+      "path": "LICENSE",
+      "spdx_id": "MPL-2.0",
+      "tree_attestation": {
+        "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+      }
+    },
+    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_2.json",
+    "upstream_path_note": "Raydium Liquidity Pool V4 swap -- signer sells ~1% of a much larger token holding for SOL, keeping the remainder; single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
-    "wallet_address": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8"
+    "upstream_tree_attestation": {
+      "blob_sha1": "eb7e24823b36abbcfd049942b3fcf6b27763fa12",
+      "captured_at": "2026-08-31T15:31:19.073775+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "solana/data/raydiumLiquidityPoolV4_swap_2.json",
+      "raw_ls_tree_line": "100644 blob eb7e24823b36abbcfd049942b3fcf6b27763fa12\tsolana/data/raydiumLiquidityPoolV4_swap_2.json"
+    }
   },
   "real_mainnet_sol_to_token_swap": {
     "category": "real_mainnet_sol_to_token_swap",
     "chain": "solana",
-    "expected_classification": "SWAP_SIMPLE",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T14:00:11.770113+00:00",
+    "evidence_chain_hash": "c0db13755238e73de9f9ad21e57e0fdd466976392125f2d3b91109a812bc18e2",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "D66sbPtYqLnwPYcUqjDktrQtb52CnfF77C3sdpNpR8Si",
+          "raw_amount": 56716561396327,
+          "ui_amount": "56716561.396327"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": -3072039280,
+          "ui_amount": "-3.072039280"
+        }
+      ],
+      "classification": "SWAP_SIMPLE",
+      "confidence_rule": "exact: exactly one asset given up and exactly one asset received always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 3072039280,
+      "expected_input_mint": "SOL",
+      "expected_output_amount_raw": 56716561396327,
+      "expected_output_mint": "D66sbPtYqLnwPYcUqjDktrQtb52CnfF77C3sdpNpR8Si",
+      "is_copy_eligible": true,
+      "network_fee_raw": 4005001,
+      "reviewer": {
+        "evidence_refs": [
+          "0xjeffro/tx-parser's own pumpfun_buy_0.json naming -- a pump.fun 'buy' instruction, matching this balance-delta shape exactly"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Exactly two assets move for this wallet: SOL decreases by 3,072,039,280 lamports (the purchase amount plus the 4,005,001-lamport fee it paid as fee payer) and a single SPL token (D66sbPtY..., 6 decimals, a real fungible mint -- not decimals-zero/NFT-shaped) increases from zero to 56,716,561,396,327 raw units. A clean one-for-one fungible swap: SOL in, token out."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.275799+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": true,
     "original_sha256": "b5428db5e9f8f15427ea8a847e34b8a16c9c51e8c33bf682607727225ad1f29a",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "68b815568bec0c85132be502c975c34e8f7d3b2e733a6fe763f19a394aee3c44",
     "signature": "4U8kypMuCUCkR6teu2Vn8ujaEJUR3dcUU5QExZxSMMeJ5fRTvYfWs5M5AB9yNjjHKAQ4w433QVyUivc3Pp8gvG1R",
     "slot": 290506981,
@@ -146,21 +384,77 @@
     ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
     "upstream_git_blob_sha1": "d8f98b52dda0de05f9868ddb0605a25e818beaef",
-    "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/pumpfun_buy_0.json (single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
+    "upstream_license": {
+      "attribution": "0xjeffro/tx-parser contributors, https://github.com/0xjeffro/tx-parser",
+      "bytes_sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "compatibility_decision": "MPL-2.0 is a weak, file-level copyleft: reusing one individual data file verbatim, with full attribution (upstream repo, exact immutable commit, exact path, license) recorded here, is squarely within its terms. No source code from the upstream repository is used, modified, or redistributed -- only immutable, already-public on-chain transaction bytes the repository itself captured and committed.",
+      "path": "LICENSE",
+      "spdx_id": "MPL-2.0",
+      "tree_attestation": {
+        "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+      }
+    },
+    "upstream_path": "solana/data/pumpfun_buy_0.json",
+    "upstream_path_note": "pump.fun buy instruction -- single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
-    "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE"
+    "upstream_tree_attestation": {
+      "blob_sha1": "d8f98b52dda0de05f9868ddb0605a25e818beaef",
+      "captured_at": "2026-08-31T15:31:19.076006+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "solana/data/pumpfun_buy_0.json",
+      "raw_ls_tree_line": "100644 blob d8f98b52dda0de05f9868ddb0605a25e818beaef\tsolana/data/pumpfun_buy_0.json"
+    }
   },
   "real_mainnet_sol_transfer_multi": {
     "category": "real_mainnet_sol_transfer_multi",
     "chain": "solana",
-    "expected_classification": "TRANSFER_OUT",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T13:59:36.167261+00:00",
+    "evidence_chain_hash": "199c3131caea4342ada2ec98a3eac1fc482e404c0dff8009e02571b8da0b2230",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": -31029181720,
+          "ui_amount": "-31.029181720"
+        }
+      ],
+      "classification": "TRANSFER_OUT",
+      "confidence_rule": "exact: a single-asset pure SOL outflow with no offsetting inflow always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 31029181720,
+      "expected_input_mint": "SOL",
+      "expected_output_amount_raw": null,
+      "expected_output_mint": null,
+      "is_copy_eligible": false,
+      "network_fee_raw": 11000,
+      "reviewer": {
+        "evidence_refs": [
+          "solana-labs/explorer's own mainnet-multi-sol-* fixture naming"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "The wallet's own net SOL balance decreases by 31,029,181,720 lamports (after adding back the 11000-lamport fee it paid as accountKeys[0]); no token balance entries exist. From this wallet's own perspective the multiple downstream recipients are invisible -- only its own net outflow matters, which is a single clean TRANSFER_OUT."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and sender.",
+        "wallet_address": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.270947+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": false,
     "original_sha256": "bc3d73b38086d48cace8811cb841129b510e1b2f23933777953f498ff127e20b",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "5db8a5ebf827ad131bd0e855d5f9e6f8a04ff041d71d23700a04e3dffc9f86f0",
     "signature": "2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr",
     "slot": 419246800,
@@ -184,21 +478,77 @@
     ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
     "upstream_git_blob_sha1": "2f0b06a43a38ec1416e6b7935ed667a07ae90115",
-    "upstream_license": "MIT",
+    "upstream_license": {
+      "attribution": "Copyright (c) 2023 Solana Labs, Inc., https://github.com/solana-labs/explorer",
+      "bytes_sha256": "c1ab4eaf7c2c19fe6257dc105fd9d06277f4a9dc2a2de8cfd9e5dbf64c17e6a8",
+      "compatibility_decision": "MIT is fully permissive: reusing one immutable captured getTransaction fixture file verbatim, with attribution, is squarely within its terms.",
+      "path": "LICENSE",
+      "spdx_id": "MIT",
+      "tree_attestation": {
+        "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
+        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+      }
+    },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json",
+    "upstream_path_note": "A plain multi-recipient SOL transfer -- kept as an additional real-chain TRANSFER_OUT data point (multiple SOL transfers to different destinations), not claimed to satisfy the 'multiple token-account/LP-style action' required category (that category is about multiple *token* accounts, not plain multi-recipient SOL).",
     "upstream_repo": "solana-labs/explorer",
-    "wallet_address": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9"
+    "upstream_tree_attestation": {
+      "blob_sha1": "2f0b06a43a38ec1416e6b7935ed667a07ae90115",
+      "captured_at": "2026-08-31T15:31:19.085131+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "app/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json",
+      "raw_ls_tree_line": "100644 blob 2f0b06a43a38ec1416e6b7935ed667a07ae90115\tapp/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json"
+    }
   },
   "real_mainnet_sol_transfer_received": {
     "category": "real_mainnet_sol_transfer_received",
     "chain": "solana",
-    "expected_classification": "TRANSFER_IN",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T13:59:36.165666+00:00",
+    "evidence_chain_hash": "b2089e9f08b56df545b62e1320a23ba9f9a13f0351aa2258293344bc3ec4fbcb",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": 24922118,
+          "ui_amount": "0.024922118"
+        }
+      ],
+      "classification": "TRANSFER_IN",
+      "confidence_rule": "exact: a single-asset pure SOL inflow with no offsetting outflow always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": null,
+      "expected_input_mint": null,
+      "expected_output_amount_raw": 24922118,
+      "expected_output_mint": "SOL",
+      "is_copy_eligible": false,
+      "network_fee_raw": 0,
+      "reviewer": {
+        "evidence_refs": [
+          "solana-labs/explorer's own mainnet-single-sol-* fixture naming"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "This wallet is accountKeys[1], not the fee payer -- its SOL balance increases by exactly 24,922,118 lamports with zero fee attribution (it paid no network fee) and no token balance entries at all. A single, unambiguous inflow with nothing given up. TRANSFER_IN is never copy-eligible."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[1] -- the transaction's receiver, not the fee payer.",
+        "wallet_address": "3eF3iBQqi2DmDLS7o9y8gG7necF5VBbwYy5gqF7sh899"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.268778+00:00",
     "observed_classification": "TRANSFER_IN",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": false,
     "original_sha256": "1a6f6490fb750dcd28086eac4a6871aebc25115c483c25e623284a62099c7503",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662",
     "signature": "2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn",
     "slot": 399683256,
@@ -222,21 +572,77 @@
     ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
     "upstream_git_blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
-    "upstream_license": "MIT",
+    "upstream_license": {
+      "attribution": "Copyright (c) 2023 Solana Labs, Inc., https://github.com/solana-labs/explorer",
+      "bytes_sha256": "c1ab4eaf7c2c19fe6257dc105fd9d06277f4a9dc2a2de8cfd9e5dbf64c17e6a8",
+      "compatibility_decision": "MIT is fully permissive: reusing one immutable captured getTransaction fixture file verbatim, with attribution, is squarely within its terms.",
+      "path": "LICENSE",
+      "spdx_id": "MIT",
+      "tree_attestation": {
+        "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
+        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+      }
+    },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
+    "upstream_path_note": "Same upstream file as real_mainnet_sol_transfer_single, imported again from the receiver's perspective -- the two categories together satisfy the 'simple transfer' required category from both the sender and receiver wallet roles.",
     "upstream_repo": "solana-labs/explorer",
-    "wallet_address": "3eF3iBQqi2DmDLS7o9y8gG7necF5VBbwYy5gqF7sh899"
+    "upstream_tree_attestation": {
+      "blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
+      "captured_at": "2026-08-31T15:31:19.087461+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
+      "raw_ls_tree_line": "100644 blob 26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8\tapp/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json"
+    }
   },
   "real_mainnet_sol_transfer_single": {
     "category": "real_mainnet_sol_transfer_single",
     "chain": "solana",
-    "expected_classification": "TRANSFER_OUT",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T13:59:36.164536+00:00",
+    "evidence_chain_hash": "7f6cfb9386bbe0648a605261a5638ac0868754458fcb799684c673955f44ec04",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": -24922118,
+          "ui_amount": "-0.024922118"
+        }
+      ],
+      "classification": "TRANSFER_OUT",
+      "confidence_rule": "exact: a single-asset pure SOL outflow with no offsetting inflow always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 24922118,
+      "expected_input_mint": "SOL",
+      "expected_output_amount_raw": null,
+      "expected_output_mint": null,
+      "is_copy_eligible": false,
+      "network_fee_raw": 5000,
+      "reviewer": {
+        "evidence_refs": [
+          "solana-labs/explorer's own mainnet-single-sol-* fixture naming (the repo's own provenance labeling, not an inference from payload shape alone)"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Only meta.preBalances/postBalances move (no token balance entries at all); the wallet's own SOL balance decreases by exactly 24,922,118 lamports after the 5000-lamport network fee it paid (as accountKeys[0]) is added back -- a single, unambiguous outflow with nothing received in return. TRANSFER_OUT is not a trade classification and is never copy-eligible."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and sender.",
+        "wallet_address": "4Y5YjAPB4hMdCsiFy7BaBSscyiAvB7cuAbhxnBZ5xmgy"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.266302+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": false,
     "original_sha256": "1a6f6490fb750dcd28086eac4a6871aebc25115c483c25e623284a62099c7503",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662",
     "signature": "2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn",
     "slot": 399683256,
@@ -260,21 +666,84 @@
     ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
     "upstream_git_blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
-    "upstream_license": "MIT",
+    "upstream_license": {
+      "attribution": "Copyright (c) 2023 Solana Labs, Inc., https://github.com/solana-labs/explorer",
+      "bytes_sha256": "c1ab4eaf7c2c19fe6257dc105fd9d06277f4a9dc2a2de8cfd9e5dbf64c17e6a8",
+      "compatibility_decision": "MIT is fully permissive: reusing one immutable captured getTransaction fixture file verbatim, with attribution, is squarely within its terms.",
+      "path": "LICENSE",
+      "spdx_id": "MIT",
+      "tree_attestation": {
+        "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
+        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+      }
+    },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
+    "upstream_path_note": "solana-labs/explorer embeds complete, real getTransaction JSON-RPC responses (full envelope), typed/named mainnet-* by the repo's own load-fixture.ts -- imported here from the sender's perspective.",
     "upstream_repo": "solana-labs/explorer",
-    "wallet_address": "4Y5YjAPB4hMdCsiFy7BaBSscyiAvB7cuAbhxnBZ5xmgy"
+    "upstream_tree_attestation": {
+      "blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
+      "captured_at": "2026-08-31T15:31:19.087461+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
+      "raw_ls_tree_line": "100644 blob 26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8\tapp/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json"
+    }
   },
   "real_mainnet_token_to_sol_swap": {
     "category": "real_mainnet_token_to_sol_swap",
     "chain": "solana",
-    "expected_classification": "SWAP_SIMPLE",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T14:00:35.157699+00:00",
+    "evidence_chain_hash": "bf39ed6efca08bbb24546ac1304d9f70cdea5da5ff4b9bf75e64d8b647211cde",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "2CrtdajpSb7DpMRLKP4yMtFLbCsWZjMkEvgSTf4Ypump",
+          "raw_amount": -836112233953,
+          "ui_amount": "-836112.233953"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": 348783354,
+          "ui_amount": "0.348783354"
+        }
+      ],
+      "classification": "SWAP_SIMPLE",
+      "confidence_rule": "exact: exactly one asset given up and exactly one asset received always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 836112233953,
+      "expected_input_mint": "2CrtdajpSb7DpMRLKP4yMtFLbCsWZjMkEvgSTf4Ypump",
+      "expected_output_amount_raw": 348783354,
+      "expected_output_mint": "SOL",
+      "is_copy_eligible": true,
+      "network_fee_raw": 1005000,
+      "reviewer": {
+        "evidence_refs": [
+          "0xjeffro/tx-parser's own raydiumLiquidityPoolV4_swap_0.json naming"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Exactly two assets move for this wallet: a single SPL token (2Crtdajp..., 6 decimals, fungible) decreases from 836,112,233,953 raw units to zero (a full liquidation) and SOL increases by 348,783,354 lamports net of the 1,005,000-lamport fee it paid as fee payer. A clean one-for-one fungible swap: token in, SOL out."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.279250+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": true,
     "original_sha256": "37eea19a5dbe1b7416397c4d8bf0347e93fb65386df7fb8c348f98043cc9fea0",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "7ab07b9cf3c58a08f94f13f8033f60047848f486a6c6bd5ae7d6cac444ed60e8",
     "signature": "3aQZsNRUbNXpH54GQEaxFpWZsmL554cYGGtWqqoypz8b6LUDYprbRd9AwgivXRLtFBYCU6MU6e9ANurwP8dCMV6",
     "slot": 292734971,
@@ -298,21 +767,84 @@
     ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
     "upstream_git_blob_sha1": "fa277c7d4ff997f320c38f8e15e8e02ec49983cb",
-    "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_0.json (single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
+    "upstream_license": {
+      "attribution": "0xjeffro/tx-parser contributors, https://github.com/0xjeffro/tx-parser",
+      "bytes_sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "compatibility_decision": "MPL-2.0 is a weak, file-level copyleft: reusing one individual data file verbatim, with full attribution (upstream repo, exact immutable commit, exact path, license) recorded here, is squarely within its terms. No source code from the upstream repository is used, modified, or redistributed -- only immutable, already-public on-chain transaction bytes the repository itself captured and committed.",
+      "path": "LICENSE",
+      "spdx_id": "MPL-2.0",
+      "tree_attestation": {
+        "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+      }
+    },
+    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_0.json",
+    "upstream_path_note": "Raydium Liquidity Pool V4 swap -- single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
-    "wallet_address": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5"
+    "upstream_tree_attestation": {
+      "blob_sha1": "fa277c7d4ff997f320c38f8e15e8e02ec49983cb",
+      "captured_at": "2026-08-31T15:31:19.078319+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "solana/data/raydiumLiquidityPoolV4_swap_0.json",
+      "raw_ls_tree_line": "100644 blob fa277c7d4ff997f320c38f8e15e8e02ec49983cb\tsolana/data/raydiumLiquidityPoolV4_swap_0.json"
+    }
   },
   "real_mainnet_token_to_usdc_swap": {
     "category": "real_mainnet_token_to_usdc_swap",
     "chain": "solana",
-    "expected_classification": "SWAP_SIMPLE",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T14:00:35.164343+00:00",
+    "evidence_chain_hash": "71bf6384c9fd586a0f2d51e1b36652316f1015f97e778c0b5a332ad4742814d8",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "CMjfdovtzmgRsnhE1cCzdwDFGKt1UzZB4oCGQchQpump",
+          "raw_amount": -634862142081,
+          "ui_amount": "-634862.142081"
+        },
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "raw_amount": 47461249,
+          "ui_amount": "47.461249"
+        }
+      ],
+      "classification": "SWAP_SIMPLE",
+      "confidence_rule": "exact: exactly one asset given up and exactly one asset received always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 634862142081,
+      "expected_input_mint": "CMjfdovtzmgRsnhE1cCzdwDFGKt1UzZB4oCGQchQpump",
+      "expected_output_amount_raw": 47461249,
+      "expected_output_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "is_copy_eligible": true,
+      "network_fee_raw": 105000,
+      "reviewer": {
+        "evidence_refs": [
+          "0xjeffro/tx-parser's own jupiterAggregatorV6_sharedAccountsRoute_2.json naming"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Exactly two assets move for this wallet: a single SPL token (CMjfdovt..., 6 decimals, fungible) decreases from 634,862,142,081 raw units to zero, and the real USDC mint (EPjFWdd5..., the same mint this project treats as canonical) increases by 47,461,249 raw units. A clean one-for-one fungible swap despite the multi-hop Jupiter route underneath -- only the net wallet-level deltas are one-for-one, which is exactly what SWAP_SIMPLE asserts."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.283972+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": true,
     "original_sha256": "146d4462119960d14cb97637dcade67995f0ca386cf13a837933adc356ff4a45",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "28f46f9dc24b6287478bfff963ea3fa99bf595af146130d238a57455097c0b8c",
     "signature": "rNMFZpBmbr6R8g4hStbC5qAictmWvGFQVTwQyXoCY6QDrcq9UV2QfHJ6oARNuS1VaUh3HVe799CDn44dWQReAye",
     "slot": 302096845,
@@ -336,21 +868,77 @@
     ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
     "upstream_git_blob_sha1": "91f3b3675779c6a4fb0a994ef0ff1e91b9e79283",
-    "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json (single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
+    "upstream_license": {
+      "attribution": "0xjeffro/tx-parser contributors, https://github.com/0xjeffro/tx-parser",
+      "bytes_sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "compatibility_decision": "MPL-2.0 is a weak, file-level copyleft: reusing one individual data file verbatim, with full attribution (upstream repo, exact immutable commit, exact path, license) recorded here, is squarely within its terms. No source code from the upstream repository is used, modified, or redistributed -- only immutable, already-public on-chain transaction bytes the repository itself captured and committed.",
+      "path": "LICENSE",
+      "spdx_id": "MPL-2.0",
+      "tree_attestation": {
+        "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+      }
+    },
+    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json",
+    "upstream_path_note": "Jupiter Aggregator V6 sharedAccountsRoute -- single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
-    "wallet_address": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy"
+    "upstream_tree_attestation": {
+      "blob_sha1": "91f3b3675779c6a4fb0a994ef0ff1e91b9e79283",
+      "captured_at": "2026-08-31T15:31:19.080507+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json",
+      "raw_ls_tree_line": "100644 blob 91f3b3675779c6a4fb0a994ef0ff1e91b9e79283\tsolana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json"
+    }
   },
   "real_mainnet_usdc_transfer": {
     "category": "real_mainnet_usdc_transfer",
     "chain": "solana",
-    "expected_classification": "TRANSFER_OUT",
-    "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T14:00:11.767232+00:00",
+    "evidence_chain_hash": "29bd85b019862693fa5c73b5adce7ce9eb2da8069499ed1976e57a4f4ffdebb7",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "raw_amount": -3800000,
+          "ui_amount": "-3.800000"
+        }
+      ],
+      "classification": "TRANSFER_OUT",
+      "confidence_rule": "exact: a single-asset pure token outflow with no offsetting inflow always parses at full confidence in v1",
+      "expected_confidence": "1.000",
+      "expected_input_amount_raw": 3800000,
+      "expected_input_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expected_output_amount_raw": null,
+      "expected_output_mint": null,
+      "is_copy_eligible": false,
+      "network_fee_raw": 48370,
+      "reviewer": {
+        "evidence_refs": [
+          "solana-labs/explorer's own mainnet-single-usdc-* fixture naming"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Only meta.preTokenBalances/postTokenBalances for the real USDC mint (EPjFWdd5...) move for this wallet, decreasing by exactly 3,800,000 raw units (6 decimals); no other asset (including SOL beyond the 48370-lamport fee it paid as fee payer) changes. A single clean token outflow."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and sender.",
+        "wallet_address": "3V9bd3EN5aNuhE4RiHGbZ1eZakJ1F9cDb8V4YLjCG8cg"
+      }
+    },
+    "imported_at": "2026-08-31T15:40:14.273327+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
+    "observed_is_copy_eligible": false,
     "original_sha256": "7f70d59e2e59b87544e418e425a8c48eef1b668be36d45a011d9a18461edfb8e",
     "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
     "sanitized_sha256": "9ae611ab81aa422d33fd4c062613eec75f65bd5dc04d3fe3ea3312a6d677778d",
     "signature": "4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX",
     "slot": 419685246,
@@ -374,9 +962,31 @@
     ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
     "upstream_git_blob_sha1": "cd7eeafc7fd99c4c723ebc3719737b8f127362b8",
-    "upstream_license": "MIT",
+    "upstream_license": {
+      "attribution": "Copyright (c) 2023 Solana Labs, Inc., https://github.com/solana-labs/explorer",
+      "bytes_sha256": "c1ab4eaf7c2c19fe6257dc105fd9d06277f4a9dc2a2de8cfd9e5dbf64c17e6a8",
+      "compatibility_decision": "MIT is fully permissive: reusing one immutable captured getTransaction fixture file verbatim, with attribution, is squarely within its terms.",
+      "path": "LICENSE",
+      "spdx_id": "MIT",
+      "tree_attestation": {
+        "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
+        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+      }
+    },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json",
+    "upstream_path_note": "A real SPL-token (USDC) transfer -- kept as an additional real-chain TRANSFER_OUT data point over a non-SOL asset, not claimed to satisfy 'token-to-USDC swap' (that category means a DEX swap output, not a plain token transfer).",
     "upstream_repo": "solana-labs/explorer",
-    "wallet_address": "3V9bd3EN5aNuhE4RiHGbZ1eZakJ1F9cDb8V4YLjCG8cg"
+    "upstream_tree_attestation": {
+      "blob_sha1": "cd7eeafc7fd99c4c723ebc3719737b8f127362b8",
+      "captured_at": "2026-08-31T15:31:19.089819+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json",
+      "raw_ls_tree_line": "100644 blob cd7eeafc7fd99c4c723ebc3719737b8f127362b8\tapp/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json"
+    }
   }
 }

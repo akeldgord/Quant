@@ -254,12 +254,12 @@ FIXTURES["ambiguous_multi_asset_dual_inflow"] = _tx(
     signature="golden-ambiguous-multi-asset-00000000000000",
     slot=100_000_012,
     block_time=1_735_000_012,
-    account_keys=_account_keys(COUNTERPARTY),
+    account_keys=[COUNTERPARTY, WALLET],  # wallet is NOT the fee payer (index 0)
     pre_balances=[3_000_000_000, 500_000_000],
-    post_balances=[3_000_000_000, 1_000_000_000],  # +0.5 SOL, wallet not fee payer
+    post_balances=[2_994_995_000, 1_000_000_000],  # wallet: +0.5 SOL exactly
     fee=5000,
-    pre_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "0", 6)],
-    post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "100000000", 6)],
+    pre_token_balances=[_tok(1, TOKEN_A_MINT, WALLET, "0", 6)],
+    post_token_balances=[_tok(1, TOKEN_A_MINT, WALLET, "100000000", 6)],
 )
 
 # 13. NFT purchase (decimals == 0): wallet spends SOL, receives exactly one

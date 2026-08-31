@@ -528,50 +528,21 @@ def ingest_reparse(
 @fixtures_app.command("import-real-chain")
 def fixtures_import_real_chain(
     input_path: str = typer.Option(
-        ..., "--input", help="Path to a captured getTransaction JSON payload."
+        ..., "--input", help="Path to a captured getTransaction JSON payload, exactly as captured."
     ),
-    category: str = typer.Option(
+    evidence_path: str = typer.Option(
         ...,
-        "--category",
-        help="Required fixture category (e.g. 'simple_transfer', 'sol_to_token').",
+        "--evidence-file",
+        help="Path to a JSON file bundling the upstream git tree attestation, license "
+        "evidence, and the full independent expectation (Phase 1 remediation round 5, "
+        "findings #1/#2) -- too rich for individual flags. See "
+        "tests/golden/fixtures/real/EVIDENCE_FILE_SCHEMA.md for the exact shape.",
     ),
-    upstream_repo: str = typer.Option(
-        ..., "--upstream-repo", help="owner/repo the payload's provenance traces to."
-    ),
-    upstream_commit: str = typer.Option(
-        ..., "--upstream-commit", help="Immutable upstream commit SHA the payload traces to."
-    ),
-    upstream_path: str = typer.Option(
+    license_bytes_path: str = typer.Option(
         ...,
-        "--upstream-path",
-        help="Exact file path (or documented signature reference) at that commit.",
-    ),
-    upstream_license: str = typer.Option(
-        ..., "--upstream-license", help="SPDX identifier of the upstream repository's license."
-    ),
-    expected_classification: str = typer.Option(
-        ...,
-        "--expected-classification",
-        help="Independently-reasoned expected classification (e.g. 'SWAP_SIMPLE') -- checked "
-        "against, never defined by, what the parser actually produces.",
-    ),
-    expected_confidence: str = typer.Option(
-        ...,
-        "--expected-confidence",
-        help="Independently-reasoned expected confidence, e.g. '1.000'.",
-    ),
-    wallet_address: str = typer.Option(
-        "",
-        "--wallet-address",
-        help="Account to parse the transaction from the perspective of. Defaults to "
-        "the transaction's fee payer (accountKeys[0]).",
-    ),
-    allow_observed_mismatch: bool = typer.Option(
-        False,
-        "--allow-observed-mismatch",
-        help="Import even though the parser's observed output does not match "
-        "--expected-classification/--expected-confidence. Only for deliberately capturing "
-        "a known-divergent case for tracking -- never to hide a bug.",
+        "--license-file",
+        help="Path to the exact preserved upstream license file bytes, matching the "
+        "evidence file's upstream_license.bytes_sha256.",
     ),
     fixtures_dir: str = typer.Option(
         "",
@@ -581,31 +552,28 @@ def fixtures_import_real_chain(
     ),
 ) -> None:
     """Offline import for one real-chain golden fixture (Phase 1
-    remediation round 2, finding #12; round 4, findings #2/#3): validates
-    INPUT is a genuine, unmodified raw upstream capture, canonicalizes
-    it, preserves the raw bytes, runs it through the real parser, and
-    records full provenance including an independently-reasoned expected
-    outcome. Makes no network call of its own -- INPUT must already
-    contain a payload captured elsewhere, exactly as captured (this
-    sandbox has GitHub read access but no general RPC egress)."""
+    remediation round 2, finding #12; round 4, findings #2/#3; round 5,
+    findings #1/#2): validates INPUT is a genuine, unmodified raw
+    upstream capture, canonicalizes it, preserves the raw bytes and the
+    license bytes, runs it through the real parser, and records full
+    provenance -- an independently-reviewed typed expectation checked
+    against (never defined by) the parser's own observed output, and a
+    cryptographically-bound evidence chain covering the upstream git
+    tree/license attestations. Makes no network call of its own -- INPUT
+    and the evidence file's attestations must already reflect evidence
+    captured elsewhere with real network access (this sandbox has GitHub
+    read access but no general RPC egress)."""
     from argus.golden_fixtures import (
         DEFAULT_REAL_FIXTURES_DIR,
         RealChainFixtureError,
-        import_real_chain_fixture,
+        import_real_chain_fixture_from_evidence_file,
     )
 
     try:
-        record = import_real_chain_fixture(
+        record = import_real_chain_fixture_from_evidence_file(
             input_path=Path(input_path),
-            category=category,
-            upstream_repo=upstream_repo,
-            upstream_commit=upstream_commit,
-            upstream_path=upstream_path,
-            upstream_license=upstream_license,
-            expected_classification=expected_classification,
-            expected_confidence=expected_confidence,
-            wallet_address=wallet_address or None,
-            allow_observed_mismatch=allow_observed_mismatch,
+            evidence_path=Path(evidence_path),
+            license_bytes_path=Path(license_bytes_path),
             fixtures_dir=Path(fixtures_dir) if fixtures_dir else DEFAULT_REAL_FIXTURES_DIR,
         )
     except RealChainFixtureError as exc:
@@ -613,9 +581,10 @@ def fixtures_import_real_chain(
         raise typer.Exit(code=1) from exc
 
     console.print(
-        f"imported {category!r}: signature={record.signature} slot={record.slot} "
-        f"expected={record.expected_classification} ({record.expected_confidence}) "
+        f"imported {record.category!r}: signature={record.signature} slot={record.slot} "
+        f"expected={record.expectation.classification} ({record.expectation.expected_confidence}) "
         f"observed={record.observed_classification} ({record.observed_confidence}) "
+        f"quarantined={record.quarantined} "
         f"sanitized_sha256={record.sanitized_sha256}"
     )
 
@@ -645,7 +614,12 @@ def fixtures_validate_real_chain(
         return
     failed = [r for r in results if not r.ok]
     for result in results:
-        marker = "[green]ok[/green]" if result.ok else "[red]FAIL[/red]"
+        if result.ok:
+            marker = "[green]ok[/green]"
+        elif result.quarantined:
+            marker = "[yellow]QUARANTINED[/yellow]"
+        else:
+            marker = "[red]FAIL[/red]"
         console.print(f"{result.category}: {marker} - {result.detail}")
     if failed:
         raise typer.Exit(code=1)

@@ -253,6 +253,47 @@ def _ui_amount(raw_amount: int, decimals: int) -> Decimal:
     return Decimal(raw_amount).scaleb(-decimals)
 
 
+def _combined_deltas(
+    raw: dict[str, Any], wallet_address: str
+) -> tuple[dict[str, int], dict[str, int]]:
+    """The complete set of net wallet-owned balance deltas (SOL +
+    tokens, wrapped SOL canonicalized into the native bucket) and each
+    asset's decimals -- the single source of truth both
+    :func:`parse_transaction`'s classification and
+    :func:`compute_asset_deltas`'s independent public view are built
+    from, so the two can never silently diverge."""
+    sol_deltas = _sol_deltas(raw, wallet_address)
+    token_deltas, token_decimals = _token_deltas(raw, wallet_address)
+
+    deltas: dict[str, int] = dict(token_deltas)
+    for asset, amount in sol_deltas.items():
+        deltas[asset] = deltas.get(asset, 0) + amount
+    deltas = {asset: amount for asset, amount in deltas.items() if amount != 0}
+
+    decimals_by_asset = dict(token_decimals)
+    decimals_by_asset.setdefault(NATIVE_SOL_ASSET, NATIVE_SOL_DECIMALS)
+    return deltas, decimals_by_asset
+
+
+def compute_asset_deltas(raw: dict[str, Any], wallet_address: str) -> tuple[AssetMove, ...]:
+    """The complete, ordered (sorted by asset identifier) set of net
+    wallet-owned balance deltas this transaction produced -- the same
+    deltas the classifier computes internally, exposed publicly so a
+    golden-fixture reviewer's own independent expectation (Phase 1
+    remediation round 5, finding #1) can be checked against every asset
+    that actually moved, not only the single primary in/out leg
+    :class:`ParsedTransaction` reports. Returns an empty tuple for a
+    failed transaction (``meta.err`` set) or one with no wallet-relevant
+    delta at all, matching :func:`parse_transaction`'s own UNKNOWN cases."""
+    if raw["meta"].get("err") is not None:
+        return ()
+    deltas, decimals_by_asset = _combined_deltas(raw, wallet_address)
+    return tuple(
+        AssetMove(asset=asset, amount_raw=deltas[asset], decimals=decimals_by_asset[asset])
+        for asset in sorted(deltas)
+    )
+
+
 def parse_transaction(
     raw: dict[str, Any],
     *,
@@ -317,16 +358,7 @@ def parse_transaction(
     if meta.get("err") is not None:
         return _result("UNKNOWN", "0.000", "transaction failed on-chain (meta.err set)")
 
-    sol_deltas = _sol_deltas(raw, wallet_address)
-    token_deltas, token_decimals = _token_deltas(raw, wallet_address)
-
-    deltas: dict[str, int] = dict(token_deltas)
-    for asset, amount in sol_deltas.items():
-        deltas[asset] = deltas.get(asset, 0) + amount
-    deltas = {asset: amount for asset, amount in deltas.items() if amount != 0}
-
-    decimals_by_asset = dict(token_decimals)
-    decimals_by_asset.setdefault(NATIVE_SOL_ASSET, NATIVE_SOL_DECIMALS)
+    deltas, decimals_by_asset = _combined_deltas(raw, wallet_address)
 
     if not deltas:
         return _result("UNKNOWN", "0.000", "no wallet-relevant balance change found")
