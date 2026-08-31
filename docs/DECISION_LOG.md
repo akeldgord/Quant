@@ -1479,3 +1479,99 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
 - git_commit: 3aa61b4d220c3211e4dca1ca46b18b1ab510376e (last code commit of
   this remediation round; a final docs-only commit follows for this log
   entry, the checkpoint, the bundle, and the handoff).
+
+### 2026-08-31 — Phase 1.5 remediation round 2: program-and-instruction-discriminator semantic gate
+- requirement_id: MASTER_SPEC.md section 21 ("no automatic copy trade for
+  ambiguous interpretations"); `argus-phase-1-5-remediation-001`'s own
+  required-remediation items 1-3 (a one-negative/one-positive balance
+  shape is insufficient unless independent evidence positively identifies
+  a supported trade/swap path; use program identities AND deterministic
+  instruction/log discriminators as appropriate; unmatched semantics must
+  fail closed) -- round 1 satisfied item 1's balance-shape requirement
+  but not items 2-3's instruction-level requirement.
+- decision: An independent orchestrator audit rejected round 1's positive
+  semantic proof gate as `FAIL_REMEDIATION_REQUIRED` on finding
+  `P15-R2-001`: `_matched_swap_program_id()` proved only that *some*
+  instruction in a transaction invoked an allowlisted program, never that
+  the matched instruction was itself a swap. This project's own permanent
+  evidence already proved the risk (`real_mainnet_orca_close_position_
+  multi_account.json` invokes the allowlisted Orca Whirlpool program via
+  genuine `DecreaseLiquidity`/`CollectFees`/`ClosePosition` instructions,
+  none a swap); the audit's own reproducible probe (the
+  `one_for_one_unsupported_program.json` balance shape replayed with each
+  allowlisted program ID plus a non-swap log label) confirmed the current
+  parser still returned `is_copy_eligible=True` in all three cases.
+  Replaced `_SUPPORTED_SWAP_PROGRAM_IDS` with `_SWAP_INSTRUCTION_
+  REGISTRY`: a program-AND-instruction-discriminator registry binding the
+  resolved program ID, the SAME instruction's own decoded `data` bytes,
+  and an exact registered discriminator to one canonical instruction
+  object. A new strict, local, bounded base58 decoder
+  (`_decode_base58_strict`) fails closed on anything absent, non-string,
+  oversized, outside the fixed alphabet, or non-canonical (no repository
+  dependency already declared a base58 codec, checked against `pyproject.
+  toml`/`uv.lock` before writing a local one, per the instruction's own
+  fallback). `ParsedTransaction` gained `matched_semantic_label`/
+  `matched_discriminator_hex`; `is_copy_eligible` now requires all three
+  match-evidence fields non-`None`. `PARSER_VERSION` bumped `_v2` -> `_v3`
+  since observable eligibility output changed for real evidence. Every
+  one of the 4 accepted (program, discriminator) pairs (Jupiter V6
+  `shared_accounts_route`, Raydium LP V4 `swap_base_in`, Orca Whirlpool
+  `swap`, pump.fun `buy`) was independently derived by decoding the cited
+  authentic fixture's own raw instruction `data` -- never taken from
+  program documentation, memory, a synthetic fixture, or a non-swap
+  fixture, per the instruction's explicit requirement. The real Orca
+  `DecreaseLiquidity`/`CollectFees`/`ClosePosition` discriminators are
+  proven absent from the registry and one of them (`DecreaseLiquidity`)
+  is replayed verbatim in the new T2 test, per the instruction's explicit
+  citation requirement.
+- reason: The same defect class the round-1 gate closed for Solend/xStep
+  (balance shape mistaken for trade evidence) recurred one layer deeper:
+  program identity mistaken for swap-instruction identity. Fixing it now,
+  rather than deferring, prevents the exact same false-signal risk from
+  recurring for any future program whose swap AND non-swap instructions
+  both happen to produce a one-in/one-out balance shape -- which is most
+  DEX/AMM programs, since liquidity actions frequently share that shape
+  with trades.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-5-remediation-002` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 5d85848ab5bff397a192a0868ffcf1077b691706`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_5_INSTRUCTION_SEMANTIC_GATE_ONLY`,
+  `AUTHORIZED_PHASE: 1.5`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: Extended `src/argus/parsing/generic_parser.py`
+  (`_decode_base58_strict()`/`_encode_base58()`, `_SwapInstructionEvidence`,
+  `_SWAP_INSTRUCTION_REGISTRY`, `_REGISTRY_BY_PROGRAM`,
+  `_resolve_program_id()`, `_iter_candidate_instructions()`,
+  `_matched_swap_instruction()`, `ParsedTransaction.
+  matched_semantic_label`/`matched_discriminator_hex`, `PARSER_VERSION`
+  bump). Extended `scripts/_generate_golden_fixtures.py` (real
+  discriminator bytes embedded in the 4 synthetic "known genuine swap"
+  fixtures' instruction data, replacing round 1's empty-data
+  placeholders) and regenerated the affected fixture files. Extended
+  `scripts/phase_1_5_feasibility.py` to report the two new fields and
+  reran `orchestration/phase_1_5/evidence/analysis_results.json` under
+  the corrected parser -- 3 of 28 rows now copy eligible (down from 4:
+  `suppl_13_titan_swap_with_fees_2.json` honestly becomes ineligible,
+  disclosed in the checkpoint, not smoothed over). Added T1-T11 (49 new
+  tests in `tests/golden/test_generic_parser.py`, up from 46 to 95) and
+  T11/a Titan-disclosure test in `tests/phase_1_5/
+  test_historical_feasibility.py` (7 total, up from 6). Fixed 1 incidental
+  version-string collision in `tests/unit/test_reconciliation.py` caused
+  by the `PARSER_VERSION` bump (mechanical rename only, no logic change);
+  `tests/replay/test_replay.py`'s round-1 `_v9` placeholder reconfirmed
+  non-colliding, left unchanged. No `src/argus` schema/persistence
+  change; no existing golden/real-chain fixture's committed bytes changed
+  (`argus fixtures validate-real-chain` still reports all 12 `ok`). 613
+  tests passing, ruff clean, mypy clean.
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `1`
+  -- this remediation approves no phase.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified; no
+  Phase 2 work was started. `orchestration/checkpoints/phase_1_5.md`,
+  `orchestration/bundles/phase_1_5.txt`,
+  `orchestration/checkpoints/phase_1_5_remediation_1.md`, and
+  `orchestration/bundles/phase_1_5_remediation_1.txt` are preserved
+  unmodified as immutable history.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT

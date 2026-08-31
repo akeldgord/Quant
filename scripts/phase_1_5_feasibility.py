@@ -180,12 +180,17 @@ def cross_validate_one(path: Path, wallet: str) -> dict[str, Any]:
         "delta_arithmetic_agrees": agrees,
         "classification": parsed.classification,
         "confidence": str(parsed.confidence),
-        # The independent semantic evidence basis for is_copy_eligible:
-        # None means no supported trade-venue program was found in this
-        # transaction's own instructions (see
-        # argus.parsing.generic_parser._SUPPORTED_SWAP_PROGRAM_IDS) --
-        # never inferred from the classification/balance shape alone.
+        # The independent semantic evidence basis for is_copy_eligible,
+        # all three bound to the SAME matched instruction object (Phase
+        # 1.5 remediation round 2: program identity alone is no longer
+        # sufficient -- see
+        # argus.parsing.generic_parser._SWAP_INSTRUCTION_REGISTRY). All
+        # three are None together when no supported trade instruction was
+        # found -- never inferred from the classification/balance shape
+        # alone.
         "matched_swap_program_id": parsed.matched_swap_program_id,
+        "matched_semantic_label": parsed.matched_semantic_label,
+        "matched_discriminator_hex": parsed.matched_discriminator_hex,
         "is_copy_eligible": parsed.is_copy_eligible,
     }
 
@@ -239,6 +244,8 @@ def main() -> None:
                 "file": r["file"],
                 "signature": r["signature"],
                 "matched_swap_program_id": r["matched_swap_program_id"],
+                "matched_semantic_label": r["matched_semantic_label"],
+                "matched_discriminator_hex": r["matched_discriminator_hex"],
             }
             for r in swap_simple_but_ineligible
         ],
@@ -268,6 +275,8 @@ def main() -> None:
             f"class={r['classification']:15s} "
             f"delta_arithmetic_agrees={r['delta_arithmetic_agrees']} "
             f"matched_swap_program_id={r['matched_swap_program_id']} "
+            f"matched_semantic_label={r['matched_semantic_label']} "
+            f"matched_discriminator_hex={r['matched_discriminator_hex']} "
             f"eligible={r['is_copy_eligible']}"
         )
     if arithmetic_disagreements:

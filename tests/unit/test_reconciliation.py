@@ -1403,7 +1403,7 @@ async def test_reconciliation_persists_versioned_parser_output() -> None:
     assert result.new_events == 1
     assert result.parser_failures == 0
     event_id = ledger.rows[("sig-valid", WALLET, "TRANSACTION_OBSERVED")].event_id
-    key = (event_id, "generic_balance_delta_v2", TEST_PARSE_IDENTITY.build_hash)
+    key = (event_id, "generic_balance_delta_v3", TEST_PARSE_IDENTITY.build_hash)
     assert key in swap_recorder.rows
     parsed = swap_recorder.rows[key]
     assert parsed.classification == "TRANSFER_IN"

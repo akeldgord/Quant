@@ -429,14 +429,15 @@ def _load_phase_1_5_evidence(filename: str) -> dict:
 
 
 def test_authentic_solend_withdrawal_is_not_copy_eligible() -> None:
-    """The exact SPEC_BLOCKING false positive named by
+    """T5 / the exact SPEC_BLOCKING false positive named by
     argus-phase-1-5-remediation-001: a real Solend `Withdraw Obligation
     Collateral and Redeem Reserve Collateral` transaction has a clean
     one-negative/one-positive balance shape (so the balance-delta
     classifier correctly still calls it SWAP_SIMPLE-shaped) but its only
     instruction invokes the real Solend program
     (So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo), which is not a
-    supported trade venue -- it must never be copy eligible."""
+    supported trade venue -- it must never be copy eligible and must
+    expose no swap semantic match at all."""
     raw = _load_phase_1_5_evidence("wallet_05_solend_withdraw_all.json")
     result = parse_transaction(
         raw,
@@ -447,13 +448,16 @@ def test_authentic_solend_withdrawal_is_not_copy_eligible() -> None:
     assert result.classification == "SWAP_SIMPLE"
     assert result.is_copy_eligible is False
     assert result.matched_swap_program_id is None
+    assert result.matched_semantic_label is None
+    assert result.matched_discriminator_hex is None
 
 
 def test_authentic_xstep_stake_is_not_copy_eligible() -> None:
-    """The second SPEC_BLOCKING false positive named by
+    """T5 / the second SPEC_BLOCKING false positive named by
     argus-phase-1-5-remediation-001: a real xStep `Stake` transaction has
     the same clean one-for-one balance shape but is a staking deposit,
-    not a swap -- must never be copy eligible."""
+    not a swap -- must never be copy eligible and must expose no swap
+    semantic match at all."""
     raw = _load_phase_1_5_evidence("suppl_09_xstep_full_stake_ix.json")
     result = parse_transaction(
         raw,
@@ -464,6 +468,8 @@ def test_authentic_xstep_stake_is_not_copy_eligible() -> None:
     assert result.classification == "SWAP_SIMPLE"
     assert result.is_copy_eligible is False
     assert result.matched_swap_program_id is None
+    assert result.matched_semantic_label is None
+    assert result.matched_discriminator_hex is None
 
 
 def test_one_for_one_unsupported_program_is_not_copy_eligible() -> None:
@@ -480,33 +486,61 @@ def test_one_for_one_unsupported_program_is_not_copy_eligible() -> None:
 
 
 @pytest.mark.parametrize(
-    ("fixture_name", "expected_program"),
+    ("fixture_name", "expected_program", "expected_label", "expected_discriminator_hex"),
     [
-        ("sol_to_token", "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
-        ("token_to_sol", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"),
-        ("token_to_usdc", "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
-        ("partial_sell", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"),
+        (
+            "sol_to_token",
+            "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+            "shared_accounts_route",
+            "c1209b3341d69c81",
+        ),
+        (
+            "token_to_sol",
+            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+            "swap_base_in",
+            "09",
+        ),
+        (
+            "token_to_usdc",
+            "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+            "shared_accounts_route",
+            "c1209b3341d69c81",
+        ),
+        (
+            "partial_sell",
+            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+            "swap_base_in",
+            "09",
+        ),
     ],
 )
 def test_genuine_swap_fixtures_remain_eligible_with_positive_evidence(
-    fixture_name: str, expected_program: str
+    fixture_name: str,
+    expected_program: str,
+    expected_label: str,
+    expected_discriminator_hex: str,
 ) -> None:
     """Known genuine swap/trade fixtures remain copy eligible only
     because their canonical raw evidence satisfies the positive semantic
     gate -- not merely because their balance shape looks like a swap
-    (required test #4)."""
+    (required test #4), and now (Phase 1.5 remediation round 2) because
+    that same instruction's own decoded data carries the exact registered
+    discriminator, not merely an allowlisted program ID."""
     result = _parse(fixture_name)
     assert result.classification == "SWAP_SIMPLE"
     assert result.matched_swap_program_id == expected_program
+    assert result.matched_semantic_label == expected_label
+    assert result.matched_discriminator_hex == expected_discriminator_hex
     assert result.is_copy_eligible is True
 
 
 def test_reparse_of_identical_canonical_input_is_deterministic() -> None:
     """Reparsing the exact same raw evidence under the same parser
     version twice must produce identical output, including the new
-    matched_swap_program_id/is_copy_eligible fields -- no hidden
-    nondeterminism (e.g. set iteration order) in the positive-evidence
-    lookup (required test #6)."""
+    matched_swap_program_id/matched_semantic_label/
+    matched_discriminator_hex/is_copy_eligible fields -- no hidden
+    nondeterminism (e.g. set/dict iteration order) in the positive-
+    evidence lookup (required test #6; T10)."""
     raw = _load("sol_to_token")
     first = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
     second = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
@@ -514,5 +548,541 @@ def test_reparse_of_identical_canonical_input_is_deterministic() -> None:
     assert (
         first.matched_swap_program_id
         == second.matched_swap_program_id
-        == ("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")
+        == "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
     )
+    assert first.matched_semantic_label == second.matched_semantic_label == "shared_accounts_route"
+    assert first.matched_discriminator_hex == second.matched_discriminator_hex == "c1209b3341d69c81"
+
+
+# ---------------------------------------------------------------------
+# Phase 1.5 remediation round 2 -- program-AND-instruction-discriminator
+# semantic gate. Round 1's gate proved only that some instruction invoked
+# an allowlisted program; the same programs also execute genuine non-trade
+# instructions (proven by this project's own
+# real_mainnet_orca_close_position_multi_account.json). A positive match
+# now binds the resolved program ID, the instruction's own raw `data`
+# bytes, and an exact registered discriminator for that same program, all
+# on one canonical instruction object
+# (argus.parsing.generic_parser._SWAP_INSTRUCTION_REGISTRY/
+# _matched_swap_instruction()).
+# ---------------------------------------------------------------------
+
+import copy  # noqa: E402
+
+from argus.parsing.generic_parser import (  # noqa: E402
+    _SWAP_INSTRUCTION_REGISTRY,
+    _decode_base58_strict,
+)
+
+_REGISTERED_PROGRAM_IDS = [entry.program_id for entry in _SWAP_INSTRUCTION_REGISTRY]
+
+_BASE58_ALPHABET_LOCAL = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58encode_local(raw: bytes) -> str:
+    """A standalone base58 encoder used only to build test INPUT instruction
+    data -- deliberately not the production module's internal encoder, so
+    constructing adversarial probes never depends on production internals
+    behaving correctly."""
+    n_leading_zeros = len(raw) - len(raw.lstrip(b"\x00"))
+    num = int.from_bytes(raw, "big")
+    digits: list[str] = []
+    while num > 0:
+        num, rem = divmod(num, 58)
+        digits.append(_BASE58_ALPHABET_LOCAL[rem])
+    return ("1" * n_leading_zeros) + "".join(reversed(digits))
+
+
+def _one_for_one_with_instructions(
+    instructions: list[dict], *, log_messages: list[str] | None = None
+) -> dict:
+    """Loads the existing one-negative/one-positive
+    `one_for_one_unsupported_program` fixture and replaces only its
+    `instructions` (and optionally injects `meta.logMessages`) --
+    mirroring exactly the independent audit's own probe methodology:
+    preserve the balance shape, vary only the instruction evidence."""
+    raw = copy.deepcopy(_load("one_for_one_unsupported_program"))
+    raw["transaction"]["message"]["instructions"] = instructions
+    if log_messages is not None:
+        raw.setdefault("meta", {})["logMessages"] = log_messages
+    return raw
+
+
+def _assert_no_swap_evidence(result) -> None:  # type: ignore[no-untyped-def]
+    assert result.classification == "SWAP_SIMPLE"
+    assert result.matched_swap_program_id is None
+    assert result.matched_semantic_label is None
+    assert result.matched_discriminator_hex is None
+    assert result.is_copy_eligible is False
+
+
+# --- T1: allowlisted program + missing data is ineligible ---------------
+
+
+@pytest.mark.parametrize("program_id", _REGISTERED_PROGRAM_IDS)
+@pytest.mark.parametrize("data_present", [True, False])
+def test_t1_allowlisted_program_missing_data_is_ineligible(
+    program_id: str, data_present: bool
+) -> None:
+    ix: dict = {"programId": program_id, "accounts": []}
+    if data_present:
+        ix["data"] = ""  # present but empty
+    # else: absent entirely
+    raw = _one_for_one_with_instructions([ix])
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+# --- T2: allowlisted program + unknown/non-swap discriminator is --------
+# --- ineligible -----------------------------------------------------------
+
+# Verbatim `data` field from real_mainnet_orca_close_position_multi_account
+# .json's own top-level instruction index 4 (Orca Whirlpool
+# `DecreaseLiquidity`, discriminator a026d06f685b2c01 =
+# sha256("global:decrease_liquidity")[:8]) -- see
+# tests/golden/fixtures/real/sources/
+# 0f6a7a1fc80144eba665b41472453d63ec3d4828.source.json, signature
+# 2xoDWqKZP3p9eDF4iqpur4rmkuAvk1KnW2Gg18tGBgo1x76hdbXU4M1dL37cJoMDiCnaUACmCeRo24yQPUyH26VN.
+_ORCA_AUTHENTIC_DECREASE_LIQUIDITY_DATA_B58 = (
+    "8xY8jsAzTgXceEKMQYEYCAhGA9RT2cmip4SX8gr4skn9jhKveyDfKv7"
+)
+
+_T2_NON_SWAP_DATA_BY_PROGRAM = {
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": _b58encode_local(
+        bytes.fromhex("deadbeefdeadbeef")
+    ),
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": _b58encode_local(bytes.fromhex("01")),
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": _ORCA_AUTHENTIC_DECREASE_LIQUIDITY_DATA_B58,
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": _b58encode_local(
+        bytes.fromhex("deadbeefdeadbeef")
+    ),
+}
+
+
+@pytest.mark.parametrize("program_id", _REGISTERED_PROGRAM_IDS)
+def test_t2_allowlisted_program_non_swap_discriminator_is_ineligible(program_id: str) -> None:
+    data_b58 = _T2_NON_SWAP_DATA_BY_PROGRAM[program_id]
+    raw = _one_for_one_with_instructions(
+        [{"programId": program_id, "accounts": [], "data": data_b58}]
+    )
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+def test_t2_authentic_orca_non_swap_bytes_decode_to_the_expected_discriminator() -> None:
+    """Sanity check on the T2 fixture itself: the verbatim authentic Orca
+    bytes really do decode to the real `decrease_liquidity` discriminator,
+    not something coincidentally matching the registry."""
+    decoded = _decode_base58_strict(_ORCA_AUTHENTIC_DECREASE_LIQUIDITY_DATA_B58)
+    assert decoded is not None
+    assert decoded[:8].hex() == "a026d06f685b2c01"
+    # And it must differ from the registered Orca swap discriminator.
+    registered = next(
+        e
+        for e in _SWAP_INSTRUCTION_REGISTRY
+        if e.program_id == "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
+    )
+    assert decoded[: len(registered.discriminator)] != registered.discriminator
+
+
+# --- T3: program and discriminator must belong together -----------------
+
+
+def test_t3_recognized_discriminator_under_wrong_program_is_ineligible() -> None:
+    """pump.fun's real `buy` discriminator, replayed verbatim under
+    Jupiter's program ID -- a recognized discriminator does not grant
+    eligibility unless it is registered for THIS program."""
+    pumpfun_buy_data = _b58encode_local(bytes.fromhex("66063d1201daebea"))
+    raw = _one_for_one_with_instructions(
+        [
+            {
+                "programId": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+                "accounts": [],
+                "data": pumpfun_buy_data,
+            }
+        ]
+    )
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+def test_t3_recognized_discriminator_under_unknown_program_is_ineligible() -> None:
+    pumpfun_buy_data = _b58encode_local(bytes.fromhex("66063d1201daebea"))
+    raw = _one_for_one_with_instructions(
+        [
+            {
+                "programId": "FictitiousUnknownProgramNotInRegistry1111111",
+                "accounts": [],
+                "data": pumpfun_buy_data,
+            }
+        ]
+    )
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+# --- T4: log text cannot grant eligibility -------------------------------
+
+
+def test_t4_log_text_alone_cannot_grant_eligibility() -> None:
+    raw = _one_for_one_with_instructions(
+        [
+            {
+                "programId": "FictitiousLendingMarketProgramNotARealDexNotReal11",
+                "accounts": [],
+                "data": "",
+            }
+        ],
+        log_messages=["Program log: Instruction: Swap"],
+    )
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+def test_t4_log_text_on_an_allowlisted_program_with_non_swap_data_still_ineligible() -> None:
+    """The strongest form of T4: a real allowlisted program ID, a
+    non-swap discriminator, AND a `Program log: Instruction: Swap` line
+    all present together -- logs never override the instruction's own
+    decoded data."""
+    raw = _one_for_one_with_instructions(
+        [
+            {
+                "programId": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+                "accounts": [],
+                "data": _ORCA_AUTHENTIC_DECREASE_LIQUIDITY_DATA_B58,
+            }
+        ],
+        log_messages=["Program log: Instruction: Swap"],
+    )
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+# --- T6: authentic supported swaps require exact evidence ----------------
+
+# Independently derived (not via the production registry or matcher) from
+# each cited fixture's own raw instruction `data`. Locations and expected
+# bytes were established by direct inspection of the source JSON during
+# this remediation, cross-checked against each fixture's own captured
+# program log text where present.
+_T6_ORACLE = [
+    {
+        "source_path": (
+            "tests/golden/fixtures/real/sources/"
+            "91f3b3675779c6a4fb0a994ef0ff1e91b9e79283.source.json"
+        ),
+        "friendly_name": "real_mainnet_token_to_usdc_swap",
+        "signature": (
+            "rNMFZpBmbr6R8g4hStbC5qAictmWvGFQVTwQyXoCY6QDrcq9UV2QfHJ6oARNuS1VaUh3HVe799CDn44dWQReAye"
+        ),
+        "top_level_index": 2,
+        "program_id": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+        "expected_discriminator_hex": "c1209b3341d69c81",
+        "semantic_label": "shared_accounts_route",
+    },
+    {
+        "source_path": (
+            "tests/golden/fixtures/real/sources/"
+            "eb7e24823b36abbcfd049942b3fcf6b27763fa12.source.json"
+        ),
+        "friendly_name": "real_mainnet_partial_sell",
+        "signature": (
+            "2XgzfkWeDeua4oemWXrj3JzhxVsV4mGsqVZfETSbhn6hGFuLvi2fjdK2TGcmuQQnZSEjUmMmPjUnCFWDebGJcgWQ"
+        ),
+        "top_level_index": 3,
+        "program_id": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+        "expected_discriminator_hex": "09",
+        "semantic_label": "swap_base_in",
+    },
+    {
+        "source_path": (
+            "tests/golden/fixtures/real/sources/"
+            "fa277c7d4ff997f320c38f8e15e8e02ec49983cb.source.json"
+        ),
+        "friendly_name": "real_mainnet_token_to_sol_swap",
+        "signature": (
+            "3aQZsNRUbNXpH54GQEaxFpWZsmL554cYGGtWqqoypz8b6LUDYprbRd9AwgivXRLtFBYCU6MU6e9ANurwP8dCMV6"
+        ),
+        "top_level_index": 4,
+        "program_id": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+        "expected_discriminator_hex": "09",
+        "semantic_label": "swap_base_in",
+    },
+    {
+        "source_path": (
+            "tests/golden/fixtures/real/sources/"
+            "d8f98b52dda0de05f9868ddb0605a25e818beaef.source.json"
+        ),
+        "friendly_name": "real_mainnet_sol_to_token_swap",
+        "signature": (
+            "4U8kypMuCUCkR6teu2Vn8ujaEJUR3dcUU5QExZxSMMeJ5fRTvYfWs5M5AB9yNjjHKAQ4w433QVyUivc3Pp8gvG1R"
+        ),
+        "top_level_index": 2,
+        "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "expected_discriminator_hex": "66063d1201daebea",
+        "semantic_label": "buy",
+    },
+]
+
+
+def _independent_b58decode(s: str) -> bytes:
+    """A second, standalone base58 decoder -- independent of both the
+    production module's `_decode_base58_strict` and this test file's own
+    `_b58encode_local`/registry -- used only to independently verify T6's
+    oracle bytes against the raw source JSON."""
+    idx = {c: i for i, c in enumerate(_BASE58_ALPHABET_LOCAL)}
+    num = 0
+    for ch in s:
+        num = num * 58 + idx[ch]
+    body = num.to_bytes((num.bit_length() + 7) // 8, "big") if num else b""
+    n_pad = len(s) - len(s.lstrip("1"))
+    return b"\x00" * n_pad + body
+
+
+def _source_account_keys(msg: dict) -> list[str]:
+    return [k["pubkey"] if isinstance(k, dict) else k for k in msg["accountKeys"]]
+
+
+@pytest.mark.parametrize("row", _T6_ORACLE, ids=[r["friendly_name"] for r in _T6_ORACLE])
+def test_t6_authentic_swap_evidence_matches_fixed_independent_oracle(row: dict) -> None:
+    source = json.loads((Path(row["source_path"])).read_text())
+    if isinstance(source, list):
+        source = source[0]
+    txn = source["transaction"]
+    msg = txn["message"]
+    keys = _source_account_keys(msg)
+    assert txn["signatures"][0] == row["signature"]
+
+    ix = msg["instructions"][row["top_level_index"]]
+    program_id = ix.get("programId") or keys[ix["programIdIndex"]]
+    assert program_id == row["program_id"]
+
+    decoded = _independent_b58decode(ix["data"])
+    n = len(bytes.fromhex(row["expected_discriminator_hex"]))
+    assert decoded[:n].hex() == row["expected_discriminator_hex"]
+
+    # Now assert the production parser reports exactly this evidence.
+    result = parse_transaction(source, wallet_address=keys[0], slot=source["slot"], block_time=None)
+    assert result.matched_swap_program_id == row["program_id"]
+    assert result.matched_semantic_label == row["semantic_label"]
+    assert result.matched_discriminator_hex == row["expected_discriminator_hex"]
+
+
+def test_t6_orca_swap_evidence_matches_fixed_independent_oracle_from_phase_1_5_evidence() -> None:
+    """The Orca Whirlpool registry entry is cited from a Phase 1.5
+    evidence file (not the permanent real-chain corpus), since no genuine
+    Orca `swap` instruction is committed there -- the inner-instruction
+    location is independently re-derived here from raw evidence, not
+    imported from the production registry."""
+    path = PHASE_1_5_EVIDENCE_DIR / "suppl_11_dflow_swap_with_fee.json"
+    raw = _load_phase_1_5_evidence(path.name)
+    assert raw["transaction"]["signatures"][0] == (
+        "627zjqXdMpkogJFCxhcnVTtFCUHWpkAWXoMQPCwQKWnpCJcAzqeg5kx29p8cxmTKHAhXorxEjAVF8Rc1xryyyT7B"
+    )
+    keys = _source_account_keys(raw["transaction"]["message"])
+    inner_group = next(g for g in raw["meta"]["innerInstructions"] if g["index"] == 3)
+    ix = inner_group["instructions"][25]
+    program_id = ix.get("programId") or keys[ix["programIdIndex"]]
+    assert program_id == "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
+    decoded = _independent_b58decode(ix["data"])
+    assert decoded[:8].hex() == "f8c69e91e17587c8"
+
+    result = parse_transaction(
+        raw,
+        wallet_address="qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+        slot=raw["slot"],
+        block_time=None,
+    )
+    assert result.matched_swap_program_id == "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
+    assert result.matched_semantic_label == "swap"
+    assert result.matched_discriminator_hex == "f8c69e91e17587c8"
+
+
+# --- T7: altered authentic swap evidence fails closed --------------------
+
+
+@pytest.mark.parametrize("row", _T6_ORACLE, ids=[r["friendly_name"] for r in _T6_ORACLE])
+def test_t7_altered_authentic_swap_data_fails_closed(row: dict) -> None:
+    source = json.loads(Path(row["source_path"]).read_text())
+    if isinstance(source, list):
+        source = source[0]
+    keys = _source_account_keys(source["transaction"]["message"])
+    wallet = keys[0]
+
+    before = parse_transaction(
+        copy.deepcopy(source), wallet_address=wallet, slot=source["slot"], block_time=None
+    )
+    assert before.is_copy_eligible is True
+
+    for mutation in ("remove", "truncate", "corrupt", "replace_empty"):
+        mutated = copy.deepcopy(source)
+        ix = mutated["transaction"]["message"]["instructions"][row["top_level_index"]]
+        if mutation == "remove":
+            del ix["data"]
+        elif mutation == "truncate":
+            ix["data"] = ix["data"][:1]
+        elif mutation == "corrupt":
+            # Flip the base58 text so it decodes to different bytes
+            # entirely (still valid base58, still same overall balance
+            # shape -- only the matched instruction's own data changes).
+            ix["data"] = _b58encode_local(
+                b"\x00" + bytes.fromhex(row["expected_discriminator_hex"])[1:]
+            )
+        elif mutation == "replace_empty":
+            ix["data"] = ""
+        after = parse_transaction(
+            mutated, wallet_address=wallet, slot=mutated["slot"], block_time=None
+        )
+        assert after.classification == "SWAP_SIMPLE"
+        assert after.is_copy_eligible is False, f"{row['friendly_name']}/{mutation}"
+
+
+# --- T8: malformed base58 fails closed ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "",
+        None,
+        123,
+        123.0,
+        b"AJTQ2h9DXrBqwr1RKF96PBkbRqB83L5oD",
+        [],
+        {},
+        True,
+        False,
+        "not-base58-0OIl",  # 0/O/I/l are outside the Solana alphabet
+        "x" * 5000,  # oversized
+    ],
+)
+def test_t8_malformed_base58_decodes_to_none(bad_value: object) -> None:
+    assert _decode_base58_strict(bad_value) is None
+
+
+def test_t8_decoded_data_shorter_than_the_required_discriminator_is_ineligible() -> None:
+    """ "1" is valid base58 (decodes to a single zero byte, b"\\x00") -- not
+    a decoder failure -- but that one byte is shorter than every
+    multi-byte registered discriminator, so it must still produce no
+    match for those programs."""
+    assert _decode_base58_strict("1") == b"\x00"
+    for program_id in (
+        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    ):
+        raw = _one_for_one_with_instructions(
+            [{"programId": program_id, "accounts": [], "data": "1"}]
+        )
+        result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+        _assert_no_swap_evidence(result)
+
+
+def test_t8_malformed_base58_produces_no_match_and_no_eligibility() -> None:
+    for bad_data in ["", "0OIl", "x" * 5000]:
+        raw = _one_for_one_with_instructions(
+            [
+                {
+                    "programId": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+                    "accounts": [],
+                    "data": bad_data,
+                }
+            ]
+        )
+        result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+        _assert_no_swap_evidence(result)
+
+
+def test_t8_base58_decode_is_deterministic_and_round_trips() -> None:
+    # b"" is deliberately excluded: it base58-encodes to the empty string,
+    # which _decode_base58_strict rejects outright ("empty ... data
+    # produces no semantic match") -- not a round-trip failure, an
+    # intentional fail-closed rule on empty instruction data.
+    for raw_bytes in (b"\x00", b"\x00\x00", b"\x01", b"\xff" * 8, bytes(range(32))):
+        encoded = _b58encode_local(raw_bytes)
+        decoded_once = _decode_base58_strict(encoded)
+        decoded_twice = _decode_base58_strict(encoded)
+        assert decoded_once == decoded_twice == raw_bytes
+
+
+def test_t8_program_id_index_bool_is_never_treated_as_a_real_index() -> None:
+    """`programIdIndex: True`/`False` must never resolve to accountKeys[1]/
+    accountKeys[0] via Python's bool-is-an-int coercion."""
+    raw = _one_for_one_with_instructions([{"programIdIndex": True, "accounts": [], "data": ""}])
+    result = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    _assert_no_swap_evidence(result)
+
+
+# --- T9: existing ambiguous and non-trade cases remain ineligible --------
+
+
+def test_t9_all_previously_ineligible_fixtures_remain_ineligible() -> None:
+    for name in [
+        "multi_hop_swap",
+        "simple_transfer",
+        "multiple_token_accounts_lp_add",
+        "ambiguous_fee_payer_only",
+        "ambiguous_multi_asset_dual_inflow",
+        "failed_transaction",
+        "transfer_out",
+        "token_create",
+        "nft_purchase_decimals_zero",
+        "one_for_one_unsupported_program",
+        "one_for_one_no_instruction_evidence",
+    ]:
+        result = _parse(name)
+        assert result.is_copy_eligible is False, name
+
+
+def test_t9_authentic_orca_close_position_remains_ineligible() -> None:
+    raw = json.loads(
+        (FIXTURES_DIR / "real" / "real_mainnet_orca_close_position_multi_account.json").read_text()
+    )
+    wallet = _source_account_keys(raw["transaction"]["message"])[0]
+    result = parse_transaction(raw, wallet_address=wallet, slot=raw["slot"], block_time=None)
+    assert result.is_copy_eligible is False
+    assert result.matched_swap_program_id is None
+
+
+def test_t9_solend_and_xstep_remain_ineligible() -> None:
+    solend = _load_phase_1_5_evidence("wallet_05_solend_withdraw_all.json")
+    result = parse_transaction(
+        solend,
+        wallet_address="JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+        slot=solend["slot"],
+        block_time=None,
+    )
+    assert result.is_copy_eligible is False
+    xstep = _load_phase_1_5_evidence("suppl_09_xstep_full_stake_ix.json")
+    result = parse_transaction(
+        xstep,
+        wallet_address="qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+        slot=xstep["slot"],
+        block_time=None,
+    )
+    assert result.is_copy_eligible is False
+
+
+# --- T10: deterministic reparse and version identity ----------------------
+
+
+def test_t10_parser_version_changed_between_v2_and_v3() -> None:
+    assert PARSER_VERSION == "generic_balance_delta_v3"
+    assert PARSER_VERSION != "generic_balance_delta_v2"
+
+
+@pytest.mark.parametrize("row", _T6_ORACLE, ids=[r["friendly_name"] for r in _T6_ORACLE])
+def test_t10_reparse_of_authentic_swap_evidence_is_byte_for_byte_deterministic(row: dict) -> None:
+    source = json.loads(Path(row["source_path"]).read_text())
+    if isinstance(source, list):
+        source = source[0]
+    keys = _source_account_keys(source["transaction"]["message"])
+    wallet = keys[0]
+    first = parse_transaction(
+        copy.deepcopy(source), wallet_address=wallet, slot=source["slot"], block_time=None
+    )
+    second = parse_transaction(
+        copy.deepcopy(source), wallet_address=wallet, slot=source["slot"], block_time=None
+    )
+    assert first == second
+    assert first.matched_discriminator_hex == row["expected_discriminator_hex"]

@@ -29,26 +29,56 @@ NEW_TOKEN_MINT = "NewlyCreatedTokenMintFixtureNotReal111111"
 NFT_MINT = "NonFungibleFixtureMintAddressNotReal11111"
 
 # Phase 1.5 remediation round 1: real, independently-verified swap-venue
-# program IDs (see argus.parsing.generic_parser._SUPPORTED_SWAP_PROGRAM_IDS)
-# used to give the synthetic "known genuine swap" fixtures below the same
-# positive instruction-level evidence a real swap transaction actually
-# carries -- a fixture claiming to be a genuine, copy-eligible swap must
-# now demonstrate that under the same rule production data does.
+# program IDs -- extended in round 2 (see
+# argus.parsing.generic_parser._SWAP_INSTRUCTION_REGISTRY) to also require
+# the SAME instruction's own data to decode to that program's real,
+# authentically-derived instruction discriminator, not merely the program
+# ID. The discriminator hex values below are copied verbatim from that
+# registry (each independently derived from authentic committed swap
+# evidence -- see the registry's own citations), never invented here.
 JUPITER_V6_PROGRAM = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
 RAYDIUM_LP_V4_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+
+JUPITER_SHARED_ACCOUNTS_ROUTE_DISCRIMINATOR_HEX = "c1209b3341d69c81"
+RAYDIUM_SWAP_BASE_IN_DISCRIMINATOR_HEX = "09"
+PUMPFUN_BUY_DISCRIMINATOR_HEX = "66063d1201daebea"
+
+_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58encode(raw: bytes) -> str:
+    """A small, standalone base58 encoder used only to build this
+    generator's synthetic instruction `data` fields -- deliberately not
+    imported from argus.parsing.generic_parser, so this fixture generator
+    does not depend on the production module's internals."""
+    n_leading_zeros = len(raw) - len(raw.lstrip(b"\x00"))
+    num = int.from_bytes(raw, "big")
+    digits: list[str] = []
+    while num > 0:
+        num, rem = divmod(num, 58)
+        digits.append(_BASE58_ALPHABET[rem])
+    return ("1" * n_leading_zeros) + "".join(reversed(digits))
 
 
 def _account_keys(*extra: str) -> list[str]:
     return [WALLET, *extra]
 
 
-def _swap_instruction(program_id: str) -> list[dict]:
-    """A single top-level instruction invoking `program_id`, with no
-    accounts/data content -- sufficient to positively identify the
-    supported swap venue this fixture's raw evidence claims to have used,
-    without fabricating opaque instruction data this generator has no way
-    to make realistic."""
-    return [{"programId": program_id, "accounts": [], "data": ""}]
+def _swap_instruction(program_id: str, discriminator_hex: str) -> list[dict]:
+    """A single top-level instruction invoking `program_id` whose `data`
+    field base58-encodes to exactly `discriminator_hex` -- the real,
+    independently-derived instruction discriminator this project's own
+    registry requires as positive evidence (Phase 1.5 remediation round
+    2: a bare allowlisted program ID with no/empty data is no longer
+    sufficient, see one_for_one_missing_data_* fixtures below)."""
+    return [
+        {
+            "programId": program_id,
+            "accounts": [],
+            "data": _b58encode(bytes.fromhex(discriminator_hex)),
+        }
+    ]
 
 
 def _tx(
@@ -112,7 +142,9 @@ FIXTURES["sol_to_token"] = _tx(
     fee=5000,
     pre_token_balances=[],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "500000000", 6)],
-    instructions=_swap_instruction(JUPITER_V6_PROGRAM),
+    instructions=_swap_instruction(
+        JUPITER_V6_PROGRAM, JUPITER_SHARED_ACCOUNTS_ROUTE_DISCRIMINATOR_HEX
+    ),
 )
 
 # 2. token to SOL: wallet spends 500 of TOKEN_A, receives ~1.0 SOL.
@@ -126,7 +158,7 @@ FIXTURES["token_to_sol"] = _tx(
     fee=5000,
     pre_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "500000000", 6)],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "0", 6)],
-    instructions=_swap_instruction(RAYDIUM_LP_V4_PROGRAM),
+    instructions=_swap_instruction(RAYDIUM_LP_V4_PROGRAM, RAYDIUM_SWAP_BASE_IN_DISCRIMINATOR_HEX),
 )
 
 # 3. token to USDC: wallet spends 1000 of TOKEN_B, receives 250 USDC.
@@ -143,7 +175,9 @@ FIXTURES["token_to_usdc"] = _tx(
         _tok(0, TOKEN_B_MINT, WALLET, "0", 6),
         _tok(0, USDC_MINT, WALLET, "250000000", 6),
     ],
-    instructions=_swap_instruction(JUPITER_V6_PROGRAM),
+    instructions=_swap_instruction(
+        JUPITER_V6_PROGRAM, JUPITER_SHARED_ACCOUNTS_ROUTE_DISCRIMINATOR_HEX
+    ),
 )
 
 # 4. multi-hop swap: wallet spends SOL, TOKEN_A decreases too (routed through an
@@ -189,7 +223,7 @@ FIXTURES["partial_sell"] = _tx(
     fee=5000,
     pre_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "1000000000", 6)],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "700000000", 6)],
-    instructions=_swap_instruction(RAYDIUM_LP_V4_PROGRAM),
+    instructions=_swap_instruction(RAYDIUM_LP_V4_PROGRAM, RAYDIUM_SWAP_BASE_IN_DISCRIMINATOR_HEX),
 )
 
 # 7. multiple token accounts (LP add): wallet gives up TOKEN_A and TOKEN_B
@@ -308,12 +342,14 @@ FIXTURES["nft_purchase_decimals_zero"] = _tx(
 # 14. Phase 1.5 remediation round 1 -- the exact false-positive shape the
 #     positive semantic proof gate exists to close: a clean one-asset-out/
 #     one-asset-in balance delta (identical in shape to #1-#3 above) whose
-#     only instruction invokes a program that is NOT in
-#     _SUPPORTED_SWAP_PROGRAM_IDS (a fictitious "lending market" program,
+#     only instruction invokes a program that is NOT in the swap-
+#     instruction registry (a fictitious "lending market" program,
 #     standing in for a real Solend/xStep-shaped non-trade action). Must
 #     stay SWAP_SIMPLE (the balance shape genuinely is a clean one-for-one
 #     move -- the classifier has no reason to doubt that) but must never
-#     be copy eligible without positive trade-venue evidence.
+#     be copy eligible without positive trade-venue evidence. The
+#     instruction data is irrelevant here (the program itself is
+#     unlisted), so an arbitrary non-empty discriminator is used.
 FIXTURES["one_for_one_unsupported_program"] = _tx(
     signature="golden-unsupported-program-000000000000000000",
     slot=100_000_014,
@@ -324,7 +360,9 @@ FIXTURES["one_for_one_unsupported_program"] = _tx(
     fee=5000,
     pre_token_balances=[],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "500000000", 6)],
-    instructions=_swap_instruction("FictitiousLendingMarketProgramNotARealDexNotReal11"),
+    instructions=_swap_instruction(
+        "FictitiousLendingMarketProgramNotARealDexNotReal11", "00000000000000"
+    ),
 )
 
 # 15. Same false-positive shape as #14, but with no `instructions` field at

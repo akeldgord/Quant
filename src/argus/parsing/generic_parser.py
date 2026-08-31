@@ -63,26 +63,46 @@ Only ``SWAP_SIMPLE`` with both legs having nonzero decimals, at or above
 the confidence floor, is copy-eligible -- and, since v2 (Phase 1.5
 remediation round 1, positive semantic proof gate), only when canonical
 instruction-level evidence positively identifies the transaction as
-having actually routed through a supported trade venue (see
-``_SUPPORTED_SWAP_PROGRAM_IDS``/``_matched_swap_program_id()`` and
-``ParsedTransaction.is_copy_eligible``). Balance shape alone (one asset
-given up, one received) is deliberately insufficient: many genuine,
-non-trade DeFi actions -- a lending-market withdrawal/redemption, a
-staking deposit, a vault claim -- produce exactly that same one-in/
-one-out shape without being a swap at all. v1 treated any such shape as
-a confident ``SWAP_SIMPLE`` regardless of *what instruction actually
-executed*; v2 requires positive evidence that a top-level or inner
-instruction actually invoked a program this module has independently
-verified is a real swap/trade venue (each entry in
-``_SUPPORTED_SWAP_PROGRAM_IDS`` is cited against a real, previously
-hand-verified mainnet transaction already committed in this project's
-own golden-fixture evidence -- never trusted from memory alone). This is
-a narrow allowlist/proof gate, not a full per-program instruction
-parser: an unmatched program never becomes ineligible by name (there is
-no denylist), it simply lacks the positive evidence required to promote
-a balance-shape-only guess into an automatic copy signal, and correctly
-stays research-only (``is_copy_eligible = False``) until a specific
-program is added to the registry with cited, verified evidence.
+having actually routed through a supported trade venue. Balance shape
+alone (one asset given up, one received) is deliberately insufficient:
+many genuine, non-trade DeFi actions -- a lending-market withdrawal/
+redemption, a staking deposit, a vault claim -- produce exactly that
+same one-in/one-out shape without being a swap at all. v1 treated any
+such shape as a confident ``SWAP_SIMPLE`` regardless of *what
+instruction actually executed*.
+
+v2 (round 1) required only that *some* instruction in the transaction
+invoke an allowlisted program -- but the same program that supports
+swaps also executes non-trade instructions (e.g. Orca Whirlpool's
+``DecreaseLiquidity``/``CollectFees``/``ClosePosition``, proven by this
+project's own ``real_mainnet_orca_close_position_multi_account.json``
+evidence), so "program appeared somewhere" was not proof a swap
+happened. v3 (Phase 1.5 remediation round 2) closes that gap: a
+positive match now binds the resolved program ID, the instruction's own
+raw ``data`` bytes, and an exact versioned discriminator allowed for
+*that same program*, all on one canonical top-level or inner
+instruction object (see ``_SWAP_INSTRUCTION_REGISTRY``/
+``_matched_swap_instruction()`` and ``ParsedTransaction.
+is_copy_eligible``). Instruction ``data`` is base58 text in raw RPC
+evidence; ``_decode_base58_strict()`` is a small local decoder (no new
+dependency) that fails closed -- returns no bytes at all -- on anything
+absent, non-string, oversized, outside the fixed Solana base58 alphabet,
+or that does not round-trip back to the exact original text. Program
+log lines are corroboration only and are never consulted: a different
+invoked program can emit arbitrary log text, so eligibility rests
+solely on the matched instruction's own program ID and decoded data.
+
+This remains a narrow allowlist/proof gate, not a full per-program
+instruction parser: an unmatched program or instruction never becomes
+ineligible by name (there is no denylist), it simply lacks the positive
+evidence required to promote a balance-shape-only guess into an
+automatic copy signal, and correctly stays research-only
+(``is_copy_eligible = False``) until a specific (program ID,
+discriminator) pair is added to the registry with a citation to an
+authentic committed swap fixture's exact instruction object -- never
+from memory, documentation alone, a synthetic fixture, or a non-swap
+fixture. A program may have zero accepted pairs until such evidence
+exists.
 """
 
 from __future__ import annotations
@@ -94,7 +114,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Final, Literal
 
-PARSER_VERSION: Final[str] = "generic_balance_delta_v2"
+PARSER_VERSION: Final[str] = "generic_balance_delta_v3"
 
 # Phase 1 remediation round 3, finding #5: a reproducible content hash of
 # this exact algorithm's source, computed once at import time. Distinct
@@ -134,79 +154,299 @@ Classification = Literal[
 _COPY_ELIGIBLE_CLASSIFICATIONS: Final[frozenset[str]] = frozenset({"SWAP_SIMPLE"})
 _MIN_COPY_ELIGIBLE_CONFIDENCE: Final[Decimal] = Decimal("0.500")
 
-# Phase 1.5 remediation round 1 -- the positive semantic proof gate's
-# supported-trade-venue registry. Every program ID below is independently
-# verified against a real mainnet transaction already committed as
-# hand-reviewed evidence in this project's own permanent golden-fixture
-# corpus (tests/golden/fixtures/real/), never trusted from memory alone:
-# each transaction's `ExpectedOutcome` was independently derived from raw
-# preBalances/postBalances by a human reviewer (not by this parser) in an
-# earlier round, confirming the transaction really is the swap it claims
-# to be, and the program ID below is the exact top-level or inner
-# instruction program that transaction actually invoked.
+# Phase 1.5 remediation round 2 -- strict, bounded, local base58 decoding
+# of raw Solana instruction `data` (base58 text in every raw RPC evidence
+# shape this project has seen). No repository dependency already declares
+# a base58 codec (checked: pyproject.toml/uv.lock), and this gate does not
+# warrant pulling in a broad Solana SDK, so this is a small, self-contained
+# decoder using the fixed Solana/Bitcoin base58 alphabet (no 0/O/I/l).
+_BASE58_ALPHABET: Final[str] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_BASE58_INDEX: Final[dict[str, int]] = {ch: i for i, ch in enumerate(_BASE58_ALPHABET)}
+
+# Conservative bound on *encoded* base58 text length. Real Solana
+# instruction `data` is at most ~1232 bytes (the whole-transaction size
+# limit), which base58-encodes to well under this; this bound exists to
+# fail closed on a pathological/oversized value rather than to accept
+# every theoretically valid Solana instruction.
+_MAX_BASE58_DATA_CHARS: Final[int] = 4096
+
+
+def _encode_base58(raw: bytes) -> str:
+    """The canonical base58 encoding of ``raw`` -- used only internally by
+    :func:`_decode_base58_strict` to verify a round trip, never called on
+    untrusted input directly."""
+    n_leading_zeros = len(raw) - len(raw.lstrip(b"\x00"))
+    num = int.from_bytes(raw, "big")
+    digits: list[str] = []
+    while num > 0:
+        num, rem = divmod(num, 58)
+        digits.append(_BASE58_ALPHABET[rem])
+    return ("1" * n_leading_zeros) + "".join(reversed(digits))
+
+
+def _decode_base58_strict(data: Any) -> bytes | None:
+    """Strict, bounded, fail-closed base58 decode of a Solana instruction
+    ``data`` value. Returns ``None`` -- never raises -- for anything that
+    is not an unambiguous, safely-sized, exactly-canonical encoding:
+
+    - not a string (including ``None``, absent, or a non-string type);
+    - empty, or longer than :data:`_MAX_BASE58_DATA_CHARS`;
+    - containing any character outside the fixed Solana base58 alphabet;
+    - one whose decoded bytes do not re-encode to the exact original text
+      (the canonical-round-trip check: guards against a decoder defect
+      silently accepting a malformed value rather than proving no such
+      value is otherwise constructible under this correct, bijective
+      leading-zero-to-leading-'1' mapping).
+
+    Malformed input is never coerced (e.g. via ``str()``) into a match --
+    only a genuine ``str`` is ever considered."""
+    if not isinstance(data, str):
+        return None
+    if not data or len(data) > _MAX_BASE58_DATA_CHARS:
+        return None
+    if any(ch not in _BASE58_INDEX for ch in data):
+        return None
+
+    num = 0
+    for ch in data:
+        num = num * 58 + _BASE58_INDEX[ch]
+    body = num.to_bytes((num.bit_length() + 7) // 8, "big") if num else b""
+    n_leading_ones = len(data) - len(data.lstrip("1"))
+    decoded = (b"\x00" * n_leading_ones) + body
+
+    if _encode_base58(decoded) != data:
+        return None
+    return decoded
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _SwapInstructionEvidence:
+    """One accepted (program ID, instruction discriminator) pair in the
+    positive semantic proof gate's registry -- see
+    ``_SWAP_INSTRUCTION_REGISTRY`` for the full citation requirement."""
+
+    program_id: str
+    discriminator: bytes
+    semantic_label: str
+    citation_fixture: str
+    citation_location: str
+
+
+# Phase 1.5 remediation round 2 -- the positive semantic proof gate's
+# program-AND-instruction-discriminator registry, replacing round 1's
+# program-only allowlist (`_SUPPORTED_SWAP_PROGRAM_IDS`), which proved
+# only that *some* instruction invoked an allowlisted program -- not that
+# the invoked instruction was itself a trade. The same programs below also
+# execute genuine non-trade instructions (proven by this project's own
+# `real_mainnet_orca_close_position_multi_account.json`, whose Orca
+# Whirlpool `DecreaseLiquidity`/`CollectFees`/`ClosePosition` instructions
+# carry discriminators `a026d06f685b2c01`/`a498cf631eba13b6`/
+# `7b86510031446262` -- all deliberately absent below), so a positive
+# match now binds the resolved program ID to the SAME instruction
+# object's own decoded `data` discriminator, not merely "this program
+# appeared somewhere in the transaction."
 #
-# This is a narrow ALLOWLIST, not a protocol parser: a program absent from
-# this set is never treated as *disproven* -- it simply supplies no
-# positive evidence, so a transaction that only invokes unlisted programs
-# correctly stays research-only (never copy-eligible) rather than being
-# silently promoted on balance shape alone. Extending coverage requires
-# adding a new, similarly cited entry here, not a denylist entry for the
-# next unsupported program encountered.
-_SUPPORTED_SWAP_PROGRAM_IDS: Final[dict[str, str]] = {
-    # Jupiter Aggregator V6 -- real_mainnet_token_to_usdc_swap (SWAP_SIMPLE,
-    # eligible) and real_mainnet_multi_hop_swap (SWAP_COMPLEX).
-    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "jupiter_aggregator_v6",
-    # Raydium Liquidity Pool V4 -- real_mainnet_partial_sell and
-    # real_mainnet_token_to_sol_swap (both SWAP_SIMPLE, eligible).
-    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": "raydium_liquidity_pool_v4",
-    # Orca Whirlpool -- real_mainnet_orca_close_position_multi_account
-    # (LP_ACTION; the same program also backs genuine Orca swap paths).
-    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "orca_whirlpool",
-    # pump.fun bonding-curve program -- real_mainnet_sol_to_token_swap
-    # (SWAP_SIMPLE, eligible).
-    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": "pumpfun_bonding_curve",
-}
+# Every pair below is independently derived by decoding the cited
+# fixture's own raw base58 `data` field for the named instruction
+# location (never taken from program documentation, memory, a synthetic
+# fixture, or a non-swap fixture) and cross-checked against that
+# instruction's own program log text where present. A program may have
+# zero accepted pairs -- and Flash/Titan/every other unlisted program
+# correctly do -- until similar authentic evidence exists; this is a
+# narrow allowlist, not a protocol parser, and never a denylist.
+_SWAP_INSTRUCTION_REGISTRY: Final[tuple[_SwapInstructionEvidence, ...]] = (
+    # Jupiter Aggregator V6 -- 8-byte Anchor discriminator for
+    # `shared_accounts_route` (sha256("global:shared_accounts_route")[:8]),
+    # decoded from the fixture's own instruction `data`; the fixture's own
+    # captured logs corroborate with "Program log: Instruction:
+    # SharedAccountsRoute".
+    _SwapInstructionEvidence(
+        program_id="JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+        discriminator=bytes.fromhex("c1209b3341d69c81"),
+        semantic_label="shared_accounts_route",
+        citation_fixture=(
+            "tests/golden/fixtures/real/sources/"
+            "91f3b3675779c6a4fb0a994ef0ff1e91b9e79283.source.json"
+            " (real_mainnet_token_to_usdc_swap)"
+        ),
+        citation_location=(
+            "top-level instruction index 2; signature "
+            "rNMFZpBmbr6R8g4hStbC5qAictmWvGFQVTwQyXoCY6QDrcq9UV2QfHJ6oARNuS1VaUh3HVe799CDn44dWQReAye"
+        ),
+    ),
+    # Raydium Liquidity Pool V4 -- a legacy (non-Anchor) 1-byte instruction
+    # tag; byte 0x09 decoded independently from TWO distinct authentic
+    # fixtures at their respective Raydium instruction, both agreeing.
+    # This project's own real evidence does not by itself name the
+    # instruction "SwapBaseIn" (the fixtures' captured logs only show the
+    # inner SPL-token legs, not a Raydium-emitted instruction name) --
+    # `swap_base_in` is recorded here as the conventional public label for
+    # Raydium AMM V4 instruction tag 9, not as evidence this parser
+    # independently derived; the byte value itself is fully independently
+    # derived twice.
+    _SwapInstructionEvidence(
+        program_id="675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+        discriminator=bytes.fromhex("09"),
+        semantic_label="swap_base_in",
+        citation_fixture=(
+            "tests/golden/fixtures/real/sources/"
+            "eb7e24823b36abbcfd049942b3fcf6b27763fa12.source.json"
+            " (real_mainnet_partial_sell) and "
+            "tests/golden/fixtures/real/sources/"
+            "fa277c7d4ff997f320c38f8e15e8e02ec49983cb.source.json"
+            " (real_mainnet_token_to_sol_swap)"
+        ),
+        citation_location=(
+            "real_mainnet_partial_sell top-level instruction index 3 "
+            "(signature 2XgzfkWeDeua4oemWXrj3JzhxVsV4mGsqVZfETSbhn6hGFuLvi2fjdK2TGcmuQQnZSEjUmMmPjUnCFWDebGJcgWQ); "
+            "real_mainnet_token_to_sol_swap top-level instruction index 4 "
+            "(signature 3aQZsNRUbNXpH54GQEaxFpWZsmL554cYGGtWqqoypz8b6LUDYprbRd9AwgivXRLtFBYCU6MU6e9ANurwP8dCMV6)"
+        ),
+    ),
+    # Orca Whirlpool -- 8-byte Anchor discriminator for `swap`
+    # (sha256("global:swap")[:8]), decoded from a genuine inner-instruction
+    # invocation of the Whirlpool program inside a real DFlow-routed swap
+    # already committed as Phase 1.5 evidence; corroborated by that
+    # transaction's own captured logs: "Program
+    # whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc invoke [2]" immediately
+    # followed by "Program log: Instruction: Swap". The SAME program's
+    # authentic non-swap instructions (DecreaseLiquidity/CollectFees/
+    # ClosePosition, see real_mainnet_orca_close_position_multi_account.json)
+    # carry different discriminators and are deliberately NOT accepted.
+    _SwapInstructionEvidence(
+        program_id="whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        discriminator=bytes.fromhex("f8c69e91e17587c8"),
+        semantic_label="swap",
+        citation_fixture=("orchestration/phase_1_5/evidence/raw/suppl_11_dflow_swap_with_fee.json"),
+        citation_location=(
+            "inner instruction of top-level instruction index 3, position 25 "
+            "within that inner-instruction group; signature "
+            "627zjqXdMpkogJFCxhcnVTtFCUHWpkAWXoMQPCwQKWnpCJcAzqeg5kx29p8cxmTKHAhXorxEjAVF8Rc1xryyyT7B"
+        ),
+    ),
+    # pump.fun bonding-curve program -- 8-byte Anchor discriminator for
+    # `buy` (sha256("global:buy")[:8]), decoded from the fixture's own
+    # instruction `data`; corroborated by that fixture's own captured
+    # log "Program log: Instruction: Buy". No authentic `sell` evidence is
+    # committed anywhere in this project yet, so pump.fun `sell` is
+    # deliberately absent -- not assumed from the `buy` discriminator or
+    # program documentation.
+    _SwapInstructionEvidence(
+        program_id="6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        discriminator=bytes.fromhex("66063d1201daebea"),
+        semantic_label="buy",
+        citation_fixture=(
+            "tests/golden/fixtures/real/sources/"
+            "d8f98b52dda0de05f9868ddb0605a25e818beaef.source.json"
+            " (real_mainnet_sol_to_token_swap)"
+        ),
+        citation_location=(
+            "top-level instruction index 2; signature "
+            "4U8kypMuCUCkR6teu2Vn8ujaEJUR3dcUU5QExZxSMMeJ5fRTvYfWs5M5AB9yNjjHKAQ4w433QVyUivc3Pp8gvG1R"
+        ),
+    ),
+)
+
+# Grouped by program ID for deterministic, bounded lookup -- iteration
+# order within each program's tuple is exactly registry declaration order
+# (stable, never set-based), so matching never depends on hash iteration.
+_REGISTRY_BY_PROGRAM: Final[dict[str, tuple[_SwapInstructionEvidence, ...]]] = {}
+for _entry in _SWAP_INSTRUCTION_REGISTRY:
+    _REGISTRY_BY_PROGRAM.setdefault(_entry.program_id, ())
+    _REGISTRY_BY_PROGRAM[_entry.program_id] = (*_REGISTRY_BY_PROGRAM[_entry.program_id], _entry)
+del _entry
 
 
-def _instruction_program_ids(raw: dict[str, Any]) -> set[str]:
-    """Every program ID invoked by a top-level or inner instruction in
-    this transaction, deterministically, from canonical raw evidence
-    already available to the parser. Handles both raw RPC instruction
-    encodings seen in this project's real-chain evidence: index-based
-    (``programIdIndex`` resolved against ``accountKeys``) and
+@dataclasses.dataclass(frozen=True, slots=True)
+class _MatchedSwapInstruction:
+    """The complete positive-evidence bundle bound to one canonical
+    instruction object -- exactly the three fields
+    ``ParsedTransaction.is_copy_eligible`` requires in addition to every
+    existing gate."""
+
+    program_id: str
+    semantic_label: str
+    discriminator_hex: str
+
+
+def _resolve_program_id(ix: dict[str, Any], keys: list[str]) -> str | None:
+    """The program ID this single instruction object invokes, or ``None``
+    if it cannot be resolved from canonical evidence. Handles both raw RPC
+    instruction encodings seen in this project's real-chain evidence:
+    index-based (``programIdIndex`` resolved against ``accountKeys``) and
     ``jsonParsed``-style (``programId`` given directly as a pubkey
-    string) -- never assumes only one shape."""
-    keys = _account_keys(raw)
-    program_ids: set[str] = set()
+    string). A ``programIdIndex`` must be a real, non-``bool`` integer
+    that resolves within the canonical key list; ``bool`` is rejected even
+    though it is an ``int`` subclass in Python, since ``True``/``False``
+    are never a meaningful account index. A direct ``programId`` must be a
+    non-empty string."""
+    program_id = ix.get("programId")
+    if isinstance(program_id, str) and program_id:
+        return program_id
+    idx = ix.get("programIdIndex")
+    if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(keys):
+        return keys[idx]
+    return None
 
-    def _collect(instructions: list[dict[str, Any]] | None) -> None:
-        for ix in instructions or []:
-            if not isinstance(ix, dict):
-                continue
-            program_id = ix.get("programId")
-            if isinstance(program_id, str) and program_id:
-                program_ids.add(program_id)
-                continue
-            idx = ix.get("programIdIndex")
-            if isinstance(idx, int) and 0 <= idx < len(keys):
-                program_ids.add(keys[idx])
 
-    _collect(raw["transaction"]["message"].get("instructions"))
+def _iter_candidate_instructions(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every top-level and inner instruction object in this transaction,
+    in deterministic (document) order -- top-level instructions first,
+    then each inner-instruction group in its own listed order. Never
+    assumes only one instruction encoding; non-``dict`` entries (malformed
+    evidence) are skipped rather than raising."""
+    instructions: list[dict[str, Any]] = []
+    for ix in raw["transaction"]["message"].get("instructions") or []:
+        if isinstance(ix, dict):
+            instructions.append(ix)
     for group in raw.get("meta", {}).get("innerInstructions") or []:
         if isinstance(group, dict):
-            _collect(group.get("instructions"))
+            for ix in group.get("instructions") or []:
+                if isinstance(ix, dict):
+                    instructions.append(ix)
+    return instructions
 
-    return program_ids
 
+def _matched_swap_instruction(raw: dict[str, Any]) -> _MatchedSwapInstruction | None:
+    """Positive semantic proof: the one canonical instruction object (if
+    any) whose resolved program ID AND decoded ``data`` discriminator
+    together match a single ``_SWAP_INSTRUCTION_REGISTRY`` entry -- the
+    sole source of evidence :class:`ParsedTransaction.is_copy_eligible`
+    requires in addition to balance shape. A recognized discriminator
+    under the wrong program, or a recognized program with unmatched/
+    missing/malformed data, produces no match. Deterministic: candidates
+    are gathered in canonical instruction order and, if more than one
+    genuinely matches, the lexicographically-least (program_id,
+    semantic_label, discriminator_hex) tuple is returned -- never
+    dependent on set/dict iteration order."""
+    keys = _account_keys(raw)
+    candidates: list[_MatchedSwapInstruction] = []
 
-def _matched_swap_program_id(raw: dict[str, Any]) -> str | None:
-    """The first ``_SUPPORTED_SWAP_PROGRAM_IDS`` entry this transaction's
-    instructions positively demonstrate were invoked, or ``None`` if no
-    supported trade venue was found -- the sole source of positive
-    semantic evidence :class:`ParsedTransaction.is_copy_eligible` requires
-    in addition to balance shape."""
-    matched = _instruction_program_ids(raw) & _SUPPORTED_SWAP_PROGRAM_IDS.keys()
-    return min(matched) if matched else None
+    for ix in _iter_candidate_instructions(raw):
+        program_id = _resolve_program_id(ix, keys)
+        if program_id is None:
+            continue
+        entries = _REGISTRY_BY_PROGRAM.get(program_id)
+        if not entries:
+            continue
+        decoded = _decode_base58_strict(ix.get("data"))
+        if decoded is None:
+            continue
+        for entry in entries:
+            n = len(entry.discriminator)
+            if len(decoded) >= n and decoded[:n] == entry.discriminator:
+                candidates.append(
+                    _MatchedSwapInstruction(
+                        program_id=entry.program_id,
+                        semantic_label=entry.semantic_label,
+                        discriminator_hex=entry.discriminator.hex(),
+                    )
+                )
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda m: (m.program_id, m.semantic_label, m.discriminator_hex))
+    return candidates[0]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -268,13 +508,18 @@ class ParsedTransaction:
 
     network_fee_raw: int
 
-    # Phase 1.5 remediation round 1: the exact _SUPPORTED_SWAP_PROGRAM_IDS
-    # entry this transaction's own instructions positively demonstrated
-    # were invoked, or None if no supported trade venue was found. Always
-    # computed from raw evidence at parse time (never inferred from
-    # classification); defaults to None so existing direct-construction
+    # Phase 1.5 remediation round 1 (program only), extended round 2
+    # (program AND instruction discriminator): the exact
+    # _SWAP_INSTRUCTION_REGISTRY entry this transaction's own canonical
+    # instruction evidence positively demonstrated was invoked -- all
+    # three fields bound to the SAME matched instruction object, or all
+    # None if no supported trade instruction was found. Always computed
+    # from raw evidence at parse time (never inferred from
+    # classification); default to None so existing direct-construction
     # call sites for non-swap classifications remain valid.
     matched_swap_program_id: str | None = None
+    matched_semantic_label: str | None = None
+    matched_discriminator_hex: str | None = None
 
     @property
     def is_copy_eligible(self) -> bool:
@@ -287,18 +532,25 @@ class ParsedTransaction:
         asset given up, one received) is no longer sufficient by itself.
         A lending withdrawal/redemption, a staking deposit, or any other
         genuine non-trade DeFi action can produce the identical one-in/
-        one-out shape without being a swap -- so SWAP_SIMPLE additionally
-        requires positive instruction-level evidence
-        (``matched_swap_program_id is not None``) that this specific
-        transaction actually routed through a program independently
-        verified to be a real trade venue. Unmatched/unsupported programs
-        preserve their research classification but are never
+        one-out shape without being a swap.
+
+        Phase 1.5 remediation round 2: "some instruction invoked an
+        allowlisted program" is likewise insufficient -- the same program
+        also executes non-trade instructions. All three match-evidence
+        fields (bound to one canonical instruction object by
+        ``_matched_swap_instruction``) must be present; any missing or
+        unknown field means ineligible. Unmatched/unsupported programs or
+        instructions preserve their research classification but are never
         automatically copy eligible."""
         if self.classification not in _COPY_ELIGIBLE_CLASSIFICATIONS:
             return False
         if self.confidence < _MIN_COPY_ELIGIBLE_CONFIDENCE:
             return False
-        if self.matched_swap_program_id is None:
+        if (
+            self.matched_swap_program_id is None
+            or self.matched_semantic_label is None
+            or self.matched_discriminator_hex is None
+        ):
             return False
         # A one-for-one balance-delta shape looks identical whether the
         # asset received is a fungible token or a single non-fungible
@@ -556,7 +808,7 @@ def parse_transaction(
     account_keys = _account_keys(raw)
     is_fee_payer = bool(account_keys) and account_keys[0] == wallet_address
     network_fee_raw = fee if is_fee_payer else 0
-    matched_swap_program_id = _matched_swap_program_id(raw)
+    matched_instruction = _matched_swap_instruction(raw)
 
     def _result(
         classification: Classification,
@@ -599,7 +851,15 @@ def parse_transaction(
             ),
             output_decimals=(_decimals(output_asset) if output_asset is not None else None),
             network_fee_raw=network_fee_raw,
-            matched_swap_program_id=matched_swap_program_id,
+            matched_swap_program_id=(
+                matched_instruction.program_id if matched_instruction is not None else None
+            ),
+            matched_semantic_label=(
+                matched_instruction.semantic_label if matched_instruction is not None else None
+            ),
+            matched_discriminator_hex=(
+                matched_instruction.discriminator_hex if matched_instruction is not None else None
+            ),
         )
 
     if meta.get("err") is not None:

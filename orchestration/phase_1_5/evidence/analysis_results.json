@@ -7,30 +7,45 @@
   "delta_arithmetic_agreements": 28,
   "delta_arithmetic_disagreements": 0,
   "swap_simple_classifications": 8,
-  "copy_eligible_rows": 4,
+  "copy_eligible_rows": 3,
   "swap_simple_but_not_copy_eligible": [
     {
       "file": "wallet_05_solend_withdraw_all.json",
       "signature": "4QZbHE9X5fN6nSwhYc1YAB3r1ajMkj3fhPBS3DE17waaz3W3aeGwMAyY6C2TJEUTMzYY7C3fx1jguUKQkC9PtY1D",
-      "matched_swap_program_id": null
+      "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null
     },
     {
       "file": "suppl_03_flash_swap2.json",
       "signature": "4LVJWC9NktubjCZF1Ev2tR28bS5bQNTh7DJAnEdtGDdpytrYU1StUXW3eqYwkmUbEQzyvbC4bmk26m33oczSou3e",
-      "matched_swap_program_id": null
+      "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null
     },
     {
       "file": "suppl_09_xstep_full_stake_ix.json",
       "signature": "3ZuwG45yBvuAFuQR1kCkhpuEc1D43v7SPCW37Uj1KknoiXA2VFMRteZ9CKuiv6tpyXHZW8VrX1WPkdJCxmsi1pzo",
-      "matched_swap_program_id": null
+      "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null
     },
     {
       "file": "suppl_10_titan_swap_with_fees.json",
       "signature": "5jvAd6i4HQisk4JDw5Ljcy2rwbwsR2joVKbWkrppaYHMLF882dVuNhHqpNv4vfp3Ps11nnEZLWWcXot7acuwQre4",
-      "matched_swap_program_id": null
+      "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null
+    },
+    {
+      "file": "suppl_13_titan_swap_with_fees_2.json",
+      "signature": "5T4vmMjpZDRuVGKu4GHBrWGy7nb5axjmbjcAMFQTJ7EEpXiaFzGjS9tUzv4dDg2o58LvEXcZ66GiLBCM2PZLp68p",
+      "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null
     }
   ],
-  "elapsed_seconds": 0.006466409000040585,
+  "elapsed_seconds": 0.008924806000095487,
   "raw_evidence_disk_bytes": 926336,
   "rpc_calls_made": 0,
   "provider_credits_consumed": 0,
@@ -53,6 +68,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "matched_semantic_label": "buy",
+      "matched_discriminator_hex": "66063d1201daebea",
       "is_copy_eligible": true,
       "role": "token_creator_initial_buy"
     },
@@ -72,6 +89,8 @@
       "classification": "TRANSFER_IN",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -93,6 +112,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -112,6 +133,8 @@
       "classification": "TRANSFER_IN",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -131,6 +154,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -152,6 +177,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -173,6 +200,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -192,6 +221,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -211,6 +242,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -230,6 +263,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -249,6 +284,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -270,6 +307,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -291,6 +330,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -312,6 +353,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -333,6 +376,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -352,6 +397,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -371,6 +418,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -392,6 +441,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -411,6 +462,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -432,6 +485,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -453,6 +508,8 @@
       "classification": "UNKNOWN",
       "confidence": "0.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -472,6 +529,8 @@
       "classification": "TRANSFER_IN",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -493,6 +552,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+      "matched_semantic_label": "shared_accounts_route",
+      "matched_discriminator_hex": "c1209b3341d69c81",
       "is_copy_eligible": true,
       "role": "supplementary_cross_validation"
     },
@@ -514,6 +575,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -535,6 +598,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -556,6 +621,8 @@
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
       "matched_swap_program_id": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+      "matched_semantic_label": "swap",
+      "matched_discriminator_hex": "f8c69e91e17587c8",
       "is_copy_eligible": true,
       "role": "supplementary_cross_validation"
     },
@@ -575,6 +642,8 @@
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
       "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -595,8 +664,10 @@
       "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
-      "matched_swap_program_id": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
-      "is_copy_eligible": true,
+      "matched_swap_program_id": null,
+      "matched_semantic_label": null,
+      "matched_discriminator_hex": null,
+      "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     }
   ]

@@ -1,0 +1,442 @@
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity, instruction ID, target commit, implementation commits, final commit
+
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 1.5 remediation round 2, per orchestrator instruction
+  `argus-phase-1-5-remediation-002` (`AUTHORIZED_ACTION:
+  REMEDIATE_PHASE_1_5_INSTRUCTION_SEMANTIC_GATE_ONLY`, `AUTHORIZED_PHASE:
+  1.5`, `APPROVES_PHASE: NONE`). Fixes exactly the one SPEC_BLOCKING/
+  SAFETY_OR_INTEGRITY_BLOCKING finding this instruction named
+  (`P15-R2-001`): round 1's positive semantic proof gate only proved that
+  *some* instruction in a transaction invoked an allowlisted program, not
+  that a swap instruction actually executed -- the same programs also
+  execute genuine non-trade instructions.
+STATUS: HISTORICAL_DATA_PATH_PASS_WITH_LIMITATIONS
+UTC_TIMESTAMP: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TARGET_COMMIT: 5d85848ab5bff397a192a0868ffcf1077b691706
+AUTHORIZED_PHASE: 1.5
+APPROVES_PHASE: NONE
+
+B. The frozen finding and why round 2 was required
+
+`argus-phase-1-5-remediation-002` classified finding `P15-R2-001` as
+SPEC_BLOCKING and SAFETY_OR_INTEGRITY_BLOCKING: round 1's
+`_matched_swap_program_id()` intersected every invoked program ID
+(top-level or inner) against a 4-entry allowlist and treated any
+non-empty intersection as proof of a trade. It never inspected the
+matched instruction's own `data`, decoded discriminator, or which
+specific instruction object was actually invoked -- "program appeared
+somewhere in the transaction" was silently treated as "a swap happened."
+
+The instruction's own reproducible audit probe demonstrated the defect
+directly: `tests/golden/fixtures/one_for_one_unsupported_program.json`'s
+balance shape, replayed with each of the Orca/Raydium/pump.fun program
+IDs and an explicit non-swap log label, returned `SWAP_SIMPLE`,
+`is_copy_eligible=True` under round 1's code in all three cases. This
+project's own permanent evidence already proved the underlying risk:
+`real_mainnet_orca_close_position_multi_account.json` invokes the
+allowlisted Orca Whirlpool program while its raw instructions are
+`DecreaseLiquidity`/`CollectFees`/`ClosePosition` -- genuine non-trade
+operations, not a swap.
+
+This is the SAME frozen blocker round 1 was required to close (MASTER_SPEC
+section 21 + `argus-phase-1-5-remediation-001` item 2's own "program
+identities AND deterministic instruction/log discriminators as
+appropriate" requirement) -- not a new product, provenance, or hardening
+requirement. **Disposition: fixed** -- see section C for the mechanism,
+section D for the before/after audit-probe reproduction, section E for
+every accepted registry pair's independent derivation.
+
+HARDENING_BACKLOG items both prior instructions explicitly named as
+non-blocking (incomplete early-buyer recovery, incomplete
+candidate-wallet history, the 43% `UNKNOWN` rate on position events,
+lack of live-provider cost measurements, broader per-protocol semantic
+coverage, production-scale archaeology) are unchanged from
+`orchestration/checkpoints/phase_1_5.md` and are not re-litigated or
+expanded here, per this instruction's explicit scope limit.
+
+C. Implementation design: the program-AND-instruction-discriminator gate
+
+`src/argus/parsing/generic_parser.py`, replacing round 1's program-only
+allowlist (`_SUPPORTED_SWAP_PROGRAM_IDS` removed entirely):
+
+- `_decode_base58_strict(data: Any) -> bytes | None` -- a small, local,
+  strict base58 decoder (fixed Solana/Bitcoin alphabet, no repository
+  dependency already declares one, checked against `pyproject.toml`/
+  `uv.lock`). Fails closed (returns `None`, never raises) on: not a
+  `str`; empty; longer than 4096 characters; any character outside the
+  alphabet; or a value whose decoded bytes do not re-encode via
+  `_encode_base58()` back to the exact original text (canonical
+  round-trip validation).
+- `_SwapInstructionEvidence` (frozen dataclass): `program_id`,
+  `discriminator: bytes`, `semantic_label`, `citation_fixture`,
+  `citation_location`.
+- `_SWAP_INSTRUCTION_REGISTRY: tuple[_SwapInstructionEvidence, ...]` --
+  exactly 4 entries, each an independently-derived (program ID,
+  discriminator) pair (section E). Grouped into
+  `_REGISTRY_BY_PROGRAM: dict[str, tuple[...]]` for deterministic,
+  bounded lookup (declaration order, never set/hash order).
+- `_resolve_program_id(ix, keys)` -- resolves one instruction's program
+  ID; a `programIdIndex` must be a real, non-`bool` `int` (Python's
+  `bool` is an `int` subclass -- `True`/`False` are explicitly rejected)
+  that resolves within `accountKeys`; a direct `programId` must be a
+  non-empty string.
+- `_iter_candidate_instructions(raw)` -- every top-level and inner
+  instruction object, in canonical document order; non-`dict` entries
+  are skipped, never coerced.
+- `_matched_swap_instruction(raw) -> _MatchedSwapInstruction | None` --
+  for each candidate instruction, resolves its program ID, looks up that
+  program's registry entries, decodes that SAME instruction's own `data`
+  via `_decode_base58_strict()`, and only counts a match when the
+  decoded bytes' prefix equals a registered entry's exact discriminator
+  for that exact program. Never consults `logMessages`. Multiple
+  candidate matches (never observed in practice) are resolved
+  deterministically by sorting on `(program_id, semantic_label,
+  discriminator_hex)`.
+- `ParsedTransaction` gains two new fields alongside the existing
+  `matched_swap_program_id`: `matched_semantic_label: str | None`,
+  `matched_discriminator_hex: str | None`. Both default to `None` for
+  backward compatibility with existing direct-construction call sites
+  (`tests/integration/test_reconciliation_sql.py`'s `_parsed_transaction()`
+  helper).
+- `ParsedTransaction.is_copy_eligible` -- unchanged existing gates
+  (classification, confidence floor, nonzero decimals) plus: all THREE
+  match-evidence fields (program ID, semantic label, discriminator hex)
+  must be non-`None`, all bound to the one matched instruction object.
+  Any missing or unknown field means ineligible.
+
+This remains a narrow allowlist/proof gate, not a full per-program
+instruction parser and not a denylist (both explicitly prohibited by the
+instruction): an unmatched program or instruction is never treated as
+*disproven*, it simply supplies no positive evidence.
+
+`PARSER_VERSION` bumped `generic_balance_delta_v2` -> `_v3` (observable
+eligibility output changes for real evidence -- section D/E). No raw
+evidence was rewritten; append-only derived-output semantics and
+deterministic reparse are preserved (section I). No persistent schema
+change was made (none was requested or needed for this fix).
+
+D. Before/after audit-probe reproduction
+
+Reproduced the instruction's own probe directly against the pre-fix
+(TARGET_COMMIT) parser before writing the fix, using
+`tests/golden/fixtures/one_for_one_unsupported_program.json`'s exact
+balance shape with only the `instructions` field varied:
+
+| Probe | Pre-fix (`TARGET_COMMIT`) `is_copy_eligible` | Post-fix `is_copy_eligible` |
+|---|---|---|
+| Orca Whirlpool program ID, missing `data` | `True` | `False` |
+| Jupiter V6 program ID, empty `data` | `True` | `False` |
+| Orca Whirlpool program ID + authentic `DecreaseLiquidity` bytes (verbatim from `real_mainnet_orca_close_position_multi_account.json`) | `True` | `False` |
+| pump.fun program ID + an unregistered 8-byte discriminator | `True` | `False` |
+| Jupiter V6 program ID + pump.fun's real `buy` discriminator bytes (recognized discriminator, wrong program) | `True` | `False` |
+| Orca Whirlpool program ID + authentic `DecreaseLiquidity` bytes + `Program log: Instruction: Swap` | `True` | `False` |
+
+All six were verified by loading `TARGET_COMMIT`'s actual
+`generic_parser.py` (`git show 5d85848...:src/argus/parsing/
+generic_parser.py`) into a separate module and calling
+`parse_transaction()` directly -- not assumed from the instruction's own
+claim. This is the exact same defect family the instruction's own probe
+(Orca/Raydium/pump.fun + non-swap log labels) reproduces; the table above
+extends it to all 4 registered programs plus a cross-program
+discriminator-reuse case (T3).
+
+E. Complete registry and independent derivation for every accepted pair
+
+Every `(program_id, discriminator)` pair was independently derived by
+decoding the cited fixture's own raw base58 `data` field at the named
+instruction location -- never taken from program documentation, memory,
+a synthetic fixture, or a non-swap fixture:
+
+| Program | Program ID | Discriminator (hex) | Semantic label | Citation fixture | Citation instruction location |
+|---|---|---|---|---|---|
+| Jupiter Aggregator V6 | `JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4` | `c1209b3341d69c81` | `shared_accounts_route` | `tests/golden/fixtures/real/sources/91f3b3675779c6a4fb0a994ef0ff1e91b9e79283.source.json` (`real_mainnet_token_to_usdc_swap`) | top-level instruction index 2; sig `rNMFZpBmbr6R8g4hStbC5qAictmWvGFQVTwQyXoCY6QDrcq9UV2QfHJ6oARNuS1VaUh3HVe799CDn44dWQReAye`; log corroboration: `Program log: Instruction: SharedAccountsRoute` |
+| Raydium Liquidity Pool V4 | `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8` | `09` (1 byte, legacy non-Anchor tag) | `swap_base_in` | `real_mainnet_partial_sell` (sources/`eb7e24823b36abbcfd049942b3fcf6b27763fa12`) and `real_mainnet_token_to_sol_swap` (sources/`fa277c7d4ff997f320c38f8e15e8e02ec49983cb`) | partial_sell top-level index 3 (sig `2XgzfkWeDeua4oemWXrj3JzhxVsV4mGsqVZfETSbhn6hGFuLvi2fjdK2TGcmuQQnZSEjUmMmPjUnCFWDebGJcgWQ`); token_to_sol_swap top-level index 4 (sig `3aQZsNRUbNXpH54GQEaxFpWZsmL554cYGGtWqqoypz8b6LUDYprbRd9AwgivXRLtFBYCU6MU6e9ANurwP8dCMV6`) -- byte `0x09` independently confirmed identical across two distinct authentic fixtures |
+| Orca Whirlpool | `whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc` | `f8c69e91e17587c8` | `swap` | `orchestration/phase_1_5/evidence/raw/suppl_11_dflow_swap_with_fee.json` (Phase 1.5 evidence, not the permanent real-chain corpus -- no genuine Orca `swap` instruction is committed there) | inner instruction of top-level instruction index 3, position 25 within that inner-instruction group; sig `627zjqXdMpkogJFCxhcnVTtFCUHWpkAWXoMQPCwQKWnpCJcAzqeg5kx29p8cxmTKHAhXorxEjAVF8Rc1xryyyT7B`; log corroboration: `Program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc invoke [2]` immediately followed by `Program log: Instruction: Swap` |
+| pump.fun bonding curve | `6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P` | `66063d1201daebea` | `buy` | `real_mainnet_sol_to_token_swap` (sources/`d8f98b52dda0de05f9868ddb0605a25e818beaef`) | top-level instruction index 2; sig `4U8kypMuCUCkR6teu2Vn8ujaEJUR3dcUU5QExZxSMMeJ5fRTvYfWs5M5AB9yNjjHKAQ4w433QVyUivc3Pp8gvG1R`; log corroboration: `Program log: Instruction: Buy` |
+
+`swap_base_in` is the conventional public label for Raydium AMM V4's byte
+tag `9` -- recorded as a label only; the byte value itself is fully,
+independently derived twice from this project's own committed evidence,
+not from documentation. No authentic pump.fun `sell` evidence is
+committed anywhere in this project, so pump.fun `sell` is deliberately
+absent from the registry -- not assumed from the `buy` discriminator.
+
+F. The real Orca non-swap counterexample
+
+`real_mainnet_orca_close_position_multi_account.json`'s own top-level
+instructions 4/5/6 (all against the allowlisted Orca Whirlpool program)
+decode to:
+
+| Instruction index | Discriminator (hex) | Decoded semantic (`sha256("global:<name>")[:8]` match) |
+|---|---|---|
+| 4 | `a026d06f685b2c01` | `decrease_liquidity` |
+| 5 | `a498cf631eba13b6` | `collect_fees` |
+| 6 | `7b86510031446262` | `close_position` |
+
+None of these three discriminators is present anywhere in
+`_SWAP_INSTRUCTION_REGISTRY`. `_matched_swap_instruction()` on this
+fixture's full raw evidence returns `None`; `is_copy_eligible` is
+`False`. Test T2 (`test_t2_allowlisted_program_non_swap_discriminator_is_ineligible`)
+replays the exact index-4 (`DecreaseLiquidity`) bytes verbatim, per the
+instruction's explicit requirement.
+
+G. T1-T11 results
+
+All required prospective tests (`tests/golden/test_generic_parser.py`
+unless noted) pass, and were confirmed to fail against `TARGET_COMMIT`
+for the intended reason before this fix (section J, item 9):
+
+- **T1** (`test_t1_allowlisted_program_missing_data_is_ineligible`,
+  parametrized over all 4 registered programs x {present-but-empty,
+  absent} `data`): 8 cases, all ineligible with no match evidence.
+- **T2** (`test_t2_allowlisted_program_non_swap_discriminator_is_ineligible`,
+  parametrized over all 4 programs; Orca's case uses the authentic
+  `DecreaseLiquidity` bytes verbatim) plus
+  `test_t2_authentic_orca_non_swap_bytes_decode_to_the_expected_discriminator`
+  (sanity-checks the probe bytes themselves): 5 tests.
+- **T3** (`test_t3_recognized_discriminator_under_wrong_program_is_ineligible`,
+  `test_t3_recognized_discriminator_under_unknown_program_is_ineligible`):
+  2 tests -- pump.fun's real `buy` discriminator replayed under Jupiter's
+  program ID, and under a fictitious unknown program; both ineligible.
+- **T4** (`test_t4_log_text_alone_cannot_grant_eligibility`,
+  `test_t4_log_text_on_an_allowlisted_program_with_non_swap_data_still_ineligible`):
+  2 tests -- `Program log: Instruction: Swap` alone, and combined with an
+  allowlisted program + authentic non-swap data, both remain ineligible.
+- **T5** (`test_authentic_solend_withdrawal_is_not_copy_eligible`,
+  `test_authentic_xstep_stake_is_not_copy_eligible`, extended this round
+  to additionally assert `matched_semantic_label is None` and
+  `matched_discriminator_hex is None`): both remain ineligible with no
+  swap semantic match at all.
+- **T6** (`test_t6_authentic_swap_evidence_matches_fixed_independent_oracle`,
+  parametrized over the 4 permanent-corpus-cited pairs, plus
+  `test_t6_orca_swap_evidence_matches_fixed_independent_oracle_from_phase_1_5_evidence`
+  for the Phase-1.5-evidence-cited Orca pair): 5 tests -- each
+  independently re-decodes the cited fixture's raw `data` with a
+  standalone decoder (not `argus.parsing.generic_parser`'s), asserts the
+  expected program ID/discriminator against fixed literals, then asserts
+  the production parser reports exactly that evidence.
+- **T7** (`test_t7_altered_authentic_swap_data_fails_closed`, parametrized
+  over the 4 permanent-corpus pairs x {remove, truncate, corrupt,
+  replace-with-empty} `data` mutations): 16 cases (4x4), balance shape
+  preserved, every mutation makes `is_copy_eligible` `False`.
+- **T8** (`test_t8_malformed_base58_decodes_to_none` parametrized over 11
+  malformed values; `test_t8_decoded_data_shorter_than_the_required_discriminator_is_ineligible`;
+  `test_t8_malformed_base58_produces_no_match_and_no_eligibility`;
+  `test_t8_base58_decode_is_deterministic_and_round_trips`;
+  `test_t8_program_id_index_bool_is_never_treated_as_a_real_index`): 15
+  tests -- empty, wrong type (`None`/`int`/`float`/`bytes`/`list`/`dict`/
+  `bool`), invalid alphabet, oversized (5000 chars), and
+  decoded-shorter-than-discriminator all produce no match, deterministically.
+- **T9** (`test_t9_all_previously_ineligible_fixtures_remain_ineligible`,
+  `test_t9_authentic_orca_close_position_remains_ineligible`,
+  `test_t9_solend_and_xstep_remain_ineligible`): 3 tests re-running every
+  failed/NFT/LP/multi-asset/unknown-program/no-instruction-evidence/
+  Solend/xStep/authentic-Orca-close-position case -- none copy eligible.
+- **T10** (`test_t10_parser_version_changed_between_v2_and_v3`,
+  `test_t10_reparse_of_authentic_swap_evidence_is_byte_for_byte_deterministic`
+  parametrized over the 4 permanent-corpus pairs, plus the pre-existing
+  `test_reparse_of_identical_canonical_input_is_deterministic` extended
+  to check the two new fields): 6 tests -- byte-for-byte identical
+  `ParsedTransaction` output across repeated reparse, including all three
+  match-evidence fields.
+- **T11** (`tests/phase_1_5/test_historical_feasibility.py::
+  test_every_copy_eligible_row_matches_the_independent_fixed_oracle`): a
+  fixed, hand-written 3-row oracle table (file, signature, wallet,
+  program ID, semantic label, discriminator hex, instruction location)
+  that does NOT import `_SWAP_INSTRUCTION_REGISTRY` or call
+  `_matched_swap_instruction()` -- correcting the exact defect the
+  round-2 audit found in this file's prior
+  `test_every_copy_eligible_row_has_independent_semantic_evidence`
+  (which checked membership in the production registry, now removed).
+  Also asserts the eligible-row SET is exactly these 3 files, no more,
+  no fewer.
+
+H. Honest disclosure: one previously-eligible row becomes ineligible
+
+`suppl_13_titan_swap_with_fees_2.json` was eligible under round 1
+(`matched_swap_program_id = 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8`,
+Raydium) because SOME instruction in the transaction invokes the real
+Raydium AMM V4 program. Under round 2, that specific Raydium invocation's
+own decoded instruction tag is `0x10`, not the registered `swap_base_in`
+(`0x09`) -- so it correctly becomes ineligible. Not treated as a
+regression: `argus-phase-1-5-remediation-002` explicitly states
+"Retaining all four eligible rows is not required; failing closed is
+required." This is disclosed, not smoothed over --
+`test_titan_swap_2_is_now_ineligible_under_the_stricter_discriminator_gate`
+(`tests/phase_1_5/test_historical_feasibility.py`) documents it directly.
+The 3 remaining eligible rows (pump.fun `buy`, Jupiter
+`shared_accounts_route`, Orca `swap`) are unchanged and now rest on
+strictly stronger (program + discriminator) evidence than round 1
+required.
+
+I. Parser version/build identity and deterministic reparse evidence
+
+`PARSER_VERSION = "generic_balance_delta_v3"` (was `_v2`);
+`PARSER_BUILD_HASH` recomputed automatically (SHA-256 of this file's own
+bytes at import time). One existing hardcoded version-string test literal
+was updated to avoid an incidental collision with this bump
+(`tests/unit/test_reconciliation.py`'s live-current-version literal
+`"generic_balance_delta_v2"` -> `"generic_balance_delta_v3"`, mechanical
+rename only, no logic change); `tests/replay/test_replay.py`'s
+hypothetical-future-version placeholder `"generic_balance_delta_v9"`
+(set in round 1) was reconfirmed to still not collide with `_v3` and was
+left unchanged. `test_t10_*` (section G) and the pre-existing
+`test_reparse_of_identical_canonical_input_is_deterministic` prove
+reparsing the exact same raw evidence twice produces byte-identical
+`ParsedTransaction` output, including all three new/extended
+match-evidence fields -- no hidden nondeterminism (e.g. dict/set
+iteration order) in `_matched_swap_instruction()`'s candidate gathering
+or `_REGISTRY_BY_PROGRAM` lookup. Immutable raw evidence was not
+rewritten; append-only derived-output semantics are unchanged.
+
+J. Commands actually run and their test results, full-suite counts and skips
+
+All commands run against this repository state before the final commit:
+
+1. **Focused program-and-discriminator eligibility tests:**
+   `uv run pytest tests/golden/test_generic_parser.py -q` -- 95 passed
+   (up from 46 before this round: T1-T10 plus the two extended existing
+   tests).
+2. **All Phase 1 parser/golden-fixture tests:** same command as above
+   (all live in this one file) -- 95 passed.
+3. **All Phase 1.5 tests + rerun analysis:**
+   `uv run pytest tests/phase_1_5 -q` -- 7 passed (up from 6: T11's new
+   oracle test plus the new Titan-ineligibility disclosure test);
+   `uv run python scripts/phase_1_5_feasibility.py` -- 28 analyzed, 0
+   delta-arithmetic disagreements, 3 copy-eligible (down from 4 -- see
+   section H).
+4. **All unit/replay tests affected by the parser-version bump:**
+   `uv run pytest tests/unit/test_reconciliation.py tests/replay -q` --
+   43 + 10 = 53 passed.
+5. **Full repository test suite:** `uv run pytest -q` -- 613 passed, 0
+   failed, 0 unexplained skipped (real PostgreSQL 16, confirmed reachable
+   and restarted this session after an idle-session restart dropped the
+   local cluster -- the same substitute local server used throughout this
+   project, per `PG17_COMPOSE_VALIDATION`'s standing deferral). unit 458,
+   integration 43, golden 95, replay 10, phase_1_5 7 = 613.
+6. **Ruff lint and format:** `uv run ruff check .` -- All checks passed.
+   `uv run ruff format --check .` -- found 4 files needing reformatting
+   (this round's own new test/script content); `uv run ruff format .`
+   applied them; re-checked clean, 159 files formatted.
+7. **mypy:** `uv run mypy` (`src/argus`, per `pyproject.toml`'s
+   `[tool.mypy]` `packages = ["argus"]`) -- Success: no issues found in
+   75 source files.
+8. **Secret scan:** `git ls-files`-based scan across all tracked files
+   for AWS-style keys (`AKIA[0-9A-Z]{16}`) and PEM private-key headers --
+   clean, no matches. `.env` confirmed untracked (not in `git ls-files`
+   output).
+9. **Regression proof:** (a) `git stash push -- src/argus/parsing/
+   generic_parser.py` then `uv run pytest tests/golden/
+   test_generic_parser.py -k "t1_ or t2_ or ... or t10_"` -- collection
+   itself fails (`ImportError: cannot import name
+   '_SWAP_INSTRUCTION_REGISTRY'`), directly proving this capability does
+   not exist at `TARGET_COMMIT`; stash popped immediately after. (b)
+   Loaded `TARGET_COMMIT`'s actual `generic_parser.py` bytes
+   (`git show 5d85848...:src/argus/parsing/generic_parser.py`) into a
+   separate module via `importlib` and called `parse_transaction()`
+   directly on all 6 section-D probes -- each genuinely returned
+   `is_copy_eligible=True` under the pre-fix code, proving the new tests
+   fail `TARGET_COMMIT` for the intended reason (a real semantic
+   mismatch, not an artifact of the import failure alone).
+10. **Real-chain fixture validation:** `uv run argus fixtures
+    validate-real-chain` -- all 12 fixtures report `ok` (unchanged
+    committed bytes; the round-2 gate change affects the parser's
+    interpretation, never any fixture's stored bytes).
+11. **Migration/integration checks:** not run beyond the standing
+    integration suite (item 5) -- this round changes no persistent
+    schema or persistence behavior.
+
+Environmental skips: none this round (Postgres was reachable throughout
+once restarted; no live Helius/BigQuery/PG17 check was attempted or
+represented as run).
+
+K. Remaining limitations, environmental deferrals, and HARDENING_BACKLOG
+
+No known bug remains open in the specific mechanism this round targeted
+(program-identity mistaken for swap-instruction identity); every other
+known bug/limitation is unchanged from `orchestration/checkpoints/
+phase_1_5.md` and `phase_1_5_remediation_1.md`, not re-litigated or
+expanded per this instruction's explicit scope limit:
+
+- `LIVE_HELIUS_RPC_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
+- `LIVE_HELIUS_WSS_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
+- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
+- `BQ_PUBLIC_DATASET_ACCESS = DEFERRED_ENVIRONMENTAL_CHECK`
+- HARDENING_BACKLOG: incomplete early-buyer recovery; incomplete
+  candidate-wallet history and the isolated-fixture nature of the
+  available sample; the 43% `UNKNOWN` rate for position events (which
+  already fail closed); lack of live acquisition-cost measurements;
+  broader per-protocol semantic coverage beyond the 4 currently
+  supported (program, discriminator) pairs -- explicitly not expanded
+  this round; production-scale historical archaeology.
+- Unchanged from round 1: `suppl_02_flash_swap2.json`,
+  `suppl_10_titan_swap_with_fees.json` remain ineligible (no registered
+  program at all, unaffected by this round's stricter check).
+- New this round (`HARDENING_BACKLOG`, not blocking): `suppl_13_titan_
+  swap_with_fees_2.json` becomes newly ineligible (section H) -- extending
+  the registry to cover Titan's actual Raydium instruction variant (tag
+  `0x10`), or any other genuinely verified venue/instruction, is future
+  work, not required to close this remediation. pump.fun `sell` has no
+  committed evidence and is deliberately absent from the registry.
+
+L. Security state (and acceptance criteria disposition)
+
+Every acceptance criteria item this instruction's "Required
+implementation" and "Mandatory validation" sections name is scored
+directly in sections C/D/E/F/G/H/I/J above, each against cited,
+reproducible evidence rather than bare assertion; none is scored PASS by
+weakening an existing check.
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` -- unaffected.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast
+  path was added or touched.
+- No credential was entered, disclosed, or used; no live/paid provider
+  was used to improve or influence this round's result.
+- Secret scan clean (section J, item 8).
+- No network service was added; the base58 decoder is local, deterministic,
+  and bounded (`_MAX_BASE58_DATA_CHARS = 4096`).
+- The exact defect named by this instruction is closed: an allowlisted
+  program's non-trade instruction (a lending withdrawal, a staking
+  deposit, an LP `DecreaseLiquidity`/`CollectFees`/`ClosePosition`, or
+  any other non-swap action) can no longer generate an automatic
+  copy-trade signal merely because that program also supports swaps
+  elsewhere.
+
+M. Deviations
+
+None. Work was strictly limited to `AUTHORIZED_ACTION:
+REMEDIATE_PHASE_1_5_INSTRUCTION_SEMANTIC_GATE_ONLY`: no full protocol
+parser was built; no Solend/xStep/Orca-position denylist was added; Flash
+and Titan were not made eligible without authentic evidence (Titan's
+actual instruction variant was independently discovered to be
+unregistered -- see section H -- and was NOT added to the registry from
+this observation alone, since no independent citation proves it is
+genuinely a swap instruction); no existing confidence/decimals/ambiguity/
+failed-transaction/provider/commitment/live-operation gate was weakened;
+no persistent schema was changed; no Phase 2 work was started.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified;
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `1`
+and `approved_commit` remains Phase 1's own approved commit, unchanged.
+
+N. STOP pending independent orchestrator audit
+
+Per this instruction: "Push all authorized work, verify local/remote HEAD
+equality and a clean worktree, then STOP. Do not modify this instruction
+file, self-authorize Phase 1.5, begin Phase 2, or perform any other
+phase." No Phase 1.5 self-approval was performed; no Phase 2 work was
+started. `orchestration/checkpoints/phase_1_5.md`,
+`orchestration/bundles/phase_1_5.txt`,
+`orchestration/checkpoints/phase_1_5_remediation_1.md`, and
+`orchestration/bundles/phase_1_5_remediation_1.txt` are preserved
+unmodified as immutable history of what each prior round claimed at the
+time; this is a new, separate checkpoint/bundle pair.
+
+STOP. Await independent orchestrator audit of this remediation before any
+further phase work.
+
+================ END ARGUS CHECKPOINT =========================

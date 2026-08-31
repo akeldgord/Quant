@@ -35,7 +35,7 @@
       "instructions": [
         {
           "accounts": [],
-          "data": "",
+          "data": "1111111",
           "programId": "FictitiousLendingMarketProgramNotARealDexNotReal11"
         }
       ]
