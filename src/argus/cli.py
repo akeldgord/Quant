@@ -230,7 +230,12 @@ def ingest_run(
     command or anything it calls (MASTER_SPEC.md section 108 / absolute
     prohibitions)."""
     from argus.clock import Clock
-    from argus.ingestion.manager import IngestionManager, IngestionManagerConfig, StaticWalletSource
+    from argus.ingestion.manager import (
+        IngestionManager,
+        IngestionManagerConfig,
+        IngestionManagerFailure,
+        StaticWalletSource,
+    )
     from argus.ingestion.reconciliation import ReconciliationEngine
     from argus.parsing.generic_parser import PARSER_VERSION
 
@@ -343,7 +348,16 @@ def ingest_run(
             for sig in (signal.SIGINT, signal.SIGTERM):
                 with contextlib.suppress(NotImplementedError):
                     loop.add_signal_handler(sig, stop_event.set)
-            await manager.run(stop_event=stop_event)
+            try:
+                await manager.run(stop_event=stop_event)
+            except IngestionManagerFailure as exc:
+                # Finding #3: a supervised background task died
+                # unexpectedly -- this is a real process failure, not a
+                # clean operator-requested shutdown, and must exit
+                # non-zero rather than silently returning 0.
+                console.print(f"ingestion manager failed: {exc}")
+                await db_engine.dispose()
+                return 1
         await db_engine.dispose()
         return 0
 

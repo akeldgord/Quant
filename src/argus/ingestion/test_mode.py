@@ -44,15 +44,27 @@ from argus.parsing.generic_parser import ParsedTransaction
 from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification
 
 
-class NullLiveStream:
-    """Subscribes successfully but never yields a notification, and never
-    disconnects on its own -- proves the manager can start, idle, and be
-    stopped cleanly via its own ``stop_event``/cancellation path."""
+class NullStreamSubscription:
+    """Acknowledges instantly (this *is* the acknowledgement -- test-mode
+    has nothing further to wait for) but never yields a notification and
+    never disconnects on its own -- proves the manager can start, idle,
+    and be stopped cleanly via its own ``stop_event``/cancellation path."""
 
-    async def subscribe_wallet(self, wallet_address: str) -> AsyncIterator[StreamNotification]:
+    async def notifications(self) -> AsyncIterator[StreamNotification]:
         await asyncio.Event().wait()
         return
         yield  # pragma: no cover - unreachable; makes this an async generator function
+
+    async def close(self) -> None:
+        return None
+
+
+class NullLiveStream:
+    """Subscribes successfully (see :class:`NullStreamSubscription`) and
+    never disconnects on its own."""
+
+    async def open_subscription(self, wallet_address: str) -> NullStreamSubscription:
+        return NullStreamSubscription()
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None:
         return None

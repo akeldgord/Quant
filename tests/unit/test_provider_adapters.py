@@ -172,10 +172,12 @@ async def test_helius_ws_stream_yields_notifications() -> None:
     connector = _FakeWebSocketConnector(connection)
     stream = HeliusWebSocketStream("fake-key", connector=connector)
 
+    subscription = await stream.open_subscription("SomeWallet")
     received = []
-    async for note in stream.subscribe_wallet("SomeWallet"):
+    async for note in subscription.notifications():
         received.append(note)
         break  # one notification is enough to prove the parsing path
+    await subscription.close()
 
     assert len(received) == 1
     assert received[0].signature == "ws-sig-1"
@@ -193,20 +195,23 @@ async def test_helius_ws_stream_raises_on_disconnect_not_silent_stop() -> None:
     connector = _FakeWebSocketConnector(connection)
     stream = HeliusWebSocketStream("fake-key", connector=connector)
 
+    subscription = await stream.open_subscription("SomeWallet")
     with pytest.raises(ConnectionError):
-        async for _note in stream.subscribe_wallet("SomeWallet"):
+        async for _note in subscription.notifications():
             pass  # pragma: no cover - no notifications are ever queued
 
 
 async def test_helius_ws_stream_bad_subscribe_ack_raises() -> None:
+    """Finding #1: a bad/failed acknowledgement must raise from
+    ``open_subscription`` itself -- eagerly, before a subscription object
+    is ever returned -- not lazily on first iteration."""
     bad_ack = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"message": "invalid params"}})
     connection = _FakeWebSocketConnection([bad_ack])
     connector = _FakeWebSocketConnector(connection)
     stream = HeliusWebSocketStream("fake-key", connector=connector)
 
     with pytest.raises(HeliusRpcError, match="logsSubscribe failed"):
-        async for _note in stream.subscribe_wallet("SomeWallet"):
-            pass  # pragma: no cover
+        await stream.open_subscription("SomeWallet")
 
 
 async def test_dexscreener_token_snapshot() -> None:

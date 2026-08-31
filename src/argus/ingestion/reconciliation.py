@@ -200,6 +200,19 @@ class SwapRecorder(Protocol):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class WalletWatermark:
+    """Phase 1 remediation round 2, finding #1: recovery requires three
+    genuinely independent conditions, each tracked by its own field --
+    ``stream_health`` (connected + subscribed + acknowledged, owned
+    exclusively by the ingestion manager via :meth:`ReconciliationEngine.mark_stream_ready`/
+    :meth:`~ReconciliationEngine.mark_degraded`, never by :meth:`~ReconciliationEngine.reconcile`),
+    ``reconciliation_ok`` (the truth path's own last-attempt outcome,
+    owned exclusively by :meth:`~ReconciliationEngine.reconcile`), and
+    clock health (process-global, checked live from the injected
+    ``PersistentClockMonitor``, never persisted per-wallet). ``wallet_live_state``
+    is always the AND of all three, re-derived every time any one of them
+    changes -- never set directly by a caller, and never settable to OK
+    by any single dimension changing alone."""
+
     wallet_address: str
     last_stream_signature: str | None = None
     last_stream_slot: int | None = None
@@ -207,7 +220,11 @@ class WalletWatermark:
     last_reconciled_slot: int | None = None
     last_reconciliation_at: datetime | None = None
     stream_health: str = "UNKNOWN"
-    wallet_live_state: str = WALLET_LIVE_STATE_OK
+    reconciliation_ok: bool = False
+    # Fail-closed default: a wallet nobody has ever successfully brought
+    # up (no stream ack, no reconciliation) must never look live-entry
+    # eligible just because a fresh in-memory default happened to say so.
+    wallet_live_state: str = WALLET_LIVE_STATE_DEGRADED
     updated_at: datetime | None = None
 
     def is_live_entry_eligible(self) -> bool:
@@ -270,6 +287,19 @@ def _payload_hash(raw_payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _derive_wallet_live_state(
+    *, stream_health: str, reconciliation_ok: bool, clock_anomaly: bool
+) -> str:
+    """The single point where the three independent recovery dimensions
+    (finding #1) combine into the overall gate: stream connected +
+    acknowledged, reconciliation's own last attempt succeeded, and no
+    outstanding clock anomaly -- all three, every time, never inferred
+    from just one of them changing."""
+    if stream_health == STREAM_HEALTH_OK and reconciliation_ok and not clock_anomaly:
+        return WALLET_LIVE_STATE_OK
+    return WALLET_LIVE_STATE_DEGRADED
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class _ItemOutcome:
     is_new: bool
@@ -318,6 +348,11 @@ class ReconciliationEngine:
         now: datetime,
         **overrides: Any,
     ) -> None:
+        # The *stream* dimension failed (or a caller is unconditionally
+        # forcing DEGRADED, e.g. a clock anomaly) -- reconciliation's own
+        # last-known outcome is left untouched here; a stream failure
+        # never fabricates a reconciliation failure that didn't happen,
+        # it just makes the derived overall state DEGRADED regardless.
         degraded = dataclasses.replace(
             watermark,
             wallet_live_state=WALLET_LIVE_STATE_DEGRADED,
@@ -340,6 +375,33 @@ class ReconciliationEngine:
         async with self._unit_of_work() as repos:
             watermark = await self._get_or_init(repos, wallet_address)
             await self._mark_degraded_locked(repos, watermark, now=now)
+
+    async def mark_stream_ready(self, wallet_address: str) -> None:
+        """Public entry point for the ingestion manager to call exactly
+        once, immediately after a fresh subscription's connect + send +
+        acknowledgement have all genuinely completed (finding #1) --
+        never before, and never inferred from merely constructing a
+        stream object. Deliberately does **not** set ``wallet_live_state``
+        to OK by itself: recovery still requires reconciliation to
+        separately succeed (and the clock to be healthy) before the
+        derived overall state can become OK. Marking the stream ready
+        while reconciliation's own last-known outcome is still failed (or
+        has never yet succeeded) correctly leaves the wallet DEGRADED."""
+        now = self._clock.utc_now()
+        async with self._unit_of_work() as repos:
+            watermark = await self._get_or_init(repos, wallet_address)
+            ready = dataclasses.replace(
+                watermark,
+                stream_health=STREAM_HEALTH_OK,
+                wallet_live_state=_derive_wallet_live_state(
+                    stream_health=STREAM_HEALTH_OK,
+                    reconciliation_ok=watermark.reconciliation_ok,
+                    clock_anomaly=self._clock_monitor is not None
+                    and self._clock_monitor.anomaly_detected,
+                ),
+                updated_at=now,
+            )
+            await repos.watermark_store.save(ready)
 
     async def observe_stream_event(
         self, notification: StreamNotification, raw_payload: dict[str, Any]
@@ -616,17 +678,13 @@ class ReconciliationEngine:
                 wallet_address, boundary_signature=boundary_signature
             )
         except Exception as exc:
-            async with self._unit_of_work() as repos:
-                watermark = await self._get_or_init(repos, wallet_address)
-                await self._mark_degraded_locked(repos, watermark, now=now)
+            await self._mark_reconciliation_failed(wallet_address, now=now)
             return ReconciliationResult(
                 ok=False, trigger=trigger, new_events=0, reason=f"{type(exc).__name__}: {exc}"
             )
 
         if degraded_reason:
-            async with self._unit_of_work() as repos:
-                watermark = await self._get_or_init(repos, wallet_address)
-                await self._mark_degraded_locked(repos, watermark, now=now)
+            await self._mark_reconciliation_failed(wallet_address, now=now)
             return ReconciliationResult(
                 ok=False, trigger=trigger, new_events=0, reason=degraded_reason
             )
@@ -640,9 +698,7 @@ class ReconciliationEngine:
             try:
                 raw_payload = await self._chain_provider.get_transaction(sig_info.signature)
             except Exception as exc:
-                async with self._unit_of_work() as repos:
-                    watermark = await self._get_or_init(repos, wallet_address)
-                    await self._mark_degraded_locked(repos, watermark, now=now)
+                await self._mark_reconciliation_failed(wallet_address, now=now)
                 return ReconciliationResult(
                     ok=False,
                     trigger=trigger,
@@ -664,17 +720,25 @@ class ReconciliationEngine:
             # A clock anomaly is a separate, additional gate on live-entry
             # eligibility from reconciliation success (section 17):
             # provider reconnection + chain reconciliation + clock health
-            # recovery are all independently required, so an unresolved
-            # clock anomaly keeps the wallet DEGRADED here even though
-            # this reconciliation itself succeeded.
+            # recovery are all independently required. Reconciliation's
+            # own outcome (`reconciliation_ok`) reflects only whether the
+            # truth path itself succeeded, mechanically, regardless of
+            # clock state; the clock anomaly is folded in separately by
+            # `_derive_wallet_live_state`, and `stream_health` is left
+            # completely untouched here -- a truth-path-only success
+            # never fabricates "the stream is connected" (finding #1),
+            # just as a truth-path failure never fabricates "the stream
+            # is down" (below).
             clock_anomaly = self._clock_monitor is not None and self._clock_monitor.anomaly_detected
             resolved = dataclasses.replace(
                 watermark,
                 last_reconciliation_at=now,
-                wallet_live_state=WALLET_LIVE_STATE_DEGRADED
-                if clock_anomaly
-                else WALLET_LIVE_STATE_OK,
-                stream_health=STREAM_HEALTH_DEGRADED if clock_anomaly else STREAM_HEALTH_OK,
+                reconciliation_ok=True,
+                wallet_live_state=_derive_wallet_live_state(
+                    stream_health=watermark.stream_health,
+                    reconciliation_ok=True,
+                    clock_anomaly=clock_anomaly,
+                ),
                 updated_at=now,
             )
             await repos.watermark_store.save(resolved)
@@ -686,6 +750,28 @@ class ReconciliationEngine:
             parser_failures=parser_failures,
             reason=reason,
         )
+
+    async def _mark_reconciliation_failed(self, wallet_address: str, *, now: datetime) -> None:
+        """The truth path itself failed (provider error, pagination
+        continuity fault, mid-item fetch failure) -- ``reconciliation_ok``
+        goes false and the derived overall state follows, but
+        ``stream_health`` is left exactly as it was: a truth-path failure
+        is not evidence the live WebSocket connection is also down
+        (finding #1's independent-dimensions requirement)."""
+        async with self._unit_of_work() as repos:
+            watermark = await self._get_or_init(repos, wallet_address)
+            clock_anomaly = self._clock_monitor is not None and self._clock_monitor.anomaly_detected
+            failed = dataclasses.replace(
+                watermark,
+                reconciliation_ok=False,
+                wallet_live_state=_derive_wallet_live_state(
+                    stream_health=watermark.stream_health,
+                    reconciliation_ok=False,
+                    clock_anomaly=clock_anomaly,
+                ),
+                updated_at=now,
+            )
+            await repos.watermark_store.save(failed)
 
     async def sweep_finalization(self, wallet_address: str, *, max_signatures: int = 200) -> int:
         """Real code path for FINALIZED commitment. Batch-checks the most

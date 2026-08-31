@@ -16,6 +16,7 @@ fake transport instead of a live network connection.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -243,14 +244,73 @@ class WebSocketConnector(Protocol):
     def connect(self, url: str) -> Any: ...
 
 
+class HeliusSubscription:
+    """Implements :class:`argus.providers.StreamSubscription`. Constructed
+    only by :meth:`HeliusWebSocketStream.open_subscription` once connect +
+    subscribe + a valid matching acknowledgement have all genuinely
+    happened (Phase 1 remediation round 2, finding #1) -- never before.
+    """
+
+    def __init__(
+        self,
+        *,
+        connection: WebSocketConnection,
+        connector_cm: Any,
+        subscription_id: int,
+        wallet_address: str,
+    ) -> None:
+        self._connection = connection
+        self._connector_cm = connector_cm
+        self._subscription_id = subscription_id
+        self._wallet_address = wallet_address
+
+    async def notifications(self) -> AsyncIterator[StreamNotification]:
+        # `notifications` never treats a dropped connection as "no new
+        # activity": any read failure raises out of this async generator
+        # so the caller (the stream manager) can detect the disconnect
+        # and trigger truth-path reconciliation, per MASTER_SPEC.md
+        # section 19.
+        while True:
+            raw = await self._connection.recv()
+            message = json.loads(raw)
+            if message.get("method") != "logsNotification":
+                # A message that isn't this subscription's notification
+                # (e.g. an unrelated ack) is not "no new activity" -- it
+                # must not be silently swallowed as if it were.
+                if "params" not in message and "id" in message:
+                    continue  # a benign response to a different request id
+                raise HeliusRpcError(f"unexpected WebSocket message shape: {message!r}")
+            params = message.get("params")
+            if not isinstance(params, dict) or params.get("subscription") != self._subscription_id:
+                raise HeliusRpcError(f"logsNotification for the wrong subscription id: {message!r}")
+            result = params.get("result")
+            if not isinstance(result, dict):
+                raise HeliusRpcError(f"logsNotification missing 'result': {message!r}")
+            context = result.get("context")
+            value = result.get("value")
+            if not isinstance(context, dict) or not isinstance(context.get("slot"), int):
+                raise HeliusRpcError(f"logsNotification missing context.slot: {message!r}")
+            if (
+                not isinstance(value, dict)
+                or not isinstance(value.get("signature"), str)
+                or "err" not in value
+            ):
+                raise HeliusRpcError(
+                    f"logsNotification missing value.signature/value.err: {message!r}"
+                )
+            yield StreamNotification(
+                wallet_address=self._wallet_address,
+                signature=value["signature"],
+                slot=context["slot"],
+            )
+
+    async def close(self) -> None:
+        await self._connector_cm.__aexit__(None, None, None)
+
+
 class HeliusWebSocketStream:
     """Implements :class:`argus.providers.LiveChainStream` against
     Helius's standard WebSocket ``logsSubscribe`` endpoint.
-
-    ``subscribe_wallet`` never treats a dropped connection as "no new
-    activity": any read/connect failure raises out of the async generator
-    so the caller (the stream manager) can detect the disconnect and
-    trigger truth-path reconciliation, per MASTER_SPEC.md section 19.
     """
 
     def __init__(
@@ -264,9 +324,11 @@ class HeliusWebSocketStream:
         self._connector = connector
         self._base_url = base_url
 
-    async def subscribe_wallet(self, wallet_address: str) -> AsyncIterator[StreamNotification]:
+    async def open_subscription(self, wallet_address: str) -> HeliusSubscription:
         url = f"{self._base_url}?api-key={self._api_key}"
-        async with self._connector.connect(url) as connection:
+        connector_cm = self._connector.connect(url)
+        connection = await connector_cm.__aenter__()
+        try:
             subscribe_request = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -279,48 +341,24 @@ class HeliusWebSocketStream:
             if "result" not in ack or not isinstance(ack["result"], int):
                 raise HeliusRpcError(f"logsSubscribe failed for {wallet_address!r}: {ack}")
             subscription_id = ack["result"]
-
-            while True:
-                raw = await connection.recv()
-                message = json.loads(raw)
-                if message.get("method") != "logsNotification":
-                    # A message that isn't this subscription's notification
-                    # (e.g. an unrelated ack) is not "no new activity" --
-                    # it must not be silently swallowed as if it were.
-                    if "params" not in message and "id" in message:
-                        continue  # a benign response to a different request id
-                    raise HeliusRpcError(f"unexpected WebSocket message shape: {message!r}")
-                params = message.get("params")
-                if not isinstance(params, dict) or params.get("subscription") != subscription_id:
-                    raise HeliusRpcError(
-                        f"logsNotification for the wrong subscription id: {message!r}"
-                    )
-                result = params.get("result")
-                if not isinstance(result, dict):
-                    raise HeliusRpcError(f"logsNotification missing 'result': {message!r}")
-                context = result.get("context")
-                value = result.get("value")
-                if not isinstance(context, dict) or not isinstance(context.get("slot"), int):
-                    raise HeliusRpcError(f"logsNotification missing context.slot: {message!r}")
-                if (
-                    not isinstance(value, dict)
-                    or not isinstance(value.get("signature"), str)
-                    or "err" not in value
-                ):
-                    raise HeliusRpcError(
-                        f"logsNotification missing value.signature/value.err: {message!r}"
-                    )
-                yield StreamNotification(
-                    wallet_address=wallet_address,
-                    signature=value["signature"],
-                    slot=context["slot"],
-                )
+        except BaseException:
+            # Connect or subscribe/ack failed -- never leave a partially
+            # opened connection dangling; the caller gets a clean
+            # exception, not a leaked socket.
+            await connector_cm.__aexit__(*sys.exc_info())
+            raise
+        return HeliusSubscription(
+            connection=connection,
+            connector_cm=connector_cm,
+            subscription_id=subscription_id,
+            wallet_address=wallet_address,
+        )
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None:
         # This minimal Phase 1 stream keeps one subscription per
-        # subscribe_wallet() call/connection; callers stop iterating (or
-        # cancel the task) to unsubscribe, which closes the connection via
-        # the `async with` block above. Explicit per-subscription-id
+        # open_subscription() call/connection; callers call
+        # HeliusSubscription.close() (or cancel the task) to unsubscribe,
+        # which closes the connection. Explicit per-subscription-id
         # unsubscribe (multiple wallets sharing one connection) is left to
         # a later phase's stream manager.
         return

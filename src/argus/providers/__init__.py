@@ -96,23 +96,47 @@ class ChainProvider(Protocol):
     async def get_slot(self) -> int: ...
 
 
+class StreamSubscription(Protocol):
+    """One live, already-acknowledged WebSocket subscription (Phase 1
+    remediation round 2, finding #1). Only ever exists once the socket
+    connection was opened, the subscribe request was actually sent, and a
+    valid matching acknowledgement was actually received -- never before,
+    and never merely because a caller constructed an async generator that
+    hasn't been iterated yet (the exact defect finding #1 names: an
+    implicit async-generator lifecycle lets a caller believe a
+    subscription is live before any of that has genuinely happened)."""
+
+    def notifications(self) -> AsyncIterator[StreamNotification]:
+        """An async-iterable of fast-path notifications for this
+        subscription. Implementations must raise (not silently stop
+        iterating) on disconnect, so callers can distinguish "no new
+        activity" from "the connection dropped". Declared as a plain
+        (non-``async``) ``def`` for the same reason as
+        :meth:`LiveChainStream.open_subscription` below is not -- see
+        that method's docstring."""
+        ...
+
+    async def close(self) -> None:
+        """Closes the underlying connection. Idempotent."""
+        ...
+
+
 class LiveChainStream(Protocol):
     """WebSocket-style live subscription (MASTER_SPEC.md section 10)."""
 
-    def subscribe_wallet(self, wallet_address: str) -> AsyncIterator[StreamNotification]:
-        """An async-iterable of fast-path notifications for this wallet.
-        Implementations must raise (not silently stop iterating) on
-        disconnect, so callers can distinguish "no new activity" from
-        "the connection dropped".
+    async def open_subscription(self, wallet_address: str) -> StreamSubscription:
+        """Connects, sends the subscribe request, and waits for a valid
+        matching acknowledgement -- all of it, eagerly, before returning
+        (Phase 1 remediation round 2, finding #1). Never returns (and a
+        caller must never treat the stream dimension as ready) until all
+        three have genuinely happened. Raises on any failure at any of
+        those three steps; never returns a subscription for a failed or
+        unacknowledged attempt.
 
-        Declared as a plain (non-``async``) ``def`` returning
-        ``AsyncIterator[...]`` deliberately: every real implementation is
-        an async-generator function (``async def ... yield ...``), which
-        returns its iterator immediately on call, with no ``await``
-        needed until iteration -- an ``async def`` Protocol signature here
-        would mislead mypy into treating this as a coroutine that must be
-        awaited before it can be iterated, which does not match how any
-        implementation actually behaves."""
+        Declared ``async def`` (unlike :meth:`StreamSubscription.notifications`)
+        specifically because callers *must* await it to completion before
+        proceeding -- that awaiting is the whole point of this method
+        existing separately from notification delivery."""
         ...
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None: ...

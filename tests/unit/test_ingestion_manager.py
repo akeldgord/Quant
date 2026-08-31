@@ -24,6 +24,7 @@ from argus.ingestion.clock_monitor import InMemoryClockHealthRecorder, Persisten
 from argus.ingestion.manager import (
     IngestionManager,
     IngestionManagerConfig,
+    IngestionManagerFailure,
     StaticWalletSource,
 )
 from argus.ingestion.parse_ledger import InMemoryParseAttemptRecorder
@@ -41,33 +42,78 @@ from tests.unit.test_reconciliation import (
 )
 
 
+class FakeSubscription:
+    """Implements `argus.providers.StreamSubscription`. ``items is None``
+    means "idle forever" (never yields, never ends) -- the fallback once a
+    wallet's scripted sessions are exhausted."""
+
+    def __init__(self, items: list[Any] | None) -> None:
+        self._items = items
+        self.closed = False
+
+    async def notifications(self) -> AsyncIterator[StreamNotification]:
+        if self._items is None:
+            await asyncio.Event().wait()  # idle forever; cancelled by the test when done
+            return
+            yield  # pragma: no cover - unreachable; makes this an async generator function
+        for item in self._items:
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class FakeLiveStream:
     """A scripted sequence of subscription "sessions" per wallet. Each
     session is a list of items: a `StreamNotification` is yielded; a
     `BaseException` instance is raised (simulating disconnect/malformed-
-    message/subscription-failure -- whatever the exception type implies).
-    Once a wallet's scripted sessions are exhausted, the next subscribe
-    call hangs indefinitely (an idle-but-healthy connection) until
-    cancelled, so a test can deterministically decide when to stop."""
+    message -- whatever the exception type implies) once iteration
+    begins. Once a wallet's scripted sessions are exhausted, the next
+    ``open_subscription`` call returns a subscription that idles
+    indefinitely (an idle-but-healthy connection) until cancelled, so a
+    test can deterministically decide when to stop.
+
+    ``ack_gate``, if set for a wallet, makes ``open_subscription`` for
+    that wallet await the gate before returning -- proving the manager
+    genuinely waits for acknowledgement before doing anything else
+    (finding #1), rather than merely calling an API that happens to be
+    named correctly."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, list[list[Any]]] = {}
+        self._ack_failures: dict[str, list[BaseException]] = {}
+        self.ack_gates: dict[str, asyncio.Event] = {}
         self.subscribe_calls: list[str] = []
+        self.subscriptions: list[FakeSubscription] = []
 
     def script(self, wallet: str, *sessions: list[Any]) -> None:
         self._sessions[wallet] = list(sessions)
 
-    async def subscribe_wallet(self, wallet_address: str) -> AsyncIterator[StreamNotification]:
+    def script_ack_failures(self, wallet: str, *failures: BaseException) -> None:
+        """The Nth call to ``open_subscription`` for this wallet raises
+        the Nth failure here (simulating connect/subscribe/ack itself
+        failing) instead of returning a subscription at all."""
+        self._ack_failures[wallet] = list(failures)
+
+    async def open_subscription(self, wallet_address: str) -> FakeSubscription:
         self.subscribe_calls.append(wallet_address)
         call_index = sum(1 for c in self.subscribe_calls if c == wallet_address) - 1
+
+        if wallet_address in self.ack_gates:
+            await self.ack_gates[wallet_address].wait()
+
+        failures = self._ack_failures.get(wallet_address, [])
+        if call_index < len(failures):
+            raise failures[call_index]
+
         sessions = self._sessions.get(wallet_address, [])
-        if call_index >= len(sessions):
-            await asyncio.Event().wait()  # idle forever; cancelled by the test when done
-            return
-        for item in sessions[call_index]:
-            if isinstance(item, BaseException):
-                raise item
-            yield item
+        subscription = FakeSubscription(
+            sessions[call_index] if call_index < len(sessions) else None
+        )
+        self.subscriptions.append(subscription)
+        return subscription
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None:
         return None
@@ -108,6 +154,7 @@ def _manager(
     swap_recorder: FakeSwapRecorder | None = None,
     clock_monitor: PersistentClockMonitor | None = None,
     streaming_usage_recorder: FakeUsageRecorder | None = None,
+    recent_event_source: Any | None = None,
     config: IngestionManagerConfig = FAST_CONFIG,
 ) -> IngestionManager:
     repos = ReconciliationRepos(
@@ -116,7 +163,7 @@ def _manager(
         commitment_store=commitment_store or FakeCommitmentStore(),
         swap_recorder=swap_recorder or FakeSwapRecorder(),
         parse_attempt_recorder=InMemoryParseAttemptRecorder(),
-        recent_event_source=None,
+        recent_event_source=recent_event_source,
     )
     engine = ReconciliationEngine(
         chain_provider=provider,
@@ -560,3 +607,259 @@ async def test_manager_never_signs_executes_or_broadcasts() -> None:
     assert not hasattr(IngestionManager, "execute")
     assert not hasattr(IngestionManager, "broadcast")
     assert not hasattr(IngestionManager, "submit_order")
+
+
+# --- Phase 1 remediation round 2, finding #1: explicit subscription lifecycle
+
+
+async def test_reconciliation_cannot_restore_ok_before_subscription_is_genuinely_acknowledged() -> (
+    None
+):
+    """The exact defect finding #1 names: a lazy async-generator handshake
+    let reconciliation report a wallet OK before any socket existed. Here
+    ``open_subscription`` is gated behind a test-controlled event -- while
+    it is closed, the manager must not have called ``mark_stream_ready``
+    or ``reconcile`` at all (the watermark row doesn't even exist yet);
+    only once the gate opens does the real acknowledgement complete, and
+    only then can the wallet reach OK."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-A", slot=1, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+    # No session scripted -- the fallback is "idle forever" once
+    # acknowledged (an empty scripted session would instead end
+    # immediately with StopAsyncIteration, which is a different,
+    # unrelated disruptive transition this test isn't about).
+    gate = asyncio.Event()
+    stream.ack_gates[WALLET_A] = gate
+
+    manager = _manager(provider, stream, ledger, store, (WALLET_A,))
+    stop_event = asyncio.Event()
+    run_task = asyncio.ensure_future(manager.run(stop_event=stop_event))
+    # Snapshotted the instant OK is observed, inside this closure -- not
+    # re-read after shutdown: stopping the manager cancels the still-idle
+    # wallet task, and cancellation is itself a disruptive transition this
+    # manager must (and does) mark DEGRADED before propagating, which is
+    # correct shutdown behavior but not what this test is about.
+    observed: dict[str, Any] = {}
+    try:
+        # Give the manager many chances to (wrongly) race ahead while the
+        # acknowledgement is still pending.
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert stream.subscribe_calls == [WALLET_A]  # attempted, but not yet acknowledged
+        watermark_before = await store.get(WALLET_A)
+        assert watermark_before is None or watermark_before.wallet_live_state != "OK"
+        assert ledger.rows == {}  # reconcile() was never reached
+
+        gate.set()  # the real acknowledgement completes now
+
+        async with asyncio.timeout(2.0):
+            while True:
+                wm = await store.get(WALLET_A)
+                if wm is not None and wm.wallet_live_state == "OK":
+                    observed["watermark"] = wm
+                    break
+                await asyncio.sleep(0)
+    finally:
+        stop_event.set()
+        await run_task
+
+    assert observed["watermark"].is_live_entry_eligible() is True
+
+
+async def test_open_subscription_failure_never_reaches_reconcile() -> None:
+    """A failed acknowledgement (finding #1: connect/subscribe/ack all
+    failing before a subscription is ever returned) must be caught before
+    any reconciliation is attempted for that connection attempt -- proven
+    here by a provider with real data available that reconcile() would
+    have picked up, which must remain entirely unrecorded through the
+    failed attempt."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-A", slot=1, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+    stream.script_ack_failures(WALLET_A, ConnectionError("ack never arrived"))
+    # No session scripted after the failure -- the retry succeeds and
+    # then idles forever (see the lazy-ack test above for why an empty
+    # scripted session would mean something different).
+    manager = _manager(provider, stream, ledger, store, (WALLET_A,))
+
+    stop_event = asyncio.Event()
+    await _run_until(
+        stop_event, manager, lambda: sum(1 for c in stream.subscribe_calls if c == WALLET_A) >= 2
+    )
+
+    # The retry's own reconcile() DID run and durably record sig-A -- but
+    # only after the failed first attempt, never as a side effect of it.
+    watermark = await store.get(WALLET_A)
+    assert watermark is not None
+    assert ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows
+
+
+# --- Phase 1 remediation round 2, finding #3: structured task supervision
+
+
+async def test_periodic_reconciliation_task_dying_fails_the_whole_manager() -> None:
+    """Finding #3: an unhandled exception in ANY supervised background
+    task -- here periodic reconciliation -- must terminate the whole
+    manager, not be silently swallowed while everything else keeps
+    running. Every tracked wallet is marked DEGRADED and
+    IngestionManagerFailure propagates."""
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()  # no session scripted -- wallet loop idles healthily throughout
+
+    class _ExplodingEngine:
+        def __init__(self, real: ReconciliationEngine) -> None:
+            self._real = real
+            self.reconcile_calls = 0
+
+        async def reconcile(self, wallet_address: str, trigger: Any) -> Any:
+            self.reconcile_calls += 1
+            raise RuntimeError("simulated bug inside periodic reconciliation")
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+    repos = ReconciliationRepos(
+        watermark_store=store,
+        event_recorder=ledger,
+        commitment_store=FakeCommitmentStore(),
+        swap_recorder=FakeSwapRecorder(),
+        parse_attempt_recorder=InMemoryParseAttemptRecorder(),
+        recent_event_source=None,
+    )
+    real_engine = ReconciliationEngine(
+        chain_provider=provider,
+        unit_of_work=_FakeUnitOfWork(repos),
+        clock=Clock(),
+        provider_name="fake_provider",
+        parser_version="test_v1",
+    )
+    exploding_engine = _ExplodingEngine(real_engine)
+
+    manager = IngestionManager(
+        wallet_source=StaticWalletSource((WALLET_A,)),
+        stream=stream,
+        chain_provider=provider,
+        reconciliation_engine=exploding_engine,  # type: ignore[arg-type]
+        provider_name="fake_provider",
+        clock=Clock(),
+        config=IngestionManagerConfig(
+            reconnect_base_delay_seconds=0.001,
+            reconnect_max_delay_seconds=0.005,
+            stream_receive_timeout_seconds=3600,
+            periodic_reconciliation_interval_seconds=0.01,
+            clock_heartbeat_interval_seconds=3600,
+        ),
+    )
+
+    with pytest.raises(IngestionManagerFailure):
+        await manager.run()
+
+    assert exploding_engine.reconcile_calls >= 1
+
+
+async def test_normal_shutdown_via_stop_event_never_raises() -> None:
+    """The counterpart to the above: a clean, operator-requested shutdown
+    (stop_event set, no task failure) must remain a distinct, non-error
+    return -- never mistaken for the failure path (finding #3)."""
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()  # no session scripted -- idles healthily
+    manager = _manager(provider, stream, ledger, store, (WALLET_A,))
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.ensure_future(manager.run(stop_event=stop_event))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    stop_event.set()
+    await run_task  # must not raise
+
+
+# --- Phase 1 remediation round 2, finding #4: finalization sweep wiring
+
+
+async def test_finalization_sweep_runs_from_the_manager_real_code_path() -> None:
+    """`sweep_finalization` existed on ReconciliationEngine but no
+    production loop ever called it (finding #4). Here the manager's own
+    background sweep task -- not a direct call to sweep_finalization --
+    must be what performs the FINALIZED promotion."""
+    import uuid
+
+    from argus.domain.commitment import COMMITMENT_CONFIRMED, COMMITMENT_FINALIZED
+    from argus.ingestion.commitment import CommitmentObservationDraft, derive_current_state
+    from argus.providers import SignatureStatusInfo
+    from tests.unit.test_reconciliation import FakeRecentEventSource
+
+    provider = FakeChainProvider()
+    # sweep_finalization() only ever does real work once a wallet has a
+    # non-None last_reconciled_signature (its own guard against sweeping
+    # before any truth-path reconciliation has ever run) -- the initial
+    # PROCESS_RESTART reconcile the manager runs on startup needs at
+    # least one real transaction to advance it past None.
+    provider.add_transaction("sig-initial", slot=0, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()  # no session scripted -- idles healthily throughout
+
+    now = Clock().utc_now()
+    event_id = uuid.uuid4()
+    commitment_store = FakeCommitmentStore()
+    await commitment_store.append(
+        CommitmentObservationDraft(
+            observation_id=uuid.uuid4(),
+            event_id=event_id,
+            commitment_level=COMMITMENT_CONFIRMED,
+            transaction_succeeded=True,
+            observed_at=now,
+            provider="fake_provider",
+            provider_received_at=now,
+            created_at=now,
+        )
+    )
+    provider.signature_statuses["sig-finalizable"] = SignatureStatusInfo(
+        signature="sig-finalizable", confirmation_status="finalized", err=None, slot=1
+    )
+    recent_event_source = FakeRecentEventSource([(event_id, "sig-finalizable")])
+
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        commitment_store=commitment_store,
+        recent_event_source=recent_event_source,
+        config=IngestionManagerConfig(
+            reconnect_base_delay_seconds=0.001,
+            reconnect_max_delay_seconds=0.005,
+            stream_receive_timeout_seconds=3600,
+            periodic_reconciliation_interval_seconds=3600,
+            clock_heartbeat_interval_seconds=3600,
+            finalization_sweep_interval_seconds=0.01,
+        ),
+    )
+
+    async def finalized() -> bool:
+        state = derive_current_state(await commitment_store.list_for_event(event_id))
+        return state.commitment_level == COMMITMENT_FINALIZED
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.ensure_future(manager.run(stop_event=stop_event))
+    try:
+        async with asyncio.timeout(2.0):
+            while not await finalized():
+                await asyncio.sleep(0.01)
+    finally:
+        stop_event.set()
+        await run_task
+
+    state = derive_current_state(await commitment_store.list_for_event(event_id))
+    assert state.commitment_level == COMMITMENT_FINALIZED
+    assert state.transaction_succeeded is True

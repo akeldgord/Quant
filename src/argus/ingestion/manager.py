@@ -21,6 +21,38 @@ Absolute prohibition, unchanged from every other Phase 1 module: nothing
 here signs, executes, or broadcasts a transaction, or has any live-entry
 path. This module only ever calls ``ChainProvider.get_transaction`` (read)
 and ``ReconciliationEngine`` methods.
+
+Phase 1 remediation round 2 (argus-phase-1-remediation-002) fixed two
+further findings:
+
+- **Finding #1**: ``_stream_once`` previously constructed an async
+  generator and called ``reconcile()`` before the generator's first
+  ``__anext__()`` -- in the real Helius adapter, connect/subscribe/ack all
+  happened lazily inside that first iteration, so a successful
+  reconciliation could report a wallet OK before any socket existed. The
+  stream is now opened via :meth:`~argus.providers.LiveChainStream.open_subscription`,
+  an eager, real ``async def`` that only returns once connect + subscribe
+  + a valid matching acknowledgement have all genuinely happened; only
+  then is :meth:`~argus.ingestion.reconciliation.ReconciliationEngine.mark_stream_ready`
+  called, and only after *that* does ``reconcile()`` run -- and even then,
+  ``reconcile()`` alone still cannot set the wallet OK unless
+  ``mark_stream_ready`` already ran (see that method's docstring for the
+  three-independent-dimensions design).
+- **Finding #3**: ``run()`` previously only awaited ``stop_event``, so an
+  unhandled exception (or an unexpected normal return) in a background
+  task -- periodic reconciliation, the clock heartbeat, a per-wallet loop
+  -- left the manager silently running forever with part of ingestion
+  dead. ``run()`` now races every supervised task against the stop
+  condition; any child completing first, for any reason, is fatal: every
+  tracked wallet is marked DEGRADED, every sibling task is cancelled, and
+  :class:`IngestionManagerFailure` propagates to the caller. A clean
+  operator-requested shutdown (``stop_event`` set) remains a distinct,
+  non-error return.
+- **Finding #4**: ``sweep_finalization`` existed on ``ReconciliationEngine``
+  but no production loop ever called it -- dead code. A new
+  ``_run_finalization_sweep`` background task calls it on a configurable
+  cadence for every tracked wallet, using the same supervised-task
+  pattern as periodic reconciliation.
 """
 
 from __future__ import annotations
@@ -70,6 +102,18 @@ class IngestionStreamExhaustedError(RuntimeError):
     a clean stop; always treated the same as a disconnect."""
 
 
+class IngestionManagerFailure(RuntimeError):
+    """Raised by :meth:`IngestionManager.run` when any supervised
+    background task -- a per-wallet loop, periodic reconciliation, the
+    finalization sweep, or the clock heartbeat -- terminates unexpectedly
+    (an exception, or an unexpected normal return; every supervised loop
+    is written to run forever until cancelled) before ``stop_event`` was
+    set. Every tracked wallet is marked DEGRADED and every sibling task is
+    cancelled before this propagates -- the manager is never left running
+    with part of ingestion silently dead (finding #3). A clean,
+    operator-requested shutdown via ``stop_event`` never raises this."""
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class IngestionManagerConfig:
     reconnect_base_delay_seconds: float = 1.0
@@ -77,6 +121,7 @@ class IngestionManagerConfig:
     stream_receive_timeout_seconds: float = 30.0
     periodic_reconciliation_interval_seconds: float = 60.0
     clock_heartbeat_interval_seconds: float = 5.0
+    finalization_sweep_interval_seconds: float = 120.0
 
     def __post_init__(self) -> None:
         if self.reconnect_base_delay_seconds <= 0:
@@ -89,6 +134,8 @@ class IngestionManagerConfig:
             raise ValueError("periodic_reconciliation_interval_seconds must be positive")
         if self.clock_heartbeat_interval_seconds <= 0:
             raise ValueError("clock_heartbeat_interval_seconds must be positive")
+        if self.finalization_sweep_interval_seconds <= 0:
+            raise ValueError("finalization_sweep_interval_seconds must be positive")
 
 
 def _backoff_delay(attempt: int, config: IngestionManagerConfig) -> float:
@@ -103,12 +150,13 @@ def _backoff_delay(attempt: int, config: IngestionManagerConfig) -> float:
 
 class IngestionManager:
     """Runs one supervised subscription loop per tracked wallet, a
-    periodic truth-path reconciliation sweep, and (if a clock monitor is
-    injected) a clock-health heartbeat -- concurrently, with per-wallet
-    state kept strictly separate (each wallet's loop only ever touches its
-    own watermark via the shared, already-safe
-    :class:`~argus.ingestion.reconciliation.ReconciliationEngine`, never
-    another wallet's)."""
+    periodic truth-path reconciliation sweep, a finalization sweep, and
+    (if a clock monitor is injected) a clock-health heartbeat --
+    concurrently, with per-wallet state kept strictly separate (each
+    wallet's loop only ever touches its own watermark via the shared,
+    already-safe :class:`~argus.ingestion.reconciliation.ReconciliationEngine`,
+    never another wallet's), and all of it under structured supervision
+    (finding #3): see :meth:`run`."""
 
     def __init__(
         self,
@@ -140,26 +188,68 @@ class IngestionManager:
         is cancelled). Restart-safe: every wallet's first connection uses
         ``ReconciliationTrigger.PROCESS_RESTART`` so a fresh process always
         catches up from its last durably-persisted watermark, never from
-        assumed-clean state."""
+        assumed-clean state.
+
+        Structured supervision (finding #3): every background task is
+        raced against the stop condition. If ``stop_event`` is set first,
+        this is a clean shutdown -- every task is cancelled and awaited,
+        and ``run()`` returns normally. If any task instead completes on
+        its own first (whether by raising or by an unexpected normal
+        return -- no supervised loop below is ever meant to return except
+        via cancellation), that is always fatal: every tracked wallet is
+        marked DEGRADED, every task is cancelled, and
+        :class:`IngestionManagerFailure` is raised. The stop condition is
+        checked directly (``stop_event.is_set()``), not by asking whether
+        the stop-waiter task object happened to be reported ``done`` --
+        avoiding a race where a wallet loop's own stop-event check and the
+        waiter task complete in the same tick but ``asyncio.wait`` only
+        surfaces one of them.
+        """
         stop_event = stop_event or asyncio.Event()
         wallets = await self._wallet_source.tracked_wallets()
 
-        tasks = [asyncio.ensure_future(self._run_wallet(w, stop_event)) for w in wallets]
+        named_tasks: dict[str, asyncio.Task[None]] = {
+            f"wallet:{w}": asyncio.ensure_future(self._run_wallet(w, stop_event)) for w in wallets
+        }
         if wallets:
-            tasks.append(
-                asyncio.ensure_future(self._run_periodic_reconciliation(wallets, stop_event))
+            named_tasks["periodic_reconciliation"] = asyncio.ensure_future(
+                self._run_periodic_reconciliation(wallets, stop_event)
+            )
+            named_tasks["finalization_sweep"] = asyncio.ensure_future(
+                self._run_finalization_sweep(wallets, stop_event)
             )
         if self._clock_monitor is not None:
-            tasks.append(asyncio.ensure_future(self._run_clock_heartbeat(wallets, stop_event)))
+            named_tasks["clock_heartbeat"] = asyncio.ensure_future(
+                self._run_clock_heartbeat(wallets, stop_event)
+            )
 
-        if not tasks:
+        if not named_tasks:
             return
+
+        stop_waiter = asyncio.ensure_future(stop_event.wait())
         try:
-            await stop_event.wait()
+            await asyncio.wait(
+                [stop_waiter, *named_tasks.values()], return_when=asyncio.FIRST_COMPLETED
+            )
+            if not stop_event.is_set():
+                failed_name, failed_task = next(
+                    (name, t) for name, t in named_tasks.items() if t.done()
+                )
+                exc = failed_task.exception() if not failed_task.cancelled() else None
+                for wallet_address in wallets:
+                    await self._reconciliation_engine.mark_degraded(
+                        wallet_address,
+                        reason=f"ingestion manager task {failed_name!r} terminated unexpectedly",
+                    )
+                raise IngestionManagerFailure(
+                    f"ingestion manager task {failed_name!r} terminated unexpectedly "
+                    "before shutdown was requested"
+                ) from exc
         finally:
-            for task in tasks:
+            stop_waiter.cancel()
+            for task in named_tasks.values():
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(stop_waiter, *named_tasks.values(), return_exceptions=True)
 
     async def _run_wallet(self, wallet_address: str, stop_event: asyncio.Event) -> None:
         attempt = 0
@@ -181,6 +271,10 @@ class IngestionManager:
             except Exception as exc:  # noqa: BLE001 - every failure mode converges here deliberately
                 # Marked DEGRADED *before* the reconnect attempt below --
                 # never left looking OK while recovery is still pending.
+                # Covers disconnect, timeout, malformed message,
+                # subscription failure, and open_subscription itself
+                # failing (finding #1: the stream dimension clears before
+                # any recovery attempt begins).
                 await self._reconciliation_engine.mark_degraded(
                     wallet_address, reason=f"{type(exc).__name__}: {exc}"
                 )
@@ -196,38 +290,52 @@ class IngestionManager:
         *,
         startup_trigger: ReconciliationTrigger,
     ) -> None:
-        iterator = self._stream.subscribe_wallet(wallet_address).__aiter__()
-        await self._record_streaming(wallet_address, connection_delta=1, subscription_delta=1)
+        # Eager: only returns once connect + subscribe-request-sent + a
+        # valid matching acknowledgement have all genuinely happened
+        # (finding #1) -- raises otherwise, caught by _run_wallet's
+        # except block above exactly like any other disruptive
+        # transition, never silently treated as a stream that's "ready".
+        subscription = await self._stream.open_subscription(wallet_address)
+        try:
+            await self._record_streaming(wallet_address, connection_delta=1, subscription_delta=1)
 
-        # Recovery requires reconnection + a complete, successful
-        # reconciliation + (via ReconciliationEngine's own clock_monitor
-        # check) a healthy clock -- all three, not just "the socket is
-        # open again". This is that reconciliation call, run immediately
-        # after a fresh subscription is established, before any
-        # notification is processed.
-        await self._reconciliation_engine.reconcile(wallet_address, startup_trigger)
+            # Only now -- after a real acknowledgement -- does the stream
+            # dimension become ready. This alone still cannot make the
+            # wallet look OK; see mark_stream_ready's docstring.
+            await self._reconciliation_engine.mark_stream_ready(wallet_address)
 
-        while not stop_event.is_set():
-            try:
-                notification = await asyncio.wait_for(
-                    iterator.__anext__(), timeout=self._config.stream_receive_timeout_seconds
+            # Recovery requires reconnection + a complete, successful
+            # reconciliation + (via ReconciliationEngine's own
+            # clock_monitor check) a healthy clock -- all three, not just
+            # "the socket is open again". This is that reconciliation
+            # call, run immediately after the stream is genuinely ready,
+            # before any notification is processed.
+            await self._reconciliation_engine.reconcile(wallet_address, startup_trigger)
+
+            iterator = subscription.notifications().__aiter__()
+            while not stop_event.is_set():
+                try:
+                    notification = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=self._config.stream_receive_timeout_seconds
+                    )
+                except TimeoutError as exc:
+                    raise IngestionTimeoutError(
+                        f"no stream notification for {wallet_address} within "
+                        f"{self._config.stream_receive_timeout_seconds}s"
+                    ) from exc
+                except StopAsyncIteration as exc:
+                    raise IngestionStreamExhaustedError(
+                        f"stream for {wallet_address} ended without an explicit error"
+                    ) from exc
+
+                raw_payload = await self._chain_provider.get_transaction(notification.signature)
+                await self._reconciliation_engine.observe_stream_event(notification, raw_payload)
+                await self._record_streaming(
+                    wallet_address,
+                    bytes_delta=len(json.dumps(raw_payload, default=str).encode("utf-8")),
                 )
-            except TimeoutError as exc:
-                raise IngestionTimeoutError(
-                    f"no stream notification for {wallet_address} within "
-                    f"{self._config.stream_receive_timeout_seconds}s"
-                ) from exc
-            except StopAsyncIteration as exc:
-                raise IngestionStreamExhaustedError(
-                    f"stream for {wallet_address} ended without an explicit error"
-                ) from exc
-
-            raw_payload = await self._chain_provider.get_transaction(notification.signature)
-            await self._reconciliation_engine.observe_stream_event(notification, raw_payload)
-            await self._record_streaming(
-                wallet_address,
-                bytes_delta=len(json.dumps(raw_payload, default=str).encode("utf-8")),
-            )
+        finally:
+            await subscription.close()
 
     async def _run_periodic_reconciliation(
         self, wallets: tuple[str, ...], stop_event: asyncio.Event
@@ -240,6 +348,19 @@ class IngestionManager:
                 await self._reconciliation_engine.reconcile(
                     wallet_address, ReconciliationTrigger.SCHEDULED
                 )
+
+    async def _run_finalization_sweep(
+        self, wallets: tuple[str, ...], stop_event: asyncio.Event
+    ) -> None:
+        """Finding #4's real runtime path for FINALIZED promotion --
+        ``ReconciliationEngine.sweep_finalization`` existed and was
+        tested in isolation, but no production loop ever called it."""
+        while not stop_event.is_set():
+            await self._sleep(self._config.finalization_sweep_interval_seconds)
+            if stop_event.is_set():
+                return
+            for wallet_address in wallets:
+                await self._reconciliation_engine.sweep_finalization(wallet_address)
 
     async def _run_clock_heartbeat(
         self, wallets: tuple[str, ...], stop_event: asyncio.Event

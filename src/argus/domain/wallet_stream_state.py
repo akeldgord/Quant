@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String
+from sqlalchemy import BigInteger, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from argus.db.base import Base
@@ -51,8 +51,14 @@ class WalletStreamState(Base):
     stream_health: Mapped[str] = mapped_column(
         String(16), nullable=False, default=STREAM_HEALTH_UNKNOWN
     )
+    # Phase 1 remediation round 2, finding #1: the truth path's own
+    # independent last-attempt outcome -- never set by the ingestion
+    # manager, only by ReconciliationEngine.reconcile(). Fail-closed
+    # default: a wallet that has never had a reconciliation attempt at
+    # all must never look like one succeeded.
+    reconciliation_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     wallet_live_state: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=WALLET_LIVE_STATE_OK
+        String(16), nullable=False, default=WALLET_LIVE_STATE_DEGRADED
     )
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

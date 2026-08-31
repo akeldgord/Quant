@@ -23,6 +23,7 @@ def _to_dataclass(row: WalletStreamState) -> WalletWatermark:
         last_reconciled_slot=row.last_reconciled_slot,
         last_reconciliation_at=row.last_reconciliation_at,
         stream_health=row.stream_health,
+        reconciliation_ok=row.reconciliation_ok,
         wallet_live_state=row.wallet_live_state,
         updated_at=row.updated_at,
     )
@@ -57,6 +58,7 @@ class SqlWatermarkStore:
         row.last_reconciled_slot = watermark.last_reconciled_slot
         row.last_reconciliation_at = watermark.last_reconciliation_at
         row.stream_health = watermark.stream_health
+        row.reconciliation_ok = watermark.reconciliation_ok
         row.wallet_live_state = watermark.wallet_live_state
         row.updated_at = watermark.updated_at
         await self._session.flush()

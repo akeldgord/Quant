@@ -288,8 +288,12 @@ async def test_mandatory_disconnect_reconnect_scenario_canonicalizes_a_and_b_exa
     #    history but is never seen by the fast path.
     provider.add_transaction("sig-B", slot=2, raw_payload={"tx": "B"})
 
-    # 5. reconnect occurs, 6. reconciliation discovers B (and re-observes A
+    # 5. reconnect occurs (mark_stream_ready is what the real ingestion
+    #    manager calls immediately after a genuine reconnect+ack, per
+    #    finding #1 -- reconcile() alone can never set wallet_live_state
+    #    OK without it), 6. reconciliation discovers B (and re-observes A
     #    via the truth path too -- must dedup to the same single row).
+    await engine.mark_stream_ready(WALLET)
     result = await engine.reconcile(WALLET, ReconciliationTrigger.RECONNECT)
 
     assert result.ok is True
@@ -408,7 +412,13 @@ async def test_unresolved_reconciliation_marks_wallet_degraded() -> None:
     watermark = await store.get(WALLET)
     assert watermark is not None
     assert watermark.wallet_live_state == "DEGRADED"
-    assert watermark.stream_health == "DEGRADED"
+    # Finding #1: a truth-path-only failure never touches stream_health --
+    # that dimension is owned exclusively by the ingestion manager (via
+    # mark_stream_ready/mark_degraded), never by reconcile(). Since this
+    # test never calls either, stream_health stays at its untouched
+    # default.
+    assert watermark.stream_health == "UNKNOWN"
+    assert watermark.reconciliation_ok is False
     assert watermark.is_live_entry_eligible() is False
 
 
@@ -502,6 +512,10 @@ async def test_healthy_clock_allows_normal_ok_resolution() -> None:
         provider, ledger, store, clock_monitor=_FakeClockMonitor(anomaly_detected=False)
     )
 
+    # Finding #1: wallet_live_state can only become OK once the stream
+    # dimension is also ready -- mark_stream_ready is what the real
+    # ingestion manager calls right after a genuine connect+ack.
+    await engine.mark_stream_ready(WALLET)
     result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
 
     assert result.ok is True
@@ -725,6 +739,97 @@ async def test_exact_full_final_page_is_not_mistaken_for_an_unresolved_gap() -> 
     watermark = await store.get(WALLET)
     assert watermark is not None
     assert watermark.last_reconciled_signature == "sig-3"
+
+
+# --- Phase 1 remediation round 2, finding #1: independent recovery dimensions
+
+
+@pytest.mark.asyncio
+async def test_mark_stream_ready_alone_never_restores_ok() -> None:
+    """The stream dimension becoming ready is necessary but not
+    sufficient -- a wallet that has never had a successful reconciliation
+    must stay DEGRADED even immediately after mark_stream_ready()."""
+    store = FakeWatermarkStore()
+    engine = _engine(FakeChainProvider(), FakeEventLedger(), store)
+
+    await engine.mark_stream_ready(WALLET)
+
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.stream_health == "OK"
+    assert watermark.reconciliation_ok is False
+    assert watermark.wallet_live_state == "DEGRADED"
+    assert watermark.is_live_entry_eligible() is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_alone_never_restores_ok_without_stream_ready() -> None:
+    """The converse: a successful reconciliation alone, without the
+    stream ever having been marked ready, must also stay DEGRADED --
+    this is the literal fix for finding #1 (a successful reconcile() call
+    previously reported OK regardless of whether any socket existed)."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-A", slot=1, raw_payload={"tx": "A"})
+    store = FakeWatermarkStore()
+    engine = _engine(provider, FakeEventLedger(), store)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is True
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.reconciliation_ok is True
+    assert watermark.stream_health == "UNKNOWN"  # never touched by reconcile()
+    assert watermark.wallet_live_state == "DEGRADED"
+    assert watermark.is_live_entry_eligible() is False
+
+
+@pytest.mark.asyncio
+async def test_stream_ready_then_reconcile_both_required_and_sufficient() -> None:
+    """Only once both dimensions are independently satisfied does the
+    wallet become OK -- the exact three-independent-conditions design
+    finding #1 requires (the third, clock health, is covered by the
+    existing clock-anomaly tests above)."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-A", slot=1, raw_payload={"tx": "A"})
+    store = FakeWatermarkStore()
+    engine = _engine(provider, FakeEventLedger(), store)
+
+    await engine.mark_stream_ready(WALLET)
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is True
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.wallet_live_state == "OK"
+    assert watermark.is_live_entry_eligible() is True
+
+
+@pytest.mark.asyncio
+async def test_mark_degraded_clears_stream_dimension_without_touching_reconciliation_ok() -> None:
+    """A disruptive stream transition (mark_degraded, the manager's own
+    entry point) must clear the stream dimension -- but a prior
+    successful reconciliation's own outcome is not retroactively
+    fabricated as failed; it simply no longer matters until the stream
+    (and thus the derived overall state) recovers too."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-A", slot=1, raw_payload={"tx": "A"})
+    store = FakeWatermarkStore()
+    engine = _engine(provider, FakeEventLedger(), store)
+
+    await engine.mark_stream_ready(WALLET)
+    await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+    watermark_ok = await store.get(WALLET)
+    assert watermark_ok is not None
+    assert watermark_ok.wallet_live_state == "OK"
+
+    await engine.mark_degraded(WALLET, reason="stream disconnected")
+
+    watermark_degraded = await store.get(WALLET)
+    assert watermark_degraded is not None
+    assert watermark_degraded.stream_health == "DEGRADED"
+    assert watermark_degraded.reconciliation_ok is True  # not fabricated as failed
+    assert watermark_degraded.wallet_live_state == "DEGRADED"  # still correctly DEGRADED overall
 
 
 # --- Finding #3: commitment progression --------------------------------
