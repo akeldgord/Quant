@@ -606,10 +606,24 @@ async def test_helius_http_error_status_raises() -> None:
 
 
 class _FakeWebSocketConnection:
-    def __init__(self, messages: list[str], *, disconnect_after: bool = False) -> None:
+    def __init__(
+        self,
+        messages: list[str],
+        *,
+        disconnect_after: bool = False,
+        ping_behavior: str = "pong",
+    ) -> None:
         self._messages = list(messages)
         self._disconnect_after = disconnect_after
         self.sent: list[str] = []
+        # "pong" (default): ping() returns an already-resolved pong
+        # waiter, matching a healthy connection. "hang": the pong waiter
+        # never resolves (simulates a dead/unresponsive connection --
+        # check_liveness must time out, not hang forever). "raise":
+        # ping() itself raises (e.g. the underlying socket is already
+        # closed).
+        self._ping_behavior = ping_behavior
+        self.ping_calls = 0
 
     async def send(self, message: str) -> None:
         self.sent.append(message)
@@ -623,6 +637,16 @@ class _FakeWebSocketConnection:
 
     async def close(self) -> None:
         return None
+
+    async def ping(self) -> Any:
+        self.ping_calls += 1
+        if self._ping_behavior == "raise":
+            raise ConnectionError("ping failed: connection already closed")
+        pong_waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        if self._ping_behavior == "pong":
+            pong_waiter.set_result(None)
+        # "hang": leave pong_waiter unresolved -- the caller must time out.
+        return pong_waiter
 
 
 class _FakeWebSocketConnector:
@@ -777,16 +801,24 @@ class _HangingWebSocketConnection:
     async def close(self) -> None:
         return None
 
+    async def ping(self) -> Any:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
 
 class _TrackingWebSocketConnector:
     """Like ``_FakeWebSocketConnector``, but records whether ``__aexit__``
     was actually invoked (proving cleanup happened after a timeout) and
     can simulate a ``connect`` that never resolves."""
 
-    def __init__(self, connection: Any, *, hang_on_connect: bool = False) -> None:
+    def __init__(
+        self, connection: Any, *, hang_on_connect: bool = False, hang_on_exit: bool = False
+    ) -> None:
         self._connection = connection
         self._hang_on_connect = hang_on_connect
+        self._hang_on_exit = hang_on_exit
         self.aexit_called = False
+        self.aexit_completed = False
 
     @asynccontextmanager
     async def _cm(self, url: str) -> AsyncIterator[Any]:
@@ -796,6 +828,9 @@ class _TrackingWebSocketConnector:
             yield self._connection
         finally:
             self.aexit_called = True
+            if self._hang_on_exit:
+                await asyncio.Event().wait()
+            self.aexit_completed = True
 
     def connect(self, url: str) -> Any:
         return self._cm(url)
@@ -844,6 +879,212 @@ async def test_helius_ws_stream_cancellation_during_ack_wait_cleans_up() -> None
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert connector.aexit_called is True
+
+
+# --- R5 finding #6: WebSocket ack type-equality bug, early-notification --
+# --- buffering, bounded cleanup, and transport-level liveness probing. --
+
+
+async def test_helius_ws_stream_bool_id_never_matches_the_real_request_id() -> None:
+    """Finding #6's core bug: Python's ``==`` treats ``True == 1``, so a
+    message carrying JSON ``"id": true`` must never be misread as
+    acknowledging request id 1 -- proven observably: it's skipped, and
+    the *real* matching ack (a later message with the genuine integer id)
+    is still found and used."""
+    bool_id_message = json.dumps({"jsonrpc": "2.0", "id": True, "result": 999})
+    real_ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([bool_id_message, real_ack])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    await subscription.close()
+
+
+async def test_helius_ws_stream_buffers_an_early_notification_before_the_ack() -> None:
+    """Finding #6: a genuine logsNotification arriving before this
+    subscription's own ack must never be silently discarded -- it is
+    buffered and replayed, in order, as soon as `notifications()` is
+    iterated, without ever going back to `recv()` for it again."""
+    early_notification = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "logsNotification",
+            "params": {
+                "subscription": 12345,
+                "result": {
+                    "context": {"slot": 7},
+                    "value": {"signature": "early-sig", "err": None, "logs": []},
+                },
+            },
+        }
+    )
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([early_notification, ack])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    # Nothing further was ever queued on the connection -- the only way
+    # to get a notification here is from the buffer, proving it survived.
+    received = []
+    async for note in subscription.notifications():
+        received.append(note)
+        break
+    assert len(received) == 1
+    assert received[0].signature == "early-sig"
+    assert received[0].slot == 7
+
+
+async def test_helius_ws_stream_buffers_multiple_unrelated_messages_in_order() -> None:
+    """Several non-matching messages (a stray response to a different
+    request id, then a genuine early notification) arriving before the
+    ack must all be preserved, in the order they arrived."""
+    unrelated = json.dumps({"jsonrpc": "2.0", "id": 999, "result": 42})
+    early_notification = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "logsNotification",
+            "params": {
+                "subscription": 12345,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {"signature": "buffered-sig", "err": None, "logs": []},
+                },
+            },
+        }
+    )
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([unrelated, early_notification, ack])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    received = []
+    async for note in subscription.notifications():
+        received.append(note)
+        break
+    assert len(received) == 1
+    assert received[0].signature == "buffered-sig"
+
+
+async def test_helius_ws_stream_buffered_notification_is_parsed_exactly_once() -> None:
+    """No duplicate canonicalization: a buffered message is already
+    parsed JSON by the time it reaches `notifications()` -- draining it
+    from the buffer must never re-run `json.loads` on it (which would be
+    both wasteful and a second, redundant validation pass)."""
+    early_notification_dict = {
+        "jsonrpc": "2.0",
+        "method": "logsNotification",
+        "params": {
+            "subscription": 12345,
+            "result": {
+                "context": {"slot": 1},
+                "value": {"signature": "once-sig", "err": None, "logs": []},
+            },
+        },
+    }
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([json.dumps(early_notification_dict), ack])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    # The buffered entry is the exact same dict object `_read_matching_ack`
+    # parsed -- not a fresh re-parse of the same text.
+    assert len(subscription._buffered) == 1  # noqa: SLF001 - direct fake introspection in tests
+    assert subscription._buffered[0] == early_notification_dict  # noqa: SLF001
+    received = []
+    async for note in subscription.notifications():
+        received.append(note)
+        break
+    assert len(received) == 1
+    assert len(subscription._buffered) == 0  # noqa: SLF001 - drained, not left behind
+
+
+async def test_helius_ws_stream_check_liveness_true_on_pong() -> None:
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([ack], ping_behavior="pong")
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    alive = await subscription.check_liveness(timeout_seconds=1.0)
+    assert alive is True
+    assert connection.ping_calls == 1
+
+
+async def test_helius_ws_stream_check_liveness_false_on_timeout() -> None:
+    """A ping whose pong never arrives (a genuinely dead or badly
+    stalled connection) must report not-alive within the given timeout,
+    never hang forever."""
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([ack], ping_behavior="hang")
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    alive = await subscription.check_liveness(timeout_seconds=0.01)
+    assert alive is False
+
+
+async def test_helius_ws_stream_check_liveness_false_on_ping_error() -> None:
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([ack], ping_behavior="raise")
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    alive = await subscription.check_liveness(timeout_seconds=1.0)
+    assert alive is False
+
+
+async def test_helius_ws_stream_check_liveness_propagates_cancellation() -> None:
+    """Genuine cancellation during a liveness probe must propagate, not
+    be reported as `False` -- only real ping/pong failures are."""
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([ack], ping_behavior="hang")
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    task = asyncio.ensure_future(subscription.check_liveness(timeout_seconds=30.0))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_helius_ws_stream_close_is_bounded_even_if_underlying_close_hangs() -> None:
+    """Finding #6: close() is a best-effort cleanup call -- one that
+    itself hangs must not block the caller forever."""
+    connection = _FakeWebSocketConnection([json.dumps({"jsonrpc": "2.0", "id": 1, "result": 1})])
+    connector = _TrackingWebSocketConnector(connection, hang_on_exit=True)
+    stream = HeliusWebSocketStream("fake-key", connector=connector, close_timeout_seconds=0.01)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    await asyncio.wait_for(subscription.close(), timeout=1.0)
+    assert connector.aexit_called is True
+    # The underlying __aexit__ is still hanging in the background (this
+    # test doesn't wait for it -- that's the whole point), so
+    # aexit_completed is never observed True here.
+    assert connector.aexit_completed is False
+
+
+async def test_helius_ws_stream_cleanup_after_ack_failure_is_bounded_even_if_close_hangs() -> None:
+    """The same bound applies to the cleanup path inside
+    open_subscription itself (connect succeeded, ack failed) -- a
+    hanging close() there must not turn a bounded ack-timeout failure
+    into an unbounded one."""
+    connection = _HangingWebSocketConnection(hang_on="recv")
+    connector = _TrackingWebSocketConnector(connection, hang_on_exit=True)
+    stream = HeliusWebSocketStream(
+        "fake-key", connector=connector, ack_timeout_seconds=0.01, close_timeout_seconds=0.01
+    )
+
+    with pytest.raises(HeliusRpcError, match="no matching acknowledgement"):
+        await asyncio.wait_for(stream.open_subscription("SomeWallet"), timeout=1.0)
     assert connector.aexit_called is True
 
 

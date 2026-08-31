@@ -48,9 +48,24 @@ class FakeSubscription:
     means "idle forever" (never yields, never ends) -- the fallback once a
     wallet's scripted sessions are exhausted."""
 
-    def __init__(self, items: list[Any] | None) -> None:
+    def __init__(
+        self, items: list[Any] | None, *, liveness_results: list[bool] | None = None
+    ) -> None:
         self._items = items
         self.closed = False
+        # `None` (the default) means "always alive" -- most tests never
+        # exercise the liveness-probe path at all (a long
+        # stream_receive_timeout_seconds means it's never reached within
+        # the test's own timeout budget). A list is popped from in order;
+        # once exhausted, further calls report alive.
+        self._liveness_results = liveness_results
+        self.liveness_checks = 0
+
+    async def check_liveness(self, *, timeout_seconds: float) -> bool:
+        self.liveness_checks += 1
+        if self._liveness_results:
+            return self._liveness_results.pop(0)
+        return True
 
     async def notifications(self) -> AsyncIterator[StreamNotification]:
         if self._items is None:
@@ -85,6 +100,7 @@ class FakeLiveStream:
     def __init__(self) -> None:
         self._sessions: dict[str, list[list[Any]]] = {}
         self._ack_failures: dict[str, list[BaseException]] = {}
+        self._liveness: dict[str, list[list[bool] | None]] = {}
         self.ack_gates: dict[str, asyncio.Event] = {}
         self.subscribe_calls: list[str] = []
         self.subscriptions: list[FakeSubscription] = []
@@ -98,6 +114,15 @@ class FakeLiveStream:
         failing) instead of returning a subscription at all."""
         self._ack_failures[wallet] = list(failures)
 
+    def script_liveness(self, wallet: str, *per_session_results: list[bool] | None) -> None:
+        """The Nth ``open_subscription`` call's ``FakeSubscription`` gets
+        the Nth entry here as its ``check_liveness`` script (``None`` --
+        the default when unscripted -- means "always alive"). Used to
+        simulate a genuinely dead connection (round 5, finding #6): a
+        receive-timeout alone must not mean DEGRADED any more, only a
+        receive-timeout *and* a failed liveness probe."""
+        self._liveness[wallet] = list(per_session_results)
+
     async def open_subscription(self, wallet_address: str) -> FakeSubscription:
         self.subscribe_calls.append(wallet_address)
         call_index = sum(1 for c in self.subscribe_calls if c == wallet_address) - 1
@@ -110,8 +135,14 @@ class FakeLiveStream:
             raise failures[call_index]
 
         sessions = self._sessions.get(wallet_address, [])
+        liveness_scripts = self._liveness.get(wallet_address, [])
         subscription = FakeSubscription(
-            sessions[call_index] if call_index < len(sessions) else None
+            sessions[call_index] if call_index < len(sessions) else None,
+            liveness_results=(
+                list(liveness_scripts[call_index])
+                if call_index < len(liveness_scripts) and liveness_scripts[call_index] is not None
+                else None
+            ),
         )
         self.subscriptions.append(subscription)
         return subscription
@@ -319,13 +350,20 @@ async def test_multiple_wallets_remain_isolated_under_concurrent_subscriptions()
     has nothing after the one yield) -- a real stream-exhausted transition,
     which correctly and transiently marks it DEGRADED before its own
     reconnect (to the fallback "idle forever" session) settles it back to
-    OK. Wallet B disconnects with a real error and never recovers (its
-    fallback session also idles, but starting from DEGRADED). The
-    predicate below waits until wallet A has demonstrably completed its
-    own reconnect cycle (subscribe called for A at least twice) before
-    checking its final state, so it isn't caught mid-transition -- and
-    proves throughout that wallet B's failure never touches wallet A's
-    watermark or vice versa."""
+    OK. Wallet B disconnects with a real error, is marked DEGRADED, and
+    then also reconnects to its own fallback "idle forever" session (both
+    wallets' fallback sessions eventually reconcile OK the same way --
+    the two wallets' reconnect cycles race independently against each
+    other in real wall-clock time, so which one finishes first is not
+    deterministic and must not be asserted on). Each wallet's own
+    condition -- A demonstrably completing a full reconnect cycle
+    (subscribe called at least twice, ending OK), B genuinely having been
+    marked DEGRADED at least once -- is captured independently, the first
+    time it's ever observed, regardless of what the other wallet is doing
+    at that moment; this proves both transitions genuinely happened
+    without requiring them to coexist at the same instant, and proves
+    throughout that wallet B's failure never touches wallet A's watermark
+    or vice versa."""
     provider = FakeChainProvider()
     provider.add_transaction("sig-A1", slot=1, raw_payload={"tx": "A1"})
     provider2 = provider  # same fake provider instance serves both wallets' histories
@@ -364,24 +402,26 @@ async def test_multiple_wallets_remain_isolated_under_concurrent_subscriptions()
     # what this test is about, so it must not be what's asserted on.
     observed: dict[str, Any] = {}
 
-    def wallet_a_recovered_and_b_degraded() -> bool:
-        calls_for_a = sum(1 for c in stream.subscribe_calls if c == WALLET_A)
-        wm_a = store._rows.get(WALLET_A)  # noqa: SLF001 - direct fake introspection in tests
-        wm_b = store._rows.get(WALLET_B)  # noqa: SLF001
-        ok = (
-            calls_for_a >= 2
-            and wm_a is not None
-            and wm_a.wallet_live_state == "OK"
-            and wm_b is not None
-            and wm_b.wallet_live_state == "DEGRADED"
-        )
-        if ok:
-            observed["wm_a"] = wm_a
-            observed["wm_b"] = wm_b
-        return ok
+    def both_conditions_observed() -> bool:
+        # Each wallet's own condition is captured independently, the
+        # first time it's ever seen (sticky -- never overwritten by a
+        # later observation), regardless of the other wallet's state at
+        # that moment: the two wallets' reconnect cycles race against
+        # each other in real wall-clock time, so which finishes first is
+        # not deterministic and must never be asserted on.
+        if "wm_a" not in observed:
+            calls_for_a = sum(1 for c in stream.subscribe_calls if c == WALLET_A)
+            wm_a = store._rows.get(WALLET_A)  # noqa: SLF001 - direct fake introspection in tests
+            if calls_for_a >= 2 and wm_a is not None and wm_a.wallet_live_state == "OK":
+                observed["wm_a"] = wm_a
+        if "wm_b" not in observed:
+            wm_b = store._rows.get(WALLET_B)  # noqa: SLF001
+            if wm_b is not None and wm_b.wallet_live_state == "DEGRADED":
+                observed["wm_b"] = wm_b
+        return "wm_a" in observed and "wm_b" in observed
 
     stop_event = asyncio.Event()
-    await _run_until(stop_event, manager, wallet_a_recovered_and_b_degraded)
+    await _run_until(stop_event, manager, both_conditions_observed)
 
     assert observed["wm_a"].is_live_entry_eligible() is True
     assert observed["wm_b"].is_live_entry_eligible() is False
@@ -392,10 +432,16 @@ async def test_multiple_wallets_remain_isolated_under_concurrent_subscriptions()
 
 
 async def test_timeout_fails_degraded() -> None:
+    """Phase 1 remediation round 5, finding #6: a receive-timeout alone
+    is no longer enough to mean DEGRADED -- a quiet-but-healthy
+    connection must survive it via a liveness probe. This wallet's
+    liveness probe is scripted to fail (a genuinely dead connection), so
+    DEGRADED is still the correct outcome once the timeout fires."""
     provider = FakeChainProvider()
     ledger = FakeEventLedger()
     store = FakeWatermarkStore()
     stream = FakeLiveStream()  # no scripted sessions -> subscribe hangs -> receive-timeout fires
+    stream.script_liveness(WALLET_A, [False])
     manager = _manager(
         provider,
         stream,
@@ -532,15 +578,22 @@ async def test_recovery_blocked_while_clock_anomaly_outstanding_even_after_recon
     ledger = FakeEventLedger()
     store = FakeWatermarkStore()
     stream = FakeLiveStream()
-    stream.script(
-        WALLET_A,
-        [
-            ConnectionError("dropped"),
-            ConnectionError(
-                "also fails to leave DEGRADED-then-reconnect-then-anomaly path clean; second reconnect settles"
-            ),
-        ],
-    )
+    # Phase 1 remediation round 5, finding #6: two separate scripted
+    # *sessions* (each its own list, so each is a genuine, distinct
+    # disconnect the manager must itself reconnect from) -- previously
+    # both exceptions were nested inside a single session's items list,
+    # where the first `raise` inside `FakeSubscription.notifications()`'s
+    # `for item in self._items` loop meant the second exception was
+    # never actually reached at all. That went unnoticed because
+    # `calls_for_a >= 3` was, in practice, being reached only via round
+    # 4's own defect this round's finding #6 fixes: a receive-timeout
+    # unconditionally reconnecting even a quiet-but-healthy idle-forever
+    # fallback session, over and over, every stream_receive_timeout_seconds.
+    # Now that a timeout alone no longer reconnects a live connection,
+    # the test must genuinely script the two disconnects its own
+    # docstring always claimed.
+    stream.script(WALLET_A, [ConnectionError("dropped")])
+    stream.script_liveness(WALLET_A, None, [False])
     monitor = PersistentClockMonitor(
         clock=_AnomalousClock(), recorder=InMemoryClockHealthRecorder()
     )
@@ -589,8 +642,18 @@ async def test_streaming_usage_recorded_from_manager_real_code_path() -> None:
     manager = _manager(provider, stream, ledger, store, (WALLET_A,), streaming_usage_recorder=usage)
 
     stop_event = asyncio.Event()
+    # Wait for both scripted items to have taken effect -- sig-A observed
+    # *and* the reconnect from the ConnectionError that follows it -- not
+    # just the first, since the manager reconnecting and re-subscribing
+    # is itself independently-scheduled work racing against this poll
+    # loop noticing sig-A alone.
     await _run_until(
-        stop_event, manager, lambda: ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows
+        stop_event,
+        manager,
+        lambda: (
+            ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows
+            and any(r.reconnect_count > 0 for r in usage.streaming)
+        ),
     )
 
     assert len(usage.streaming) >= 1

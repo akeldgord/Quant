@@ -53,11 +53,26 @@ further findings:
   ``_run_finalization_sweep`` background task calls it on a configurable
   cadence for every tracked wallet, using the same supervised-task
   pattern as periodic reconciliation.
+
+Phase 1 remediation round 5, finding #6: ``_stream_once`` previously
+treated *every* receive-timeout as fatal (a wallet with no on-chain
+activity for one timeout window looked identical to a dropped
+connection), reconnecting a perfectly healthy but quiet socket over and
+over. A single pending ``__anext__()`` task is now reused across
+multiple receive-timeout cycles -- cancelling and re-creating it on every
+mere timeout (the previous ``asyncio.wait_for`` pattern) would poison the
+underlying async generator, since an unhandled ``CancelledError``
+propagating out of a generator's frame closes it -- and a timeout only
+triggers reconnection once
+:meth:`~argus.providers.StreamSubscription.check_liveness` (a
+transport-level ping/pong probe, entirely separate from waiting for a
+notification) has confirmed the connection is genuinely dead.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 from collections.abc import Awaitable, Callable
@@ -67,7 +82,7 @@ from argus.clock import Clock
 from argus.ingestion.clock_monitor import PersistentClockMonitor
 from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationTrigger
 from argus.logging import get_logger
-from argus.providers import ChainProvider, LiveChainStream
+from argus.providers import ChainProvider, LiveChainStream, StreamNotification
 from argus.providers.usage import StreamingUsageRecord, UsageRecorder
 
 _logger = get_logger(component="argus.ingestion.manager")
@@ -121,6 +136,13 @@ class IngestionManagerConfig:
     reconnect_base_delay_seconds: float = 1.0
     reconnect_max_delay_seconds: float = 30.0
     stream_receive_timeout_seconds: float = 30.0
+    # Phase 1 remediation round 5, finding #6: a quiet-but-healthy socket
+    # (no on-chain activity for one receive-timeout window) must not be
+    # reconnected -- a transport-level ping/pong liveness probe, bounded
+    # by this timeout, decides that instead. Kept well under
+    # stream_receive_timeout_seconds so a probe cycle never itself
+    # becomes the reason a healthy connection looks unresponsive.
+    stream_liveness_probe_timeout_seconds: float = 10.0
     periodic_reconciliation_interval_seconds: float = 60.0
     clock_heartbeat_interval_seconds: float = 5.0
     finalization_sweep_interval_seconds: float = 120.0
@@ -132,6 +154,8 @@ class IngestionManagerConfig:
             raise ValueError("reconnect_max_delay_seconds must be >= reconnect_base_delay_seconds")
         if self.stream_receive_timeout_seconds <= 0:
             raise ValueError("stream_receive_timeout_seconds must be positive")
+        if self.stream_liveness_probe_timeout_seconds <= 0:
+            raise ValueError("stream_liveness_probe_timeout_seconds must be positive")
         if self.periodic_reconciliation_interval_seconds <= 0:
             raise ValueError("periodic_reconciliation_interval_seconds must be positive")
         if self.clock_heartbeat_interval_seconds <= 0:
@@ -298,6 +322,20 @@ class IngestionManager:
         # except block above exactly like any other disruptive
         # transition, never silently treated as a stream that's "ready".
         subscription = await self._stream.open_subscription(wallet_address)
+        # Phase 1 remediation round 5, finding #6: this single pending
+        # __anext__() task is reused across multiple receive-timeout/
+        # liveness-probe cycles below, rather than being re-created (and
+        # the old one cancelled) on every timeout. `asyncio.wait_for`
+        # cancelling a pending `__anext__()` on a mere timeout would
+        # poison the underlying async generator -- an unhandled
+        # CancelledError propagating out of a generator's frame closes
+        # it, so the *next* `__anext__()` call would raise
+        # StopAsyncIteration immediately instead of genuinely resuming,
+        # silently misreading "still quiet" as "the stream ended". This
+        # task is only ever cancelled once check_liveness has confirmed
+        # the connection is genuinely dead, or in the `finally` cleanup
+        # below.
+        notif_task: asyncio.Task[StreamNotification] | None = None
         try:
             await self._record_streaming(wallet_address, connection_delta=1, subscription_delta=1)
 
@@ -316,15 +354,37 @@ class IngestionManager:
 
             iterator = subscription.notifications().__aiter__()
             while not stop_event.is_set():
-                try:
-                    notification = await asyncio.wait_for(
-                        iterator.__anext__(), timeout=self._config.stream_receive_timeout_seconds
+                if notif_task is None:
+                    notif_task = asyncio.ensure_future(iterator.__anext__())
+                done, _pending = await asyncio.wait(
+                    {notif_task}, timeout=self._config.stream_receive_timeout_seconds
+                )
+                if notif_task not in done:
+                    # Quiet, not necessarily dead: a wallet with no
+                    # on-chain activity for one receive-timeout window is
+                    # indistinguishable from a dropped connection by
+                    # silence alone. Probe liveness at the transport
+                    # level instead of reconnecting on every timeout.
+                    alive = await subscription.check_liveness(
+                        timeout_seconds=self._config.stream_liveness_probe_timeout_seconds
                     )
-                except TimeoutError as exc:
+                    if alive:
+                        continue  # still connected -- keep waiting on the same pending task
+                    task = notif_task
+                    notif_task = None
+                    task.cancel()
+                    with contextlib.suppress(BaseException):
+                        await task
                     raise IngestionTimeoutError(
                         f"no stream notification for {wallet_address} within "
-                        f"{self._config.stream_receive_timeout_seconds}s"
-                    ) from exc
+                        f"{self._config.stream_receive_timeout_seconds}s and the connection "
+                        "failed a liveness check"
+                    )
+
+                task = notif_task
+                notif_task = None
+                try:
+                    notification = task.result()
                 except StopAsyncIteration as exc:
                     raise IngestionStreamExhaustedError(
                         f"stream for {wallet_address} ended without an explicit error"
@@ -337,6 +397,10 @@ class IngestionManager:
                     bytes_delta=len(json.dumps(raw_payload, default=str).encode("utf-8")),
                 )
         finally:
+            if notif_task is not None and not notif_task.done():
+                notif_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await notif_task
             await subscription.close()
 
     async def _run_periodic_reconciliation(

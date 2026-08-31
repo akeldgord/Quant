@@ -16,6 +16,8 @@ fake transport instead of a live network connection.
 from __future__ import annotations
 
 import asyncio
+import collections
+import contextlib
 import json
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -43,6 +45,7 @@ TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 _DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
 _DEFAULT_SEND_TIMEOUT_SECONDS = 10.0
 _DEFAULT_ACK_TIMEOUT_SECONDS = 10.0
+_DEFAULT_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 def _is_strict_int(value: Any) -> TypeGuard[int]:
@@ -65,6 +68,15 @@ def _is_strict_nonneg_int(value: Any) -> TypeGuard[int]:
 # (Solana's Mint account layout) -- any larger value is definitionally
 # impossible, not merely implausible.
 _MAX_TOKEN_DECIMALS = 255
+
+
+def _is_matching_request_id(value: Any, expected: int) -> bool:
+    """Exact type+value match against a JSON-RPC request id. Plain ``==``
+    is not safe here: Python's ``bool`` is an ``int`` subclass and
+    ``True == 1``, so a WebSocket message carrying JSON ``"id": true``
+    would otherwise be silently misread as acknowledging request id 1
+    (Phase 1 remediation round 5, finding #6)."""
+    return _is_strict_int(value) and value == expected
 
 
 def _is_valid_tx_err(value: Any) -> bool:
@@ -602,6 +614,12 @@ class WebSocketConnection(Protocol):
     async def send(self, message: str) -> None: ...
     async def recv(self) -> str: ...
     async def close(self) -> None: ...
+    async def ping(self) -> Any:
+        """Sends a transport-level ping frame and returns an awaitable
+        ("pong waiter") that resolves once the matching pong is received
+        -- matching the real ``websockets`` library's own ``ping()``
+        contract exactly (Phase 1 remediation round 5, finding #6)."""
+        ...
 
 
 class WebSocketConnector(Protocol):
@@ -626,11 +644,61 @@ class HeliusSubscription:
         connector_cm: Any,
         subscription_id: int,
         wallet_address: str,
+        buffered_messages: list[Any] | None = None,
+        close_timeout_seconds: float = _DEFAULT_CLOSE_TIMEOUT_SECONDS,
     ) -> None:
         self._connection = connection
         self._connector_cm = connector_cm
         self._subscription_id = subscription_id
         self._wallet_address = wallet_address
+        # Phase 1 remediation round 5, finding #6: any message that
+        # arrived while HeliusWebSocketStream was still waiting for this
+        # subscription's own acknowledgement -- including a genuine
+        # logsNotification the server happened to deliver before the ack
+        # -- is preserved here, already parsed, so it is replayed in
+        # order rather than lost. `notifications()` drains this before
+        # ever calling `recv()` again.
+        self._buffered: collections.deque[Any] = collections.deque(buffered_messages or [])
+        self._close_timeout_seconds = close_timeout_seconds
+
+    def _parse_notification(self, message: Any) -> StreamNotification | None:
+        """Validates and converts one already-parsed WebSocket message.
+        Returns ``None`` for a benign response to a different request id
+        (not this subscription's notification, but not an error either);
+        raises on any other unexpected shape. Shared by both the buffered
+        and the live-``recv()`` path in :meth:`notifications` so a
+        message is validated/parsed exactly once, however it arrived
+        (never re-parsed if it came from the buffer)."""
+        if not isinstance(message, dict):
+            raise HeliusRpcError(f"unexpected WebSocket message shape: {message!r}")
+        if message.get("method") != "logsNotification":
+            # A message that isn't this subscription's notification
+            # (e.g. an unrelated ack) is not "no new activity" -- it
+            # must not be silently swallowed as if it were.
+            if "params" not in message and "id" in message:
+                return None  # a benign response to a different request id
+            raise HeliusRpcError(f"unexpected WebSocket message shape: {message!r}")
+        params = message.get("params")
+        if not isinstance(params, dict) or params.get("subscription") != self._subscription_id:
+            raise HeliusRpcError(f"logsNotification for the wrong subscription id: {message!r}")
+        result = params.get("result")
+        if not isinstance(result, dict):
+            raise HeliusRpcError(f"logsNotification missing 'result': {message!r}")
+        context = result.get("context")
+        value = result.get("value")
+        if not isinstance(context, dict) or not _is_strict_int(context.get("slot")):
+            raise HeliusRpcError(f"logsNotification missing context.slot: {message!r}")
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get("signature"), str)
+            or "err" not in value
+        ):
+            raise HeliusRpcError(f"logsNotification missing value.signature/value.err: {message!r}")
+        return StreamNotification(
+            wallet_address=self._wallet_address,
+            signature=value["signature"],
+            slot=context["slot"],
+        )
 
     async def notifications(self) -> AsyncIterator[StreamNotification]:
         # `notifications` never treats a dropped connection as "no new
@@ -639,41 +707,43 @@ class HeliusSubscription:
         # and trigger truth-path reconciliation, per MASTER_SPEC.md
         # section 19.
         while True:
-            raw = await self._connection.recv()
-            message = json.loads(raw)
-            if message.get("method") != "logsNotification":
-                # A message that isn't this subscription's notification
-                # (e.g. an unrelated ack) is not "no new activity" -- it
-                # must not be silently swallowed as if it were.
-                if "params" not in message and "id" in message:
-                    continue  # a benign response to a different request id
-                raise HeliusRpcError(f"unexpected WebSocket message shape: {message!r}")
-            params = message.get("params")
-            if not isinstance(params, dict) or params.get("subscription") != self._subscription_id:
-                raise HeliusRpcError(f"logsNotification for the wrong subscription id: {message!r}")
-            result = params.get("result")
-            if not isinstance(result, dict):
-                raise HeliusRpcError(f"logsNotification missing 'result': {message!r}")
-            context = result.get("context")
-            value = result.get("value")
-            if not isinstance(context, dict) or not _is_strict_int(context.get("slot")):
-                raise HeliusRpcError(f"logsNotification missing context.slot: {message!r}")
-            if (
-                not isinstance(value, dict)
-                or not isinstance(value.get("signature"), str)
-                or "err" not in value
-            ):
-                raise HeliusRpcError(
-                    f"logsNotification missing value.signature/value.err: {message!r}"
-                )
-            yield StreamNotification(
-                wallet_address=self._wallet_address,
-                signature=value["signature"],
-                slot=context["slot"],
-            )
+            if self._buffered:
+                message = self._buffered.popleft()
+            else:
+                raw = await self._connection.recv()
+                message = json.loads(raw)
+            notification = self._parse_notification(message)
+            if notification is not None:
+                yield notification
+
+    async def check_liveness(self, *, timeout_seconds: float) -> bool:
+        # Phase 1 remediation round 5, finding #6: a transport-level
+        # ping/pong round trip, entirely separate from waiting for a
+        # notification -- see StreamSubscription.check_liveness's
+        # docstring for why this exists. Never raises except on genuine
+        # cancellation (a BaseException, not caught by `except
+        # Exception` below).
+        async def _ping_pong() -> None:
+            pong_waiter = await self._connection.ping()
+            await pong_waiter
+
+        try:
+            await asyncio.wait_for(_ping_pong(), timeout=timeout_seconds)
+            return True
+        except Exception:
+            return False
 
     async def close(self) -> None:
-        await self._connector_cm.__aexit__(None, None, None)
+        # Already a best-effort cleanup call -- a close() that itself
+        # hangs must not block the caller forever (Phase 1 remediation
+        # round 5, finding #6). Nothing further to do on a timeout: the
+        # caller has already decided to stop using this subscription
+        # either way.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(
+                self._connector_cm.__aexit__(None, None, None),
+                timeout=self._close_timeout_seconds,
+            )
 
 
 class HeliusWebSocketStream:
@@ -690,6 +760,7 @@ class HeliusWebSocketStream:
         connect_timeout_seconds: float = _DEFAULT_CONNECT_TIMEOUT_SECONDS,
         send_timeout_seconds: float = _DEFAULT_SEND_TIMEOUT_SECONDS,
         ack_timeout_seconds: float = _DEFAULT_ACK_TIMEOUT_SECONDS,
+        close_timeout_seconds: float = _DEFAULT_CLOSE_TIMEOUT_SECONDS,
     ) -> None:
         self._api_key = api_key
         self._connector = connector
@@ -697,10 +768,11 @@ class HeliusWebSocketStream:
         self._connect_timeout_seconds = connect_timeout_seconds
         self._send_timeout_seconds = send_timeout_seconds
         self._ack_timeout_seconds = ack_timeout_seconds
+        self._close_timeout_seconds = close_timeout_seconds
 
     async def _read_matching_ack(
         self, connection: WebSocketConnection, request_id: int
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], list[Any]]:
         # Phase 1 remediation round 4, finding #4: a WebSocket connection
         # can carry messages for *other* pending requests, or stray
         # notifications, interleaved with this subscribe request's own
@@ -709,23 +781,39 @@ class HeliusWebSocketStream:
         # mismatched-id message (an ack for someone else's request, or a
         # notification) could be misread as this subscription becoming
         # ready. This loop skips anything that isn't a JSON object whose
-        # 'id' matches our own request, and the whole loop (not each
-        # individual recv) is bounded by one ack timeout so an endless
-        # stream of unrelated messages can't stall a caller forever.
+        # 'id' matches our own request (round 5, finding #6: matched with
+        # an exact type+value check, never plain ``==``, so a message
+        # carrying JSON ``"id": true`` can never be misread as matching
+        # id ``1``), and the whole loop (not each individual recv) is
+        # bounded by one ack timeout so an endless stream of unrelated
+        # messages can't stall a caller forever.
+        #
+        # Round 5, finding #6: every non-matching message encountered
+        # while waiting -- including a genuine logsNotification the
+        # server happens to deliver before this request's own ack -- is
+        # buffered (already parsed, in order) and returned alongside the
+        # ack, rather than silently discarded. The caller hands this to
+        # HeliusSubscription so nothing is lost.
+        buffered: list[Any] = []
+
         async def _loop() -> dict[str, Any]:
             while True:
                 raw = await connection.recv()
                 message = json.loads(raw)
-                if isinstance(message, dict) and message.get("id") == request_id:
+                if isinstance(message, dict) and _is_matching_request_id(
+                    message.get("id"), request_id
+                ):
                     return message
+                buffered.append(message)
 
         try:
-            return await asyncio.wait_for(_loop(), timeout=self._ack_timeout_seconds)
+            ack = await asyncio.wait_for(_loop(), timeout=self._ack_timeout_seconds)
         except TimeoutError as exc:
             raise HeliusRpcError(
                 f"logsSubscribe: no matching acknowledgement (id={request_id}) within "
                 f"{self._ack_timeout_seconds}s"
             ) from exc
+        return ack, buffered
 
     async def open_subscription(self, wallet_address: str) -> HeliusSubscription:
         url = f"{self._base_url}?api-key={self._api_key}"
@@ -760,11 +848,19 @@ class HeliusWebSocketStream:
                     f"for {wallet_address!r}"
                 ) from exc
 
-            ack = await self._read_matching_ack(connection, request_id)
+            ack, buffered = await self._read_matching_ack(connection, request_id)
+            # Phase 1 remediation round 5, finding #6: every field of a
+            # valid acknowledgement is now checked explicitly and
+            # exhaustively -- exact jsonrpc version, result/error
+            # mutual exclusivity (both a truthy "error" AND a valid
+            # "result" would previously both need checking separately;
+            # "error" present is always rejected regardless of "result"),
+            # and the subscription id itself must be a strict
+            # nonnegative integer (never a bool, string, float, or null).
             if (
                 ack.get("jsonrpc") != "2.0"
                 or "error" in ack
-                or not _is_strict_int(ack.get("result"))
+                or not _is_strict_nonneg_int(ack.get("result"))
             ):
                 raise HeliusRpcError(f"logsSubscribe failed for {wallet_address!r}: {ack}")
             subscription_id = ack["result"]
@@ -772,14 +868,21 @@ class HeliusWebSocketStream:
             # Connect succeeded but subscribe/ack failed (send timeout,
             # ack timeout, a malformed/error ack, or cancellation) --
             # never leave a partially opened connection dangling; the
-            # caller gets a clean exception, not a leaked socket.
-            await connector_cm.__aexit__(*sys.exc_info())
+            # caller gets a clean exception, not a leaked socket. Bounded
+            # (round 5, finding #6): a close() that itself hangs must not
+            # turn a bounded failure into an unbounded one.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    connector_cm.__aexit__(*sys.exc_info()), timeout=self._close_timeout_seconds
+                )
             raise
         return HeliusSubscription(
             connection=connection,
             connector_cm=connector_cm,
             subscription_id=subscription_id,
             wallet_address=wallet_address,
+            buffered_messages=buffered,
+            close_timeout_seconds=self._close_timeout_seconds,
         )
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None:

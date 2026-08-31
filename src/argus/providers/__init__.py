@@ -133,6 +133,19 @@ class StreamSubscription(Protocol):
         """Closes the underlying connection. Idempotent."""
         ...
 
+    async def check_liveness(self, *, timeout_seconds: float) -> bool:
+        """A transport-level liveness probe (e.g. a WebSocket ping/pong
+        round trip), entirely separate from waiting for a notification
+        (Phase 1 remediation round 5, finding #6). A quiet-but-healthy
+        connection -- a tracked wallet with no on-chain activity for a
+        while -- is not distinguishable from a dead one by silence alone;
+        callers use this to decide whether a receive timeout means
+        "reconnect" or "keep waiting". Returns ``False`` (never raises,
+        except on genuine cancellation) on any probe failure or timeout
+        -- the caller decides what a failed probe means, this method's
+        only job is reporting it."""
+        ...
+
 
 class LiveChainStream(Protocol):
     """WebSocket-style live subscription (MASTER_SPEC.md section 10)."""

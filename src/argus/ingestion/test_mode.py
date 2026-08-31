@@ -58,6 +58,11 @@ class NullStreamSubscription:
     async def close(self) -> None:
         return None
 
+    async def check_liveness(self, *, timeout_seconds: float) -> bool:
+        # Test mode has no real transport to probe -- trivially "alive"
+        # forever, matching notifications()'s own idle-forever contract.
+        return True
+
 
 class NullLiveStream:
     """Subscribes successfully (see :class:`NullStreamSubscription`) and
