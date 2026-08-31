@@ -29,13 +29,16 @@ from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
 from argus.domain.commitment import COMMITMENT_CONFIRMED, COMMITMENT_FINALIZED
-from argus.domain.parse_attempts import PARSE_OUTCOME_SUCCESS, ParseAttempt
+from argus.domain.parse_attempts import PARSE_OUTCOME_FAILURE, PARSE_OUTCOME_SUCCESS, ParseAttempt
 from argus.domain.swaps import Swap
 from argus.ingestion.commitment import derive_current_state
 from argus.ingestion.commitment_repository import SqlCommitmentObservationStore
-from argus.ingestion.parse_ledger import ParseAttemptIdentity
+from argus.ingestion.parse_attempt_repository import SqlParseAttemptRecorder
+from argus.ingestion.parse_ledger import ParseAttemptDraft, ParseAttemptIdentity
 from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationTrigger
+from argus.ingestion.swap_repository import SqlSwapRecorder
 from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
+from argus.parsing.generic_parser import ParsedTransaction
 from argus.providers import SignatureInfo, StreamNotification
 
 pytestmark = pytest.mark.asyncio
@@ -480,6 +483,313 @@ async def test_concurrent_commitment_writes_serialize_via_real_advisory_lock(adm
                 )
             ).scalar_one()
             assert rejection_rows == 1  # the losing write is durably audited, not silently dropped
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await ingest_engine.dispose()
+
+
+# --- Phase 1 remediation round 4, finding #5: real Postgres tests proving
+# reparse selection and swaps versioning are parser-artifact-aware
+# (parser_version + build_hash), not parser_version alone. -----------------
+
+
+async def _insert_chain_event(session: AsyncSession, *, wallet: str, signature: str) -> uuid.UUID:
+    now = Clock().utc_now()
+    event = ChainEvent(
+        event_id=uuid.uuid4(),
+        chain="solana",
+        slot=1,
+        first_seen_at=now,
+        provider="artifact-identity-test",
+        provider_received_at=now,
+        transaction_signature=signature,
+        event_type="TRANSACTION_OBSERVED",
+        wallet_address=wallet,
+        raw_payload={"x": 1},
+        payload_hash=f"hash-{signature}",
+        parser_version="test_v1",
+        created_at=now,
+    )
+    session.add(event)
+    await session.flush()
+    return event.event_id
+
+
+def _parse_attempt_draft(
+    *, event_id: uuid.UUID, parser_version: str, build_hash: str, outcome: str
+) -> ParseAttemptDraft:
+    now = Clock().utc_now()
+    return ParseAttemptDraft(
+        attempt_id=uuid.uuid4(),
+        event_id=event_id,
+        parser_version=parser_version,
+        attempted_at=now,
+        outcome=outcome,
+        error_class=None if outcome != PARSE_OUTCOME_FAILURE else "SimulatedError",
+        error_reason=None if outcome != PARSE_OUTCOME_FAILURE else "simulated failure",
+        input_payload_hash="deadbeef",
+        retry_disposition="NOT_APPLICABLE",
+        build_hash=build_hash,
+        config_hash="artifact-test-config-hash",
+        master_spec_hash="artifact-test-master-spec-hash",
+        git_commit="artifact-test-git-commit",
+        created_at=now,
+    )
+
+
+def _parsed_transaction(*, wallet: str, parser_version: str) -> ParsedTransaction:
+    from decimal import Decimal
+
+    return ParsedTransaction(
+        classification="TRANSFER_IN",
+        confidence=Decimal("1.000"),
+        parser_version=parser_version,
+        reason="artifact-identity test",
+        wallet_address=wallet,
+        slot=1,
+        block_time=None,
+        input_mint=None,
+        input_amount_raw=None,
+        input_amount_ui=None,
+        output_mint="So11111111111111111111111111111111111111112",
+        output_amount_raw=1_000,
+        output_amount_ui=Decimal("0.000001"),
+        network_fee_raw=5000,
+    )
+
+
+async def test_events_pending_for_artifact_is_idempotent_under_same_version_and_build(
+    admin_engine,
+) -> None:
+    """Same version + same build = idempotent: once a SUCCESS attempt is
+    durably recorded under one exact artifact identity, that identity's
+    own selection query must never re-select the event -- a restarted
+    sweep converges to empty, not an infinite re-attempt loop."""
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+    wallet = f"sql-art-idem-{uuid.uuid4()}"
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            event_id = await _insert_chain_event(session, wallet=wallet, signature="sig-idem")
+            recorder = SqlParseAttemptRecorder(session)
+            await recorder.record(
+                _parse_attempt_draft(
+                    event_id=event_id,
+                    parser_version="v1",
+                    build_hash="build-A",
+                    outcome=PARSE_OUTCOME_SUCCESS,
+                )
+            )
+
+        # A fresh session/connection -- simulating a restarted process --
+        # must see the same durable result.
+        async with sessionmaker() as session:
+            recorder = SqlParseAttemptRecorder(session)
+            pending = await recorder.events_pending_for_artifact("v1", "build-A", limit=100)
+            assert event_id not in pending
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await ingest_engine.dispose()
+
+
+async def test_events_pending_for_artifact_selects_event_under_changed_build_hash(
+    admin_engine,
+) -> None:
+    """Same version + changed build = deterministic new attempt: a
+    rebuilt parser artifact under an unbumped version label must still be
+    selected for reparse -- an old SUCCESS under a different build_hash
+    must never suppress it (this is the exact defect finding #5
+    describes: ``events_pending_at_version()`` filtered only by
+    ``parser_version``)."""
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+    wallet = f"sql-art-chbuild-{uuid.uuid4()}"
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            event_id = await _insert_chain_event(session, wallet=wallet, signature="sig-build")
+            recorder = SqlParseAttemptRecorder(session)
+            await recorder.record(
+                _parse_attempt_draft(
+                    event_id=event_id,
+                    parser_version="v1",
+                    build_hash="build-A",
+                    outcome=PARSE_OUTCOME_SUCCESS,
+                )
+            )
+
+        async with sessionmaker() as session:
+            recorder = SqlParseAttemptRecorder(session)
+            # Old SUCCESS does not suppress a required new-artifact attempt.
+            pending_new_build = await recorder.events_pending_for_artifact(
+                "v1", "build-B", limit=100
+            )
+            assert event_id in pending_new_build
+            # The old build's own identity is still correctly settled.
+            pending_old_build = await recorder.events_pending_for_artifact(
+                "v1", "build-A", limit=100
+            )
+            assert event_id not in pending_old_build
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await ingest_engine.dispose()
+
+
+async def test_events_pending_for_artifact_selects_event_under_changed_parser_version(
+    admin_engine,
+) -> None:
+    """Changed parser version = new attempt and derived row: a bumped
+    ``parser_version`` is selected for reparse even though the event
+    already has a SUCCESS attempt under the old version, and recording a
+    swap under the new version+build appends a new ``swaps`` row without
+    touching the prior one (versioned by the full artifact identity,
+    migration 0007)."""
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+    wallet = f"sql-art-chver-{uuid.uuid4()}"
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            event_id = await _insert_chain_event(session, wallet=wallet, signature="sig-version")
+            parse_recorder = SqlParseAttemptRecorder(session)
+            await parse_recorder.record(
+                _parse_attempt_draft(
+                    event_id=event_id,
+                    parser_version="v1",
+                    build_hash="build-A",
+                    outcome=PARSE_OUTCOME_SUCCESS,
+                )
+            )
+            swap_recorder = SqlSwapRecorder(session)
+            created_v1 = await swap_recorder.record(
+                event_id=event_id,
+                wallet_address=wallet,
+                parsed=_parsed_transaction(wallet=wallet, parser_version="v1"),
+                build_hash="build-A",
+                created_at=Clock().utc_now(),
+            )
+            assert created_v1 is True
+
+        async with sessionmaker() as session:
+            parse_recorder = SqlParseAttemptRecorder(session)
+            pending_v2 = await parse_recorder.events_pending_for_artifact(
+                "v2", "build-A", limit=100
+            )
+            assert event_id in pending_v2
+
+        async with sessionmaker() as session, session.begin():
+            swap_recorder = SqlSwapRecorder(session)
+            created_v2 = await swap_recorder.record(
+                event_id=event_id,
+                wallet_address=wallet,
+                parsed=_parsed_transaction(wallet=wallet, parser_version="v2"),
+                build_hash="build-A",
+                created_at=Clock().utc_now(),
+            )
+            assert created_v2 is True  # a genuine new derived row, not a rewrite
+
+        async with sessionmaker() as session:
+            rows = (
+                (await session.execute(select(Swap).where(Swap.event_id == event_id)))
+                .scalars()
+                .all()
+            )
+            assert {(r.parser_version, r.build_hash) for r in rows} == {
+                ("v1", "build-A"),
+                ("v2", "build-A"),
+            }
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await ingest_engine.dispose()
+
+
+async def test_events_pending_for_artifact_treats_failure_as_retryable(admin_engine) -> None:
+    """Failures remain retryable: a FAILURE attempt under an artifact
+    identity must never suppress that same identity's own selection --
+    only a SUCCESS/UNKNOWN (non-failure) attempt settles an artifact."""
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+    wallet = f"sql-art-retry-{uuid.uuid4()}"
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            event_id = await _insert_chain_event(session, wallet=wallet, signature="sig-retry")
+            recorder = SqlParseAttemptRecorder(session)
+            await recorder.record(
+                _parse_attempt_draft(
+                    event_id=event_id,
+                    parser_version="v1",
+                    build_hash="build-A",
+                    outcome=PARSE_OUTCOME_FAILURE,
+                )
+            )
+
+        async with sessionmaker() as session:
+            recorder = SqlParseAttemptRecorder(session)
+            pending = await recorder.events_pending_for_artifact("v1", "build-A", limit=100)
+            assert event_id in pending  # still retryable, not permanently settled
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await ingest_engine.dispose()
+
+
+async def test_concurrent_reparse_cannot_create_contradictory_duplicate_swap_rows(
+    admin_engine,
+) -> None:
+    """Concurrent reparse cannot create contradictory duplicate results:
+    two independent sessions racing to record a swap for the SAME
+    (event_id, parser_version, build_hash) must never both succeed --
+    exactly one genuine row is created, the other is recognized as an
+    honest duplicate via the real unique constraint, never a second
+    conflicting row and never an unhandled integrity error."""
+    import asyncio
+
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+    wallet = f"sql-art-conc-{uuid.uuid4()}"
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            event_id = await _insert_chain_event(session, wallet=wallet, signature="sig-race")
+
+        async def _record() -> bool:
+            async with sessionmaker() as session, session.begin():
+                recorder = SqlSwapRecorder(session)
+                return await recorder.record(
+                    event_id=event_id,
+                    wallet_address=wallet,
+                    parsed=_parsed_transaction(wallet=wallet, parser_version="v1"),
+                    build_hash="build-race",
+                    created_at=Clock().utc_now(),
+                )
+
+        raw_results = await asyncio.gather(_record(), _record(), return_exceptions=True)
+        results: list[bool] = []
+        for result in raw_results:
+            if isinstance(result, BaseException):
+                raise result
+            results.append(result)
+
+        assert sorted(results) == [False, True]  # exactly one genuine insert, one honest duplicate
+
+        async with sessionmaker() as session:
+            rows = (
+                (await session.execute(select(Swap).where(Swap.event_id == event_id)))
+                .scalars()
+                .all()
+            )
+            assert len(rows) == 1  # never two conflicting rows for the same artifact identity
     finally:
         await _cleanup(admin_engine, wallet)
         await ingest_engine.dispose()
