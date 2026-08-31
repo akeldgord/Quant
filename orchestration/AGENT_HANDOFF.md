@@ -7,168 +7,146 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 ---
 
-HANDOFF_ID: handoff-0007-phase-1
-UTC_TIMESTAMP: 2026-08-31T04:59:22Z
-CURRENT_COMMIT: 28a88f74d28e70542050f5d5e8d9a9d139f26bb8
+HANDOFF_ID: handoff-0008-phase-1-remediation-1
+UTC_TIMESTAMP: 2026-08-31T06:47:00Z
+CURRENT_COMMIT: 83bb38497ac3af1402f38dabee6858e00ce2e9fb
 CURRENT_PHASE: 1
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
-LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-1-001
-CHECKPOINT_PATH: orchestration/checkpoints/phase_1.md
-BUNDLE_PATH: orchestration/bundles/phase_1.txt
-TEST_STATUS: unit 163/163 passed; integration 18/18 passed (real PostgreSQL 16); golden 23/23 passed; replay 0 collected; full suite 204/204 passed, 91% coverage; ruff clean; mypy clean
-WORKING_TREE: clean (verified via `git status --porcelain` before and after this commit)
-ORCHESTRATOR_REVIEW_REQUIRED: whether acceptance criteria 1-2 (live Solana RPC/WebSocket) may remain deferred like PG17_COMPOSE_VALIDATION until credentials/network access are available, and whether the missing end-to-end stream-manager loop must be built before Phase 1 is considered fully complete — see orchestration/checkpoints/phase_1.md section L; PG17_COMPOSE_VALIDATION (deferred, unrelated) still open — see docs/BUILD_STATE.md
+LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-1-remediation-001
+CHECKPOINT_PATH: orchestration/checkpoints/phase_1_remediation_1.md
+BUNDLE_PATH: orchestration/bundles/phase_1_remediation_1.txt
+TEST_STATUS: unit 212/212 passed; integration 19/19 passed (real PostgreSQL 16); golden 23/23 passed; replay 6/6 passed (was 0 collected before this round); full suite 260/260 passed, 84% coverage; ruff clean; mypy clean; alembic downgrade-to-base/upgrade-to-head clean
+WORKING_TREE: clean (verified via `git status --porcelain` before this commit)
+ORCHESTRATOR_REVIEW_REQUIRED: acceptance criterion 15 (authenticated real-chain golden fixtures) is honestly NOT TESTED/blocked — this sandbox has no general internet egress and no already-available safe source of authentic transaction data (see orchestration/checkpoints/phase_1_remediation_1.md section E item 15 and docs/DECISION_LOG.md); resolving it requires either running the acquisition step from an environment with real network access, or an explicit orchestrator decision on whether the existing synthetic-but-schema-accurate fixtures are an acceptable permanent substitute for this one criterion. PG17_COMPOSE_VALIDATION (deferred, unrelated, unchanged) still open — see docs/BUILD_STATE.md.
 
 ## Work completed
 
-Executed orchestrator instruction `argus-phase-1-001` in full: implemented
-Phase 1 (live Solana chain data acquisition and deterministic canonical
-parsing) against the fixed 27-item mandatory acceptance checklist.
+Executed orchestrator instruction `argus-phase-1-remediation-001` in
+full: an independent audit rejected the prior Phase 1 self-assessment
+(`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`) as overstated, citing 10
+concrete findings. All 10 are remediated with real, tested code:
 
-1. **Helius standard RPC + WebSocket adapter** — `HeliusRpcClient`
-   (`ChainProvider`) and `HeliusWebSocketStream` (`LiveChainStream`),
-   credential-gated on `HELIUS_API_KEY` with the exact section-108
-   `LOCAL CREDENTIAL REQUIRED` notice on a missing key. The WebSocket
-   stream never treats a dropped connection as "no new activity" — any
-   read/connect failure raises out of the async generator.
-2. **DexScreener, GeckoTerminal, Jupiter adapters** — current market
-   state, historical-OHLCV-only, and quote/unsigned-order-construction
-   only respectively. `JupiterClient` has no sign/execute/broadcast
-   method anywhere (asserted directly by test).
-3. **Fast-path/truth-path reconciliation** (`ReconciliationEngine`) —
-   implements the mandatory deterministic disconnect/reconnect scenario
-   (A observed → disconnect → B occurs while disconnected → reconnect →
-   reconciliation discovers B; final ledger contains each exactly once),
-   repeated across process-restart and duplicate-delivery variants,
-   against both in-memory fakes and a real Postgres database.
-4. **Durable clock-anomaly detection wired into reconciliation gating**
-   (new this round) — `PersistentClockMonitor` wraps the existing Phase 0
-   `ClockHeartbeat` and persists every wall/monotonic comparison to a new
-   `clock_health_events` table; `ReconciliationEngine` now keeps a wallet
-   `DEGRADED` on an outstanding clock anomaly even when reconciliation
-   itself succeeds, per MASTER_SPEC.md section 17's three independent
-   conditions (provider reconnection + chain reconciliation + clock
-   health recovery).
-5. **Immutable `chain_events` ledger** plus `swaps`, `wallet_stream_state`,
-   `clock_health_events` — UUID event IDs, `first_seen_at`/`confirmed_at`/
-   `finalized_at` kept distinct, dedup unique constraint on
-   `(transaction_signature, wallet_address, event_type)`, least-privilege
-   GRANTs matching the Phase 0 pattern.
-6. **Generic balance-delta swap parser** — all 7 required classifications,
-   11 sanitized golden fixtures (9 required categories + 2 extra). A real
-   `TOKEN_CREATE` misclassification bug was found and fixed before any
-   test existed (an ordinary first-buy-of-a-new-mint swap was wrongly
-   classified as `TOKEN_CREATE`); a regression test documents the exact
-   failure mode. `is_copy_eligible` is mechanically `False` for any
-   ambiguous/`UNKNOWN` result.
-7. **Central P0–P6 priority scheduler** — strict cross-submission
-   ordering verified stable under concurrency; safety classes never
-   dropped; droppable classes dropped only with an explicit reason.
-8. **Provider usage/cost accounting** — today/MTD/30-day-projected
-   credits, 70/85/95% warnings, wired into every real outbound HTTP/RPC
-   call in all 4 adapters and tested.
-9. **HTTP retry/backoff** (new this round) — `argus/providers/retry.py`:
-   retries only transient failures (connection errors, 5xx) with
-   configurable exponential backoff; a well-formed 4xx is never retried;
-   on exhaustion, the last *real* response/exception is
-   returned/re-raised, never fabricated. Wired into all 4 adapters;
-   confirmed live (probe latency for the unreachable REST providers rose
-   from ~215ms to ~2.2s once retry started actually running against the
-   sandbox's real network-egress block).
-10. **Adapter contract-validation fix** (found this round) — Helius's
-    `_rpc()` previously raised a bare `KeyError` on a response missing
-    both `result` and `error`; now raises a typed `HeliusRpcError` naming
-    the malformed response explicitly.
-11. **Provider capability/history/usage probe CLI** — `argus providers
-    probe`/`probe-history`/`usage`. A real bug was found and fixed:
-    `_throttle()` queried a nested `providers.<name>.` config path that
-    does not exist (`config/providers.yaml` merges flat), so every
-    probe's `configured_throttle_per_sec` silently printed `None`.
-    Confirmed fixed live: Helius=5.0/DexScreener=2.0/GeckoTerminal=1.0/
-    Jupiter=2.0.
+1. **No production ingestion orchestration loop → built.** New
+   `IngestionManager` (`src/argus/ingestion/manager.py`) and CLI
+   (`argus ingest run`) compose the WebSocket stream, reconciliation
+   engine, and clock monitor into real, restart-safe, per-wallet runtime
+   behavior for the first time. Every dependency is injectable; a
+   `--test-mode` path (`NullLiveStream`/`NullChainProvider`/in-memory
+   repositories) proves the CLI's own wiring with zero credential, zero
+   network, zero DB.
+2. **Truth-path pagination could lose events → fixed.**
+   `ReconciliationEngine._fetch_all_pages()` implements real Solana
+   `before`/`until` cursor pagination, fails DEGRADED on a
+   non-progressing cursor or safety-ceiling breach, persists the
+   watermark per item via an injectable `commit_hook`, and never advances
+   past an unfetched item.
+3. **Commitment progression not actually stored → fixed.** New
+   append-only `commitment_observations` table (migration `0003`)
+   replaces the `confirmed_at`/`finalized_at` columns, which the dedup
+   unique constraint always blocked from ever being set. A tie-breaking
+   bug in the new `derive_current_state()` was found and fixed before
+   reaching committed code.
+4. **Parsing not connected to persistence → fixed.** `reconcile()` now
+   parses every fetched transaction and persists the versioned
+   classification via a new `SqlSwapRecorder`, linked to the canonical
+   event through a new `RecordOutcome(event_id, is_new)` return type that
+   recovers the real event id on a duplicate delivery.
+5. **Golden evidence is synthetic → honestly PARTIAL.** Re-confirmed via
+   direct `curl` and the proxy's own status endpoint that this sandbox
+   has no reachable chain-data or market-data host. Kept the 11 existing
+   synthetic fixtures, added `tests/golden/fixtures/PROVENANCE.md`
+   labeling every one individually, and report acceptance criterion 15 as
+   NOT TESTED/blocked rather than PASS, per the instruction's own
+   explicit fallback for this case.
+6. **Weak adapter contract validation → fixed.** New
+   `argus.providers.contract` typed validation helpers, used across every
+   adapter; full structural validation of Helius RPC/WS envelopes.
+7. **Usage accounting misses transport failures → fixed.** New
+   `send_with_usage()` centralizes retry+usage-recording so transport
+   exhaustion still produces a terminal usage row; streaming usage is now
+   wired into the manager's real call sites.
+8. **Scheduler starvation not proven → fixed.** Dispatch-count-bounded
+   aging guarantees P0-P3 service under a sustained stream of
+   same-or-higher-priority arrivals; constructor validation and
+   cancellation-safety hardening added.
+9. **Replay coverage absent → fixed.** 6 real `tests/replay` tests (was 0
+   collected), covering raw-evidence immutability, parser determinism,
+   duplicate-delivery idempotency, restart recovery, deterministic
+   commitment derivation, and safe re-parsing under a new parser version.
+10. **Evidence/status accuracy → this handoff and the new checkpoint**
+    score all 26 mandatory acceptance criteria individually (25 PASS, 1
+    honestly NOT TESTED) rather than asserting a blanket PASS.
 
-Full per-item detail and the 27-item PASS/FAIL/NOT TESTED disposition:
-`orchestration/checkpoints/phase_1.md`.
+Full per-finding detail, the complete 26-item disposition, and every
+command actually run: `orchestration/checkpoints/phase_1_remediation_1.md`.
 
 ## Important findings
 
-- Two real logic bugs were found and fixed *before* being caught by any
-  external review: the `TOKEN_CREATE` misclassification (parser) and the
-  flat-vs-nested config path (`_throttle()`), each with a regression test
-  documenting the exact failure mode.
-- A SAVEPOINT bug was also caught during design review (not this task's
-  code, but the underlying `SqlEventRecorder.record()` this task's
-  reconciliation engine depends on): a bare `session.rollback()` on a
-  duplicate-key `IntegrityError` would have wiped out prior
-  successfully-flushed rows in the same multi-row `reconcile()` session,
-  not just the duplicate. Already fixed and tested in an earlier session.
-- This sandbox has no general internet egress (confirmed via `ProxyError:
-  403 Forbidden` on every live REST call attempt) and no `HELIUS_API_KEY`
-  configured (`.env` has the variable present but empty) — acceptance
-  criteria 1–2 are honestly `NOT TESTED`, not fabricated as passing.
+- Two genuine bugs were found and fixed during this round, both caught by
+  dedicated regression tests before reaching committed code: a
+  commitment-state tie-breaking bug in `derive_current_state()` (same
+  rank + same timestamp picked the wrong entry), and a missing-real-
+  event-id-on-duplicate bug (a duplicate chain-event delivery had no way
+  to recover the real, already-persisted event id, which would have
+  violated a foreign key or orphaned a dependent row).
+- This sandbox still has no general internet egress (re-confirmed via
+  direct `curl` to two real hosts and the proxy's own status endpoint,
+  which reports an explicit gateway-level policy denial for both) — this
+  is the same environmental limitation disclosed in every prior handoff
+  on this project, not new.
 - `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is unchanged — still the
-  orchestrator's `argus-phase-1-001` instruction, `STATUS: ACTIVE`. This
-  task did not and could not self-approve any phase;
-  `last_orchestrator_approved_phase` in `docs/BUILD_STATE.md` remains `0`.
+  orchestrator's `argus-phase-1-remediation-001` instruction,
+  `STATUS: ACTIVE`. This task did not and could not self-approve any
+  phase; `last_orchestrator_approved_phase` in `docs/BUILD_STATE.md`
+  remains `0`, and the Phase 0 `approved_commit` is unchanged.
+- All changes stayed strictly within the existing Phase 1 module set
+  (`src/argus/domain`, `src/argus/ingestion`, `src/argus/providers`,
+  `src/argus/cli.py`) — confirmed via `git diff --stat` against the
+  pre-remediation target commit. No Phase 1.5 or later-phase code (no
+  DB-backed wallet discovery, no trade/copy-execution path) was started.
 
 ## Failures or limitations
 
-- **Acceptance criteria 1–2 (live Solana RPC/WebSocket): NOT TESTED.**
-  Blocked by this sandbox's missing `HELIUS_API_KEY` and lack of general
-  internet egress — an environmental limitation, not an architecture gap
-  (the RPC/WS clients themselves are fully built and tested against
-  injectable fakes).
-- **No end-to-end stream-manager orchestration loop.** `HeliusWebSocketStream`,
-  `ReconciliationEngine`, and the priority scheduler are each built and
-  tested in isolation, but there is no continuously-running process
-  (e.g. an `argus ingest run` command) that opens a live WebSocket,
-  manages multiple concurrent per-wallet subscriptions, automatically
-  triggers `reconcile()` on a real disconnect/reconnect, and periodically
-  records streaming usage/clock-health ticks. This is a genuine,
-  disclosed scope gap — not an environmental block — more appropriately
-  built and validated once real credentials/network access exist to
-  check its reconnect/backoff timing against actual Helius WebSocket
-  behavior rather than guessing at it against a fake connector.
-- **Streaming usage recording has no live invocation site.**
-  `StreamingUsageRecord`/`record_streaming()` is implemented and
-  unit-tested in isolation but is never called by any live code path,
-  since no stream-manager loop exists to drive periodic ticks (same root
-  cause as the item above).
-- **`finalized_at` is schema-only.** `chain_events.finalized_at` exists in
-  the schema (kept distinct from `confirmed_at` per section 5/CORE-003)
-  but no current code path populates it — only the confirmed-vs-not-yet-
-  confirmed commitment tier is tracked, not Solana's "finalized" tier.
-- **`tests/replay/` remains an empty placeholder.** The instruction lists
-  `uv run pytest tests/replay -v` among the required validation commands;
-  it was run and honestly recorded as 0 tests collected. No new
-  replay-specific test was judged separately necessary beyond the
-  golden-fixture suite, which already provides deterministic,
-  replayed-transaction-style parser testing — but the empty directory is
-  called out here rather than left unexplained.
-- DexScreener/GeckoTerminal/Jupiter response-contract validation remains
-  a coarse `isinstance(dict)` check, not a full schema validator (only
-  Helius's JSON-RPC envelope was tightened this round, since it has a
-  concrete `result`/`error` contract to validate against).
+- **Acceptance criterion 15 (authenticated real-chain golden fixtures):
+  NOT TESTED / BLOCKED.** This sandbox has no general internet egress and
+  no already-available safe source of authentic transaction data. The 11
+  existing fixtures remain synthetic, individually labeled as such in
+  `tests/golden/fixtures/PROVENANCE.md`. This is not claimed as PASS.
+- **Live Helius RPC/WebSocket connectivity: NOT TESTED** (unchanged from
+  every prior handoff — no `HELIUS_API_KEY` configured and no general
+  internet egress in this sandbox). The real `WebSocketsConnector`
+  wrapper is built but has never been exercised against a live socket.
+- **`PG17_COMPOSE_VALIDATION` remains `DEFERRED_ENVIRONMENTAL_CHECK`**
+  (unchanged, unrelated to this round — see `docs/BUILD_STATE.md`).
+- Coverage on a small number of modules is low for structural reasons,
+  not because the behavior is unverified: `src/argus/ingestion/test_mode.py`
+  (0% via `--cov`) and `src/argus/providers/helius/websocket_connector.py`
+  (0% via `--cov`) are both exercised through the real CLI process in the
+  offline smoke test and (for the connector) only ever meaningfully
+  testable against a live credential — never faked as "tested" in either
+  case. See `orchestration/checkpoints/phase_1_remediation_1.md` section C
+  for the full coverage breakdown.
 
 ## Deferred checks
 
-- `PG17_COMPOSE_VALIDATION` (unchanged, unrelated — see
-  `docs/BUILD_STATE.md`).
+- Acceptance criterion 15 — real-chain golden fixtures (see
+  `ORCHESTRATOR_REVIEW_REQUIRED` above and checkpoint section E item 15).
 - Live Solana RPC/WebSocket connectivity against a real `HELIUS_API_KEY`
-  and real network access (acceptance criteria 1–2).
-- The end-to-end stream-manager orchestration loop (see "Failures or
-  limitations" above) — whether this blocks Phase 1 approval or can be
-  deferred like `PG17_COMPOSE_VALIDATION` is an open question for the
-  orchestrator, see `orchestration/checkpoints/phase_1.md` section L.
+  and real network access.
+- `PG17_COMPOSE_VALIDATION` (unchanged, unrelated).
 
 ## Exact next action requested from orchestrator
 
-Review this Phase 1 build's evidence (`orchestration/checkpoints/phase_1.md`
-and `orchestration/bundles/phase_1.txt`) against the 27 mandatory
-acceptance criteria in instruction `argus-phase-1-001`, and resolve the
-two open questions in the checkpoint's section L (whether criteria 1–2's
-environmental NOT TESTED status and the missing stream-manager loop block
-Phase 1 approval or may be deferred). If accepted, write the next `ACTIVE`
+Review this remediation round's evidence
+(`orchestration/checkpoints/phase_1_remediation_1.md` and
+`orchestration/bundles/phase_1_remediation_1.txt`) against the 26
+mandatory acceptance criteria in instruction
+`argus-phase-1-remediation-001`, and resolve the one open question:
+whether acceptance criterion 15's environmental NOT TESTED/blocked status
+may be accepted as a permanent disposition for this specific criterion
+(the existing synthetic fixtures standing in for it), or whether
+acquisition must be retried from an environment with real network access
+before Phase 1 may be approved. If accepted, write the next `ACTIVE`
 instruction into `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
 (`TARGET_COMMIT` pinned to the exact commit named in this handoff) to
 authorize the next piece of work. Phase 1.5 and all later phases remain

@@ -589,3 +589,111 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
 - git_commit: 28a88f74d28e70542050f5d5e8d9a9d139f26bb8 (code),
   1f0a2ffa73f8e6fde4a855bab62cc4092b78769a (docs: checkpoint, bundle,
   handoff).
+
+### 2026-08-31 — Phase 1 remediation round 1: 10 audit findings closed, real-chain fixtures honestly PARTIAL
+
+- requirement_id: MASTER_SPEC.md section 19 (fast path + truth path),
+  CORE-002/CORE-003 (commitment/evidence integrity), section 21 (golden
+  fixture discipline), section 108 (credential handling).
+- decision: Remediated all 10 findings from an independent orchestrator
+  audit that rejected the prior Phase 1 self-assessment
+  (`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`) as overstated: (1) built
+  `IngestionManager`/`argus ingest run`, the first code path that actually
+  composes the WebSocket stream, reconciliation engine, and clock monitor
+  into continuously-running behavior; (2) replaced single-page truth-path
+  fetching with complete, bounded, cursor-based pagination that fails
+  DEGRADED on a non-progressing cursor or safety-ceiling breach instead of
+  silently truncating a gap; (3) replaced the dead `confirmed_at`/
+  `finalized_at` columns (permanently blocked by the dedup unique
+  constraint) with an append-only `commitment_observations` table and a
+  deterministic `derive_current_state()` query, with regression/conflict
+  rejection; (4) wired the generic parser into real persistence via a new
+  `SqlSwapRecorder`, linked to the canonical event through a new
+  `RecordOutcome(event_id, is_new)` return type that recovers the real
+  event id on a duplicate delivery instead of losing it; (5) determined,
+  via direct `curl` to two real chain-data/market-data hosts and the
+  sandbox's own proxy status endpoint, that this environment still has no
+  general internet egress — kept the 11 existing synthetic fixtures and
+  added `tests/golden/fixtures/PROVENANCE.md` labeling every one
+  individually as synthetic, reporting the real-chain-fixture acceptance
+  criterion honestly as NOT TESTED/blocked per the instruction's own
+  explicit fallback for this case, rather than fabricating provenance;
+  (6) added `argus.providers.contract` typed validation helpers used
+  across every adapter, replacing bare `isinstance(dict)` checks, plus
+  full structural validation of Helius RPC/WS envelopes; (7) centralized
+  retry+usage-recording in `send_with_usage()` so `httpx.TransportError`
+  exhaustion still produces a terminal usage row before re-raising, and
+  wired streaming usage accounting into the new manager's real call
+  sites; (8) added a dispatch-count-bounded starvation-aging algorithm to
+  the priority scheduler so P0-P3 requests cannot be starved indefinitely
+  by a sustained stream of same-or-higher-priority arrivals, plus
+  constructor validation and cancellation-safety hardening; (9) added 6
+  real `tests/replay` tests (was 0 collected) covering raw-evidence
+  immutability, parser determinism, duplicate-delivery idempotency,
+  process-restart recovery, deterministic commitment-state derivation, and
+  safe re-parsing under a new parser version; (10) this entry, together
+  with `orchestration/checkpoints/phase_1_remediation_1.md`, scores all 26
+  mandatory acceptance criteria individually (25 PASS, 1 honestly NOT
+  TESTED) rather than asserting a blanket PASS. Two genuine bugs were
+  found and fixed along the way, both caught by dedicated regression
+  tests before reaching committed code: a commitment-state tie-breaking
+  bug in `derive_current_state()`, and the missing-real-event-id-on-
+  duplicate bug described under finding 4 above.
+- reason: An independent audit is a stronger integrity check than
+  self-assessment, and it correctly identified that several "PASS with
+  deferred environmental validation" claims were actually masking absent
+  runtime paths (an orchestration loop that didn't exist, a commitment
+  column that could never be written, a parser never wired to its own
+  table) rather than genuine environment-only gaps. Closing all 10 with
+  real, tested code — rather than re-labeling the same gaps — is what
+  MASTER_SPEC.md section 108's evidence-accuracy requirement demands.
+  Acceptance criterion 15 (real-chain golden fixtures) remains honestly
+  `NOT TESTED` because it genuinely is blocked by this sandbox's lack of
+  general internet egress (re-confirmed directly via `curl` and the
+  proxy's own status endpoint) and the absence of any already-available
+  safe source of authentic transaction data within it — not a gap this
+  task could close by writing more code, and the instruction's own text
+  anticipates exactly this outcome for exactly this case.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-001` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 32c2898ab8c278c2f75f4a2f40fedd9d35b24b08`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ONLY`, `AUTHORIZED_PHASE: 1`,
+  `APPROVES_PHASE: NONE`; all mandatory session-start preconditions
+  verified against `docs/BUILD_STATE.md` and git history before this task
+  began, per the instruction's own required steps).
+- impact: Modified `src/argus/domain/{chain_events,swaps}.py`; new
+  `src/argus/domain/commitment.py`; substantially rewritten
+  `src/argus/ingestion/reconciliation.py`; new
+  `src/argus/ingestion/{commitment,commitment_repository,manager,
+  swap_repository,test_mode}.py`; modified
+  `src/argus/ingestion/event_repository.py`; new
+  `src/argus/providers/{contract,http}.py`; new
+  `src/argus/providers/helius/websocket_connector.py`; modified
+  `src/argus/providers/{__init__,scheduler}.py` and every provider
+  adapter client; modified `src/argus/cli.py` (new `argus ingest run`
+  command); migration `0003` (commitment_observations table, drops dead
+  `confirmed_at`/`finalized_at` columns, adds a swaps re-parse dedup
+  constraint); new `tests/replay/` (6 tests); new
+  `tests/golden/fixtures/PROVENANCE.md`; substantially expanded
+  `tests/unit/test_{commitment,reconciliation,priority_scheduler,
+  provider_adapters,ingestion_manager}.py`; new
+  `tests/unit/test_ingestion_manager.py`; rewritten
+  `tests/integration/test_reconciliation_sql.py`. 56 net new tests (204
+  -> 260). Full suite: 260 passed, 84% coverage, ruff clean, mypy clean,
+  alembic downgrade-to-base/upgrade-to-head clean.
+  `orchestration/checkpoints/phase_1_remediation_1.md` and
+  `orchestration/bundles/phase_1_remediation_1.txt` record the full
+  26-item PASS/NOT-TESTED disposition. The prior Phase 1 evidence
+  (`orchestration/checkpoints/phase_1.md`,
+  `orchestration/bundles/phase_1.txt`) is preserved unmodified as
+  immutable history. `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not
+  modified; `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase`
+  remains `0` and the Phase 0 `approved_commit` is unchanged — this task
+  did not and could not self-approve Phase 1, and Phase 1.5 remains
+  forbidden and unattempted.
+- git_commit: 83bb38497ac3af1402f38dabee6858e00ce2e9fb (last code commit
+  of this round, finding #5's `PROVENANCE.md`); see
+  `orchestration/checkpoints/phase_1_remediation_1.md` section B for the
+  complete per-finding commit list (`6320af3`, `934a9fd`, `9061009`,
+  `acb93b8`, `b84884c`, `83bb384`).
