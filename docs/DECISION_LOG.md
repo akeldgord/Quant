@@ -1379,6 +1379,6 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   instruction explicitly approves it.
   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified; no
   Phase 2 work was started.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT (last code commit of
+- git_commit: f334f70908e9744940571f7caffd29c515eb0dac (last code commit of
   this spike; a final docs-only commit follows for this log entry, the
   checkpoint, the bundle, and the handoff).
