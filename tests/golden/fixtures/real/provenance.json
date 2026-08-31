@@ -2,7 +2,7 @@
   "real_mainnet_dca_close_dual_asset_transfer_in": {
     "category": "real_mainnet_dca_close_dual_asset_transfer_in",
     "chain": "solana",
-    "evidence_chain_hash": "562f44ebb6d1c246fa389335869c3819638c860c241059dbdaa68f681c78c207",
+    "evidence_chain_hash": "71a4ed3baa6508d87a9f62d701de557df4c67c6f97af8c832c18a604df375b03",
     "expectation": {
       "asset_deltas": [
         {
@@ -43,7 +43,7 @@
         "wallet_address": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.295805+00:00",
+    "imported_at": "2026-08-31T15:55:46.465264+00:00",
     "observed_classification": "UNKNOWN",
     "observed_confidence": "0.000",
     "observed_is_copy_eligible": false,
@@ -56,6 +56,11 @@
     "slot": 292574497,
     "transaction_version": "legacy",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "22e5dea87dd24c63c69a3bbf0f97ab914a2ea010cd98eb5b6b2cebabd514c860"
+      },
       {
         "applied": true,
         "name": "unwrap_json_array",
@@ -101,10 +106,101 @@
       "raw_ls_tree_line": "100644 blob 4afec180d7a7ab59a637a93bf7d60283f09514ba\tsolana/data/jupiterDca_CloseDca_0.json"
     }
   },
+  "real_mainnet_failed_nft_sale": {
+    "category": "real_mainnet_failed_nft_sale",
+    "chain": "solana",
+    "evidence_chain_hash": "e5de40b7e13bf536122bd066fb4a22e96423b5f91daa91c1d6fa781fccd9e2c1",
+    "expectation": {
+      "asset_deltas": [],
+      "classification": "UNKNOWN",
+      "confidence_rule": "exact: a transaction that failed on-chain (meta.err set) always parses at zero confidence, UNKNOWN, with no asset deltas reported, in v1 -- see argus.parsing.generic_parser.compute_asset_deltas, which returns an empty tuple for any transaction with a non-null meta.err rather than reporting pre/post balance noise from an aborted partial execution as if it were a completed trade",
+      "expected_confidence": "0.000",
+      "expected_input_amount_raw": null,
+      "expected_input_mint": null,
+      "expected_output_amount_raw": null,
+      "expected_output_mint": null,
+      "is_copy_eligible": false,
+      "network_fee_raw": 5000,
+      "reviewer": {
+        "evidence_refs": [
+          "milktoastlab/SolanaNFTBot's own magicEdenFailedTx.ts naming and its embedded meta.err InstructionError payload -- a genuine failed Magic Eden marketplace sale instruction"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "meta.err is {'InstructionError': [0, {'Custom': 1}]} -- a genuine on-chain program error, confirming this Magic Eden sale instruction failed after only partial execution. Solana still charges the network fee (5000 lamports) to the fee payer even on failure, which is why network_fee_raw is nonzero while every asset delta is empty: no asset transfer this transaction attempted actually completed as intended, so reporting any balance movement as a real trade would be wrong regardless of what the raw preBalances/postBalances happen to show for a transaction that aborted partway through."
+      },
+      "transaction_failed": true,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "L9xDD9dUAcM8r5NHF6SJZRtd4FBpiDUJCbkKF2msWeL"
+      }
+    },
+    "imported_at": "2026-08-31T15:55:46.473956+00:00",
+    "observed_classification": "UNKNOWN",
+    "observed_confidence": "0.000",
+    "observed_is_copy_eligible": false,
+    "original_sha256": "a4d696b3763e36355cf00d00cd794f433bff14ae61c0179e8afaf58b09ee5bd4",
+    "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
+    "sanitized_sha256": "98cdae10a3b016833a65227b450d2c00b68e7f5d695ff5490867bf90490f9321",
+    "signature": "5D3kshpCeGwhxBBPRQXmD48XvENJKXSwR79v6ceZBRAS41d2JeqMv3d2Yy9aZ1LADwQdDiop4ErRihnfYudfRJBy",
+    "slot": 124028515,
+    "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "db3d782e0a652f36bdbd6af3db806320216bb4ddfb624e3ede91f53cc7b7bfd7"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_array",
+        "output_sha256": "98cdae10a3b016833a65227b450d2c00b68e7f5d695ff5490867bf90490f9321"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "98cdae10a3b016833a65227b450d2c00b68e7f5d695ff5490867bf90490f9321"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "98cdae10a3b016833a65227b450d2c00b68e7f5d695ff5490867bf90490f9321"
+      }
+    ],
+    "upstream_commit": "e77710555004db314117d435f0d2b4f1dca54a77",
+    "upstream_git_blob_sha1": "9ad03de7a5ca3e82b946603cbedd70608f21df05",
+    "upstream_license": {
+      "attribution": "Copyright (c) 2021 milktoastlab, https://github.com/milktoastlab/SolanaNFTBot",
+      "bytes_sha256": "b72ac80be95016d54d4887763b07fb3d2820fb44a82b6d4a3c62aabe9b145472",
+      "compatibility_decision": "MIT is fully permissive: reusing one immutable captured getTransaction fixture file verbatim (extracted deterministically from its TypeScript module wrapper, never by executing the file -- see extract_ts_const_export_default), with attribution, is squarely within its terms.",
+      "path": "LICENSE",
+      "spdx_id": "MIT",
+      "tree_attestation": {
+        "blob_sha1": "fc9057b3d4349193e1e7232b542e07997c84d2df",
+        "captured_at": "2026-08-31T15:53:32.451919+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob fc9057b3d4349193e1e7232b542e07997c84d2df\tLICENSE"
+      }
+    },
+    "upstream_path": "src/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts",
+    "upstream_path_note": "A captured Magic Eden NFT sale transaction that failed on-chain (meta.err set to a genuine InstructionError). Captured as a TypeScript module (`const saleTx: ParsedConfirmedTransaction = {...}; export default saleTx;`) rather than bare JSON -- extracted deterministically by extract_ts_const_export_default (round 5, finding #3), never by executing/importing the .ts file. Zero bytes of the captured transaction data changed.",
+    "upstream_repo": "milktoastlab/SolanaNFTBot",
+    "upstream_tree_attestation": {
+      "blob_sha1": "9ad03de7a5ca3e82b946603cbedd70608f21df05",
+      "captured_at": "2026-08-31T15:53:32.449116+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "src/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts",
+      "raw_ls_tree_line": "100644 blob 9ad03de7a5ca3e82b946603cbedd70608f21df05\tsrc/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts"
+    }
+  },
   "real_mainnet_multi_hop_swap": {
     "category": "real_mainnet_multi_hop_swap",
     "chain": "solana",
-    "evidence_chain_hash": "2d6dbd6cbee993fe88f25e380e921a6ca643406d670b75c7f5ae4716d43364da",
+    "evidence_chain_hash": "0b8429200acb07afea202307b45f1455b657fd24947c4ddd4cd33818ae6e5b49",
     "expectation": {
       "asset_deltas": [
         {
@@ -151,7 +247,7 @@
         "wallet_address": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.289142+00:00",
+    "imported_at": "2026-08-31T15:55:46.457728+00:00",
     "observed_classification": "SWAP_COMPLEX",
     "observed_confidence": "0.700",
     "observed_is_copy_eligible": false,
@@ -164,6 +260,11 @@
     "slot": 260327797,
     "transaction_version": "0",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "86187b5e4d46a259faed6d48927fabdccc203a59ac827d1ddcb3ac4c27faeb0e"
+      },
       {
         "applied": true,
         "name": "unwrap_json_array",
@@ -209,10 +310,116 @@
       "raw_ls_tree_line": "100644 blob b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35\tsolana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json"
     }
   },
+  "real_mainnet_orca_increase_liquidity_multi_asset_outflow": {
+    "category": "real_mainnet_orca_increase_liquidity_multi_asset_outflow",
+    "chain": "solana",
+    "evidence_chain_hash": "fb40b1f249b2815474e7e24852fb8fa4a4c39a273146b411d107073609e59ae8",
+    "expectation": {
+      "asset_deltas": [
+        {
+          "account_context": null,
+          "decimals": 6,
+          "mint": "5LafQUrVco6o7KMz42eqVEJ9LW31StPyGjeeu5sKoMtA",
+          "raw_amount": -66769884520,
+          "ui_amount": "-66769.884520"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "SOL",
+          "raw_amount": -12056133,
+          "ui_amount": "-0.012056133"
+        }
+      ],
+      "classification": "UNKNOWN",
+      "confidence_rule": "exact: two or more distinct assets given up together with no offsetting inflow always parses at zero confidence, UNKNOWN, in v1 -- see round 5, finding #4's ambiguous-multi-asset-outflow branch",
+      "expected_confidence": "0.000",
+      "expected_input_amount_raw": null,
+      "expected_input_mint": null,
+      "expected_output_amount_raw": null,
+      "expected_output_mint": null,
+      "is_copy_eligible": false,
+      "network_fee_raw": 10015,
+      "reviewer": {
+        "evidence_refs": [
+          "quellen-sol/ingestooor's own crates/parsers/tests/orca/orca_add_liq.json naming and its embedded instruction data (program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc, a genuine Orca Whirlpool increaseLiquidity call)"
+        ],
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "rationale": "Two distinct assets move for this wallet, both outflows, with nothing received back into any account it owns: SOL decreases by 12,056,133 lamports net of the 10,015-lamport fee it paid as fee payer (the temp wSOL account is funded then closed back to the wallet within the same transaction, so only the net SOL cost of the deposit remains as a wallet-level delta), and a single SPL token (5LafQUrVco6o..., 6 decimals) decreases from 66,769.88452 to 0 -- a full deposit of that token into the pool. The LP token / position NFT this deposit produces is held by a program-derived vault account (ARs3pZiSyCutnm3X83MwP8zeg1BWCb5F7xeGszp4gHiz), not by this wallet directly, so no offsetting inflow is ever visible from this wallet's own perspective. Only one non-SOL asset is directly wallet-owned here (the LP_ACTION heuristic needs two or more non-SOL assets in the same direction to fire), so this falls to the ambiguous-multi-asset-outflow branch instead of the LP_ACTION label -- the emitted classification is UNKNOWN, not LP_ACTION, but the substantive requirement (a real multi-token-account liquidity-provision transaction, correctly never treated as a confident single-asset trade) is satisfied either way: balance deltas alone cannot prove this wallet's true net economic position without instruction-level evidence of the SOL leg's role, so confident single-asset resolution would be wrong here too."
+      },
+      "transaction_failed": false,
+      "wallet_perspective": {
+        "method": "accountKeys[0] -- the transaction's fee payer and signer.",
+        "wallet_address": "6jDxfurJaWDBoFyyLAuJBZi24vynka6EuEPbvS88RRuu"
+      }
+    },
+    "imported_at": "2026-08-31T15:55:46.469982+00:00",
+    "observed_classification": "UNKNOWN",
+    "observed_confidence": "0.000",
+    "observed_is_copy_eligible": false,
+    "original_sha256": "4d7d198c2d2e62a71f0158b689974e35e893c72a2c40894b1139962834beb5dd",
+    "parser_version": "generic_balance_delta_v1",
+    "quarantine_reason": null,
+    "quarantined": false,
+    "sanitized_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc",
+    "signature": "2GD2R5FJUF9cX6gfuVLkB8NNS7APfozLm1M3Cq77hXc7HYvLZJJDM4sdHG7sWy8aTbxY8d5CGAJfdcz2cJwgJ1sN",
+    "slot": 281957400,
+    "transaction_version": "0",
+    "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "4d7d198c2d2e62a71f0158b689974e35e893c72a2c40894b1139962834beb5dd"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_array",
+        "output_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc"
+      }
+    ],
+    "upstream_commit": "74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e",
+    "upstream_git_blob_sha1": "db69237886a1d0978e9aa6c50d14638203dfa0bc",
+    "upstream_license": {
+      "attribution": "quellen-sol/ingestooor contributors, https://github.com/quellen-sol/ingestooor",
+      "bytes_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "compatibility_decision": "GPL-3.0 is strong copyleft over the repository's own source code, but what is reused here is one immutable, already-public on-chain transaction data file (a JSON getTransaction capture, not source code, not linked against, not modified) verbatim, with the exact license text and attribution preserved alongside it -- reproducing one unmodified data file verbatim with its license and notices intact is squarely within GPL-3.0's own terms for verbatim copying (section 4), and no derivative software work is created or distributed.",
+      "path": "LICENSE",
+      "spdx_id": "GPL-3.0",
+      "tree_attestation": {
+        "blob_sha1": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7",
+        "captured_at": "2026-08-31T15:53:32.456816+00:00",
+        "mode": "100644",
+        "object_type": "blob",
+        "path": "LICENSE",
+        "raw_ls_tree_line": "100644 blob f288702d2fa16d3cdf0035b15a9fcbc552cd88e7\tLICENSE"
+      }
+    },
+    "upstream_path": "crates/parsers/tests/orca/orca_add_liq.json",
+    "upstream_path_note": "Orca Whirlpool (program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc) increaseLiquidity call: the signer creates a temporary wrapped-SOL account, deposits it plus an existing SPL token into the Whirlpool position, then closes the temp account back to itself -- a genuine multi-token-account liquidity-provision transaction. Already a bare getTransaction-shaped object (transaction/meta/slot at the top level, plus harmless extra indexInBlock/slotSecondIdx/version keys this project's shape-check does not forbid) -- no extraction needed. Zero bytes of the captured transaction data changed.",
+    "upstream_repo": "quellen-sol/ingestooor",
+    "upstream_tree_attestation": {
+      "blob_sha1": "db69237886a1d0978e9aa6c50d14638203dfa0bc",
+      "captured_at": "2026-08-31T15:53:32.454398+00:00",
+      "mode": "100644",
+      "object_type": "blob",
+      "path": "crates/parsers/tests/orca/orca_add_liq.json",
+      "raw_ls_tree_line": "100644 blob db69237886a1d0978e9aa6c50d14638203dfa0bc\tcrates/parsers/tests/orca/orca_add_liq.json"
+    }
+  },
   "real_mainnet_partial_sell": {
     "category": "real_mainnet_partial_sell",
     "chain": "solana",
-    "evidence_chain_hash": "b825a4f6c981bbadd569e92918784190a377322a77ea0a35dcaa6be015b62c89",
+    "evidence_chain_hash": "0ce8c824a02077bfdbe6e4875fab18a7ebfc479f7cc5ec3174b1c64a8be0c305",
     "expectation": {
       "asset_deltas": [
         {
@@ -252,7 +459,7 @@
         "wallet_address": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.292533+00:00",
+    "imported_at": "2026-08-31T15:55:46.461672+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -265,6 +472,11 @@
     "slot": 305539244,
     "transaction_version": "0",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "fd5d50ac17558513a4e6880cb27326f44cc3adf8611460969a5ecd6e2aa6b662"
+      },
       {
         "applied": true,
         "name": "unwrap_json_array",
@@ -313,7 +525,7 @@
   "real_mainnet_sol_to_token_swap": {
     "category": "real_mainnet_sol_to_token_swap",
     "chain": "solana",
-    "evidence_chain_hash": "c0db13755238e73de9f9ad21e57e0fdd466976392125f2d3b91109a812bc18e2",
+    "evidence_chain_hash": "d53b35b9d7c31c8f5a11299729f26a4e3ffe535df91e4ad0c7aa27910873b15a",
     "expectation": {
       "asset_deltas": [
         {
@@ -353,7 +565,7 @@
         "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.275799+00:00",
+    "imported_at": "2026-08-31T15:55:46.442333+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -366,6 +578,11 @@
     "slot": 290506981,
     "transaction_version": "legacy",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "b5428db5e9f8f15427ea8a847e34b8a16c9c51e8c33bf682607727225ad1f29a"
+      },
       {
         "applied": true,
         "name": "unwrap_json_array",
@@ -414,7 +631,7 @@
   "real_mainnet_sol_transfer_multi": {
     "category": "real_mainnet_sol_transfer_multi",
     "chain": "solana",
-    "evidence_chain_hash": "199c3131caea4342ada2ec98a3eac1fc482e404c0dff8009e02571b8da0b2230",
+    "evidence_chain_hash": "932fd54c041b2ab4db8c09216f93dae3eb3408b10b13ca09bfa7a96cc6b07468",
     "expectation": {
       "asset_deltas": [
         {
@@ -447,7 +664,7 @@
         "wallet_address": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.270947+00:00",
+    "imported_at": "2026-08-31T15:55:46.434522+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -460,6 +677,11 @@
     "slot": 419246800,
     "transaction_version": "legacy",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "bc3d73b38086d48cace8811cb841129b510e1b2f23933777953f498ff127e20b"
+      },
       {
         "applied": false,
         "name": "unwrap_json_array",
@@ -508,7 +730,7 @@
   "real_mainnet_sol_transfer_received": {
     "category": "real_mainnet_sol_transfer_received",
     "chain": "solana",
-    "evidence_chain_hash": "b2089e9f08b56df545b62e1320a23ba9f9a13f0351aa2258293344bc3ec4fbcb",
+    "evidence_chain_hash": "e356c568ec0f5b756088293d6ddfc9e3322e839c28b81bde30e208c75fa93a1f",
     "expectation": {
       "asset_deltas": [
         {
@@ -541,7 +763,7 @@
         "wallet_address": "3eF3iBQqi2DmDLS7o9y8gG7necF5VBbwYy5gqF7sh899"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.268778+00:00",
+    "imported_at": "2026-08-31T15:55:46.431221+00:00",
     "observed_classification": "TRANSFER_IN",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -554,6 +776,11 @@
     "slot": 399683256,
     "transaction_version": "legacy",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "1a6f6490fb750dcd28086eac4a6871aebc25115c483c25e623284a62099c7503"
+      },
       {
         "applied": false,
         "name": "unwrap_json_array",
@@ -602,7 +829,7 @@
   "real_mainnet_sol_transfer_single": {
     "category": "real_mainnet_sol_transfer_single",
     "chain": "solana",
-    "evidence_chain_hash": "7f6cfb9386bbe0648a605261a5638ac0868754458fcb799684c673955f44ec04",
+    "evidence_chain_hash": "94cecd618474104ae1fb953f8332f6ad96d871d00f725b317a3e76a3c18afa8f",
     "expectation": {
       "asset_deltas": [
         {
@@ -635,7 +862,7 @@
         "wallet_address": "4Y5YjAPB4hMdCsiFy7BaBSscyiAvB7cuAbhxnBZ5xmgy"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.266302+00:00",
+    "imported_at": "2026-08-31T15:55:46.427593+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -648,6 +875,11 @@
     "slot": 399683256,
     "transaction_version": "legacy",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "1a6f6490fb750dcd28086eac4a6871aebc25115c483c25e623284a62099c7503"
+      },
       {
         "applied": false,
         "name": "unwrap_json_array",
@@ -696,7 +928,7 @@
   "real_mainnet_token_to_sol_swap": {
     "category": "real_mainnet_token_to_sol_swap",
     "chain": "solana",
-    "evidence_chain_hash": "bf39ed6efca08bbb24546ac1304d9f70cdea5da5ff4b9bf75e64d8b647211cde",
+    "evidence_chain_hash": "716cceaef7f491ecd821e3d0c467aa8958058cdf4d4df1628a47d771c0f71a04",
     "expectation": {
       "asset_deltas": [
         {
@@ -736,7 +968,7 @@
         "wallet_address": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.279250+00:00",
+    "imported_at": "2026-08-31T15:55:46.446635+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -749,6 +981,11 @@
     "slot": 292734971,
     "transaction_version": "0",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "37eea19a5dbe1b7416397c4d8bf0347e93fb65386df7fb8c348f98043cc9fea0"
+      },
       {
         "applied": true,
         "name": "unwrap_json_array",
@@ -797,7 +1034,7 @@
   "real_mainnet_token_to_usdc_swap": {
     "category": "real_mainnet_token_to_usdc_swap",
     "chain": "solana",
-    "evidence_chain_hash": "71bf6384c9fd586a0f2d51e1b36652316f1015f97e778c0b5a332ad4742814d8",
+    "evidence_chain_hash": "d52bb2157d8e605ad4be2e196b7ce8b33599033448d8ea382fbeff58739f54f4",
     "expectation": {
       "asset_deltas": [
         {
@@ -837,7 +1074,7 @@
         "wallet_address": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.283972+00:00",
+    "imported_at": "2026-08-31T15:55:46.451701+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -850,6 +1087,11 @@
     "slot": 302096845,
     "transaction_version": "0",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "146d4462119960d14cb97637dcade67995f0ca386cf13a837933adc356ff4a45"
+      },
       {
         "applied": true,
         "name": "unwrap_json_array",
@@ -898,7 +1140,7 @@
   "real_mainnet_usdc_transfer": {
     "category": "real_mainnet_usdc_transfer",
     "chain": "solana",
-    "evidence_chain_hash": "29bd85b019862693fa5c73b5adce7ce9eb2da8069499ed1976e57a4f4ffdebb7",
+    "evidence_chain_hash": "4f6acaab65884a36f1b2d22038cb39b6c5a29f9d4970e2eb65fa6b5034bfbf44",
     "expectation": {
       "asset_deltas": [
         {
@@ -931,7 +1173,7 @@
         "wallet_address": "3V9bd3EN5aNuhE4RiHGbZ1eZakJ1F9cDb8V4YLjCG8cg"
       }
     },
-    "imported_at": "2026-08-31T15:40:14.273327+00:00",
+    "imported_at": "2026-08-31T15:55:46.438114+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -944,6 +1186,11 @@
     "slot": 419685246,
     "transaction_version": "legacy",
     "transform_manifest": [
+      {
+        "applied": false,
+        "name": "extract_ts_const_export_default",
+        "output_sha256": "7f70d59e2e59b87544e418e425a8c48eef1b668be36d45a011d9a18461edfb8e"
+      },
       {
         "applied": false,
         "name": "unwrap_json_array",

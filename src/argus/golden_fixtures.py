@@ -54,6 +54,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -315,6 +316,34 @@ def _reparse_ls_tree_line(line: str) -> tuple[str, str, str, str]:
     return mode, object_type, blob_sha1, tree_path
 
 
+_TS_CONST_EXPORT_RE = re.compile(r"=\s*(\{.*\})\s*\n\nexport default\s+\w+;\s*\n?\Z", re.DOTALL)
+
+
+def _extract_ts_const_export_default(raw_bytes: bytes) -> tuple[bytes, bool]:
+    """Some upstream repositories capture a ``getTransaction`` payload as
+    a TypeScript module exporting one const object literal (``const x: T
+    = {...};`` ... ``export default x;``) rather than storing bare JSON
+    (Phase 1 remediation round 5, finding #3). Detects that exact shape
+    and extracts the JSON object text deterministically -- by regex over
+    the raw bytes, never by executing/importing the ``.ts`` file -- so
+    ``--input`` can be the exact unmodified raw upstream ``.ts`` bytes.
+    Returns the bytes unchanged (with ``applied=False``) for anything
+    that does not match, including bytes that are already plain JSON."""
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_bytes, False
+    match = _TS_CONST_EXPORT_RE.search(text)
+    if match is None:
+        return raw_bytes, False
+    candidate = match.group(1)
+    try:
+        json.loads(candidate)
+    except json.JSONDecodeError:
+        return raw_bytes, False
+    return candidate.encode("utf-8"), True
+
+
 def _unwrap_json_array(payload: Any) -> tuple[Any, bool]:
     """Several upstream repositories' own fixture convention wraps one
     captured payload in a single-element JSON array (``[{...}]``) rather
@@ -377,20 +406,33 @@ def _canonical_json_bytes(payload: Any) -> bytes:
 def _run_transform_pipeline(
     raw_bytes: bytes,
 ) -> tuple[dict[str, Any], bytes, tuple[TransformStep, ...]]:
-    """The single deterministic pipeline -- array-unwrap, then
-    envelope-unwrap, then require-shape, then canonicalize -- that
-    derives a sanitized fixture from raw upstream bytes. Run once at
-    import time and replayed again, from nothing but the preserved raw
-    source bytes, at validation time (Phase 1 remediation round 4,
-    finding #2): the two call sites sharing this exact function is what
-    makes validation a genuine independent rebuild, not just a
-    re-comparison of a stored hash against itself."""
+    """The single deterministic pipeline -- TS-const-export extraction,
+    then array-unwrap, then envelope-unwrap, then require-shape, then
+    canonicalize -- that derives a sanitized fixture from raw upstream
+    bytes. Run once at import time and replayed again, from nothing but
+    the preserved raw source bytes, at validation time (Phase 1
+    remediation round 4, finding #2): the two call sites sharing this
+    exact function is what makes validation a genuine independent
+    rebuild, not just a re-comparison of a stored hash against itself."""
+    steps: list[TransformStep] = []
+
+    ts_bytes, ts_applied = _extract_ts_const_export_default(raw_bytes)
+    steps.append(
+        TransformStep(
+            name="extract_ts_const_export_default",
+            applied=ts_applied,
+            # This step runs before JSON parsing (its whole job is
+            # producing JSON-parseable text from a non-JSON .ts module),
+            # so its output is hashed as raw bytes -- every later step
+            # hashes the canonicalized JSON of the payload object instead.
+            output_sha256=hashlib.sha256(ts_bytes).hexdigest(),
+        )
+    )
+
     try:
-        payload: Any = json.loads(raw_bytes)
+        payload: Any = json.loads(ts_bytes)
     except json.JSONDecodeError as exc:
         raise RealChainFixtureError(f"not valid JSON: {exc}") from exc
-
-    steps: list[TransformStep] = []
 
     payload, array_applied = _unwrap_json_array(payload)
     steps.append(

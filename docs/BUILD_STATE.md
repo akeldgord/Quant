@@ -42,46 +42,45 @@ known_blockers:
      record. Per explicit orchestrator instruction, this deferred check does
      NOT block Phase 1, but IS required before live readiness can be
      approved."
-  - "REALCHAIN_GOLDEN_FIXTURES = PARTIAL_6_OF_9_CATEGORIES. Orchestrator
-     instruction argus-phase-1-remediation-002 (finding #12) required
-     authentic captured real-chain golden transaction fixtures, sourced
-     via this sandbox's read-only GitHub access (general RPC/market-data
-     egress remains confirmed blocked -- re-verified directly via
-     `argus providers probe`, distinct from the GitHub git-clone path
-     which does work). Round 2 imported 4 real fixtures from
-     solana-labs/explorer (MIT), covering the 'simple transfer' required
-     category from both perspectives plus two additional real data
-     points. Round 3 (argus-phase-1-remediation-003, finding #1) searched
-     DEX/AMM program repositories (Raydium, Orca/Whirlpools, Phoenix,
-     OpenBook, Meteora) and several general-purpose Solana
-     transaction-parser repositories, and imported 6 more real fixtures
-     from 0xjeffro/tx-parser (MPL-2.0), covering SOL-to-token swap,
-     token-to-SOL swap, token-to-USDC swap, multi-hop swap, and partial
-     sell -- genuinely 6 of 9 round-1-required categories real-chain
-     evidenced. Round 3 also imported a sixth 0xjeffro/tx-parser fixture
-     (a Jupiter DCA order-close) and counted it toward a seventh
-     category, 'ambiguous multi-asset transaction' -- round 4
-     (argus-phase-1-remediation-004, finding #1) independently audited
-     that count and rejected it: the fixture's own round-3 documentation
-     already disclosed that this project's parser classifies it
-     TRANSFER_IN at confidence 1.000, not UNKNOWN, so it does not meet
-     this category's actual bar (the parser itself must resolve as
-     unresolved/ineligible, not merely have an underlying transaction
-     that is structurally multi-asset). Renamed to
-     `real_mainnet_dca_close_dual_asset_transfer_in` and kept as an
-     additional real-chain data point, mapped to no required category --
-     see tests/golden/fixtures/real/SEARCH_LOG.md's 'Round 4 correction'
-     section for the full disposition. Round 3's own checkpoint and
-     phase-history row below are left unmodified as immutable history of
-     what was claimed at the time. The remaining 3 categories
-     ('ambiguous transaction' -- now genuinely open again, 'multiple
-     token-account / LP-style action', and a genuinely failed on-chain
-     transaction) remain honestly NOT TESTED -- no repository checked
-     across any round embeds any of them; see
-     tests/golden/fixtures/real/SEARCH_LOG.md for the full search log
-     (across all rounds). Closing this out fully requires either an
-     environment with real RPC egress to capture one directly, or a
-     not-yet-checked repository that happens to embed one."
+  - "REALCHAIN_GOLDEN_FIXTURES = 9_OF_9_CATEGORIES_ONE_WITH_CAVEAT (round
+     5, findings #1/#2/#3/#4 -- see below for how this improved on round
+     4's honestly-reported 6/9). Round 2 imported 4 real fixtures from
+     solana-labs/explorer (MIT); round 3 imported 6 more from
+     0xjeffro/tx-parser (MPL-2.0); together these evidenced 6 of 9
+     required categories: 'simple transfer' (both perspectives),
+     SOL-to-token swap, token-to-SOL swap, token-to-USDC swap, multi-hop
+     swap, and partial sell. Round 5 finding #4 fixed the parser's
+     ambiguous-multi-asset handling, which as a side effect makes
+     `real_mainnet_dca_close_dual_asset_transfer_in` (imported in round
+     3, excluded from category count by round 4's correction below)
+     resolve to `UNKNOWN`, ineligible -- satisfying category 7,
+     'ambiguous multi-asset transaction', with no new fixture needed.
+     Round 5 finding #3 searched three named candidate repositories and
+     imported two more real fixtures: `real_mainnet_failed_nft_sale`
+     (milktoastlab/SolanaNFTBot, MIT -- a genuine failed on-chain Magic
+     Eden sale, `meta.err` set, extracted from its TypeScript-module
+     wrapper via a new deterministic `extract_ts_const_export_default`
+     transform step), satisfying category 9, 'failed on-chain
+     transaction', cleanly; and
+     `real_mainnet_orca_increase_liquidity_multi_asset_outflow`
+     (quellen-sol/ingestooor, GPL-3.0 -- a genuine Orca Whirlpool
+     increaseLiquidity call), mapped to category 8, 'multiple
+     token-account/LP-style action', **with an explicit caveat**: the
+     parser's own `LP_ACTION` label does not fire for this specific
+     transaction (only one non-SOL asset is directly signer-owned; the
+     LP position is held by a program-derived vault account instead), so
+     it resolves via the ambiguous-multi-asset-outflow branch to
+     `UNKNOWN` instead -- the substantive requirement (a real
+     multi-token-account liquidity transaction, correctly never a
+     confident single-asset trade) is satisfied, the specific label is
+     not. **All 9 of 9 round-1-required categories now have real-chain
+     evidence**, 8 without caveat and 1 (LP action) with the caveat above
+     -- see tests/golden/fixtures/real/SEARCH_LOG.md's 'Round 5' section
+     for the full search log, candidate-repository evaluation, and
+     license-compatibility reasoning (including for GPL-3.0, reused here
+     as one immutable verbatim data file, not linked code). Round 2/3/4's
+     own checkpoints and phase-history rows below are left unmodified as
+     immutable history of what was claimed at the time."
 ```
 
 ## Phase history

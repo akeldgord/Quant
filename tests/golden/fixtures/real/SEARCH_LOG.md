@@ -289,3 +289,119 @@ fixture was found this round (see the correction section above), so
 neither of finding #3's specific `UNKNOWN`+ineligible assertions apply
 yet -- they remain to be exercised once a fixture for either category is
 actually sourced.
+
+## Round 5 (argus-phase-1-remediation-005): fixture schema rebuild and the
+## final three categories (findings #1/#2/#3/#4)
+
+Round 5 rejected round 4 outright (`FAIL_REMEDIATION_REQUIRED`) on 9
+findings. Three are directly about this directory:
+
+**Findings #1/#2** replaced the flat `expected_classification`/
+`expected_confidence`/`upstream_license` strings with a typed,
+independently-reviewed `ExpectedOutcome` (wallet perspective, every
+asset delta, expected input/output mint+amount, network fee, failed-tx
+status, a confidence rule, and the reviewer's own method/rationale/
+evidence) and real `git ls-tree`-backed `GitTreeAttestation`/
+`LicenseEvidence` proving the declared upstream path at the declared
+commit resolves to the declared blob, for both the transaction data and
+its license. All 10 then-existing fixtures were re-imported through the
+new schema with genuinely independent expectations, reasoned by hand
+from each payload's own `meta.preBalances`/`postBalances`/
+`preTokenBalances`/`postTokenBalances` -- never from the parser's own
+output -- against fresh `git clone --filter=blob:none --no-checkout`
+clones of both upstream repositories. See `src/argus/golden_fixtures.py`
+and `tests/golden/fixtures/real/EVIDENCE_FILE_SCHEMA.md` for the full
+schema; `PROVENANCE.md` for the resulting per-fixture record.
+
+**Finding #4** fixed the generic parser's ambiguous-multi-asset handling
+(see `src/argus/parsing/generic_parser.py`'s own round-5 docstring
+section) -- among other things, it makes the parser resolve
+`real_mainnet_dca_close_dual_asset_transfer_in` to `UNKNOWN` (was
+`TRANSFER_IN` before this round). Round 4's own correction (above)
+rejected this fixture as satisfying "ambiguous multi-asset transaction"
+specifically *because* the parser resolved it confidently rather than
+flagging it `UNKNOWN`. That objection no longer applies: the parser now
+does resolve it to `UNKNOWN`, ineligible, for exactly the structural
+reason round 3/4 already documented (two independent simultaneous asset
+inflows with no counter-asset given up) -- so this fixture is now
+believed to genuinely satisfy category 8 of 9, with no new fixture
+needed. See its `expectation.reviewer.rationale` in `provenance.json`
+for the full current reasoning.
+
+**Finding #3** required searching further for the two still-open
+categories (LP action, failed transaction), following up on three named
+candidate repositories the round 5 instruction identified (not
+pre-approved -- independently verified here): `coinbase/chainstorage`,
+`quellen-sol/ingestooor`, and `milktoastlab/SolanaNFTBot`.
+
+- `coinbase/chainstorage`'s named path
+  (`internal/utils/fixtures/parser/solana/transaction_err.json`,
+  commit `e5932902bae94e0578d13328f9f4135b3c95c252`, Apache-2.0)
+  verified to exist with two genuinely failed transactions inside --
+  but it is a `getBlock`-shaped array of transactions, not a bare
+  `getTransaction` object, and per this round's own instruction ("never
+  execute source code to extract a fixture... explicit deterministic
+  audited extraction"), extracting one transaction from it would need a
+  new transform step *and* a `slot` value this file does not actually
+  carry per-transaction (only `blockHeight`, which is not the same
+  field as `slot`) -- inventing one would not be honest. **Not used.**
+- `milktoastlab/SolanaNFTBot`'s named path
+  (`src/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts`, commit
+  `e77710555004db314117d435f0d2b4f1dca54a77`, MIT) verified to exist: a
+  genuine Magic Eden NFT sale transaction with `meta.err =
+  {"InstructionError": [0, {"Custom": 1}]}` and a real `slot` already
+  present, captured as a TypeScript module (`const saleTx: ... = {...};
+  export default saleTx;`) rather than bare JSON. A new deterministic
+  transform step, `extract_ts_const_export_default` (a regex over the
+  raw bytes matching exactly this shape, never executing/importing the
+  `.ts` file), was added to `golden_fixtures.py`'s pipeline to extract
+  it -- see its docstring and `tests/unit/test_golden_fixtures.py`'s
+  dedicated tests. **Imported as `real_mainnet_failed_nft_sale`** --
+  category 9 of 9 ("failed on-chain transaction"), a clean, unambiguous
+  match with no caveat.
+- `quellen-sol/ingestooor`'s named path
+  (`crates/parsers/tests/orca/orca_add_liq.json`, commit
+  `74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e`, GPL-3.0) verified to exist:
+  a genuine Orca Whirlpool `increaseLiquidity` call, already a bare
+  `getTransaction`-shaped object (no extraction needed). From the
+  signer's own perspective it gives up SOL (via a temp wrapped-SOL
+  account) and one SPL token, with the resulting LP position held by a
+  program-derived vault account, not the signer -- **imported as
+  `real_mainnet_orca_increase_liquidity_multi_asset_outflow`**, mapped
+  to category 7 of 9 ("multiple token-account/LP-style action") **with
+  an explicit caveat, recorded here and in the fixture's own
+  `expectation.reviewer.rationale`**: because only one non-SOL asset is
+  directly signer-owned in this transaction, the parser's `LP_ACTION`
+  heuristic (which requires two or more non-SOL assets moving together)
+  does not fire; the emitted classification is `UNKNOWN` via the
+  ambiguous-multi-asset-outflow branch instead. The substantive
+  requirement -- a real, multi-token-account, liquidity-provision
+  transaction that is correctly never treated as a confident
+  single-asset trade -- is satisfied; the specific `LP_ACTION` label is
+  not. Also considered and not needed: `orca_clmm_add_liq.json`,
+  `orca_remove_liq.json`, `jlp-add-liq.json`, and the Raydium
+  CLMM `txn_increase_liquidity_*.json` fixtures in the same repository
+  (the last of these uses a materially different, non-`getTransaction`
+  JSON shape -- `block_time`/`accounts`/`instructions`/`signature`
+  fields rather than `transaction`/`meta`/`slot` -- that would need its
+  own bespoke, unverified reshaping rather than a general deterministic
+  extraction step, so it was not pursued).
+
+GPL-3.0 license note: stronger copyleft than MPL-2.0/MIT, but what is
+reused here is one immutable, already-public on-chain transaction data
+file (not source code, not linked against, not modified) verbatim, with
+the exact license text and attribution preserved alongside it -- see the
+fixture's own `upstream_license.compatibility_decision` in
+`provenance.json` for the full reasoning.
+
+**Disposition after this round: real-chain evidence now exists for all
+9 of 9 required categories** -- 6 from rounds 2-3 (simple transfer,
+SOL-to-token/token-to-SOL/token-to-USDC swap, multi-hop swap, partial
+sell), plus the ambiguous-multi-asset and failed-transaction categories
+from this round (clean matches), plus the LP-action category from this
+round (matched with the explicit `LP_ACTION`-vs-`UNKNOWN` caveat above).
+This is a claim of real-chain *evidence existing*, reviewed here
+honestly including its one caveat -- not a claim that every acceptance
+criterion elsewhere in round 5's instruction is satisfied; see
+`docs/BUILD_STATE.md` and the round 5 checkpoint for the full acceptance
+matrix scoring.

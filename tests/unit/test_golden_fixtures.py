@@ -290,16 +290,19 @@ def test_import_validates_and_records_full_provenance(tmp_path: Path) -> None:
         quarantine_reason=record.quarantine_reason,
     )
 
-    # The transform manifest: no array/envelope to unwrap for this
-    # already-bare payload, only canonicalization applied.
+    # The transform manifest: already-bare JSON, so no TS-extraction,
+    # array-unwrap, or envelope-unwrap step actually did anything; only
+    # canonicalization applied.
     assert [step.name for step in record.transform_manifest] == [
+        "extract_ts_const_export_default",
         "unwrap_json_array",
         "unwrap_json_rpc_envelope",
         "canonicalize_json_formatting",
     ]
     assert record.transform_manifest[0].applied is False
     assert record.transform_manifest[1].applied is False
-    assert record.transform_manifest[2].applied is True
+    assert record.transform_manifest[2].applied is False
+    assert record.transform_manifest[3].applied is True
 
     # The fixture file, the preserved raw source, the preserved license,
     # and provenance.json were all written.
@@ -551,6 +554,45 @@ def test_import_does_not_unwrap_when_top_level_already_looks_like_a_transaction(
     manifest_by_name = {step.name: step for step in record.transform_manifest}
     assert manifest_by_name["unwrap_json_array"].applied is False
     assert manifest_by_name["unwrap_json_rpc_envelope"].applied is False
+
+
+def test_import_extracts_a_ts_const_export_default_module(tmp_path: Path) -> None:
+    """Finding #3: several upstream repositories capture a getTransaction
+    payload as a TypeScript module (``const x: T = {...}; export default
+    x;``) rather than storing bare JSON -- the import tool must detect
+    and extract that automatically, by regex over the raw bytes, never
+    by executing/importing the ``.ts`` file, so `--input` can be the
+    exact unmodified raw upstream ``.ts`` bytes."""
+    ts_source = (
+        'import {ParsedConfirmedTransaction} from "@solana/web3.js";\n\n'
+        f"const saleTx: ParsedConfirmedTransaction = {json.dumps(_TOOL_TEST_PAYLOAD)}\n\n"
+        "export default saleTx;\n"
+    )
+    input_path = tmp_path / "input.ts"
+    input_path.write_text(ts_source)
+    fixtures_dir = tmp_path / "real"
+
+    record = _import(tmp_path, input_path=input_path, fixtures_dir=fixtures_dir)
+
+    manifest_by_name = {step.name: step for step in record.transform_manifest}
+    assert manifest_by_name["extract_ts_const_export_default"].applied is True
+    assert record.original_sha256 == hashlib.sha256(ts_source.encode("utf-8")).hexdigest()
+    on_disk = json.loads((fixtures_dir / "tool_self_test.json").read_text())
+    assert on_disk == _TOOL_TEST_PAYLOAD
+    # The preserved source is the exact raw .ts bytes, never the
+    # extracted JSON.
+    source_path = fixtures_dir / "sources" / f"{record.upstream_git_blob_sha1}.source.json"
+    assert source_path.read_bytes() == ts_source.encode("utf-8")
+
+
+def test_import_rejects_bytes_that_are_neither_json_nor_a_recognized_ts_module(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "input.ts"
+    input_path.write_text("export const somethingElse = 42;\n")
+
+    with pytest.raises(RealChainFixtureError, match="not valid JSON"):
+        _import(tmp_path, input_path=input_path)
 
 
 def test_validate_reports_empty_list_when_nothing_imported(tmp_path: Path) -> None:
@@ -851,7 +893,7 @@ def test_reimporting_the_same_category_overwrites_its_record(tmp_path: Path) -> 
     assert provenance["tool_self_test"] == second
 
 
-def test_real_fixtures_directory_currently_has_10_genuinely_imported_fixtures() -> None:
+def test_real_fixtures_directory_currently_has_12_genuinely_imported_fixtures() -> None:
     """Regression guard on the honest current state. Round 2 (finding
     #12) found `solana-labs/explorer` (MIT-licensed) embedding genuine
     captured mainnet `getTransaction` payloads with their own upstream
@@ -859,18 +901,26 @@ def test_real_fixtures_directory_currently_has_10_genuinely_imported_fixtures() 
     local-validator fixtures. Round 3 (argus-phase-1-remediation-003,
     finding #1) found `0xjeffro/tx-parser` (MPL-2.0) embedding genuine
     captured DEX-swap/DCA transactions, named after the exact program
-    instruction each one captures -- see
-    `tests/golden/fixtures/real/SEARCH_LOG.md` for the full search log
-    and which required categories these do and do not satisfy. Round 5
-    (findings #1/#2/#4) re-imported all ten through the new typed
-    independent-expectation + cryptographically-bound provenance schema,
-    and round 5's parser fail-closed fix (finding #4) reclassifies
+    instruction each one captures. Round 5 (findings #1/#2/#4) re-imported
+    all ten through the new typed independent-expectation +
+    cryptographically-bound provenance schema, and round 5's parser
+    fail-closed fix (finding #4) reclassifies
     `real_mainnet_dca_close_dual_asset_transfer_in` from TRANSFER_IN to
-    genuinely ambiguous UNKNOWN -- this fixture is now believed to
-    satisfy the 'ambiguous multi-asset transaction' required category
-    (see its `expectation.reviewer` for the full reasoning); the failed-
-    transaction and LP/multi-token-account categories remain NOT TESTED
-    pending finding #3. This test intentionally targets the real,
+    genuinely ambiguous UNKNOWN, believed to satisfy the 'ambiguous
+    multi-asset transaction' required category. Round 5 finding #3 sourced
+    two more real-chain fixtures: `real_mainnet_failed_nft_sale` (a genuine
+    failed on-chain transaction, from `milktoastlab/SolanaNFTBot`, MIT,
+    extracted from its TypeScript module wrapper via
+    `extract_ts_const_export_default`) and
+    `real_mainnet_orca_increase_liquidity_multi_asset_outflow` (a genuine
+    Orca Whirlpool increaseLiquidity call touching multiple token accounts,
+    from `quellen-sol/ingestooor`, GPL-3.0) -- see
+    `tests/golden/fixtures/real/SEARCH_LOG.md` for the full search log,
+    which required categories each fixture does and does not satisfy, and
+    an honest note that the Orca fixture's own emitted classification is
+    UNKNOWN via the ambiguous-multi-asset-outflow branch, not the
+    LP_ACTION label (only one non-SOL asset is directly wallet-owned in
+    that transaction). This test intentionally targets the real,
     committed tests/golden/fixtures/real/ directory (not a tmp_path) --
     it is a regression guard on the fixtures' continued internal
     consistency (independently rebuilt from preserved source bytes +
@@ -888,6 +938,8 @@ def test_real_fixtures_directory_currently_has_10_genuinely_imported_fixtures() 
         "real_mainnet_multi_hop_swap",
         "real_mainnet_partial_sell",
         "real_mainnet_dca_close_dual_asset_transfer_in",
+        "real_mainnet_orca_increase_liquidity_multi_asset_outflow",
+        "real_mainnet_failed_nft_sale",
     }
     assert all(r.ok for r in results), results
     assert not any(r.quarantined for r in results), results
