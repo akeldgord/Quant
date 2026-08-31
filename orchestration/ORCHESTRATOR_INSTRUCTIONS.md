@@ -2,232 +2,332 @@
 
 **OWNER: ARGUS ORCHESTRATOR.** The implementation agent must not modify this
 file. Execute only the ACTIVE instruction below. MASTER_SPEC.md remains
-authoritative except for the explicit operational-protocol decisions stated
-here.
+authoritative except where this instruction explicitly adds stricter
+acceptance detail.
 
 ---
 
-INSTRUCTION_ID: argus-watcher-remediation-003
-ISSUED_AT: 2026-08-31T03:24:15Z
-TARGET_COMMIT: 34930bfa78cd7f667527b40f7d006c923c7c9ba6
-AUTHORIZED_ACTION: REMEDIATE_ORCHESTRATION_WATCHER_ONLY
-AUTHORIZED_PHASE: 0
-APPROVES_PHASE: NONE
+INSTRUCTION_ID: argus-phase-1-001
+ISSUED_AT: 2026-08-31T04:04:52Z
+TARGET_COMMIT: 141af487fcfdff41d1597c19ea062139f5427f52
+AUTHORIZED_ACTION: IMPLEMENT_PHASE_1_ONLY
+AUTHORIZED_PHASE: 1
+APPROVES_PHASE: 0
 STATUS: ACTIVE
 
 ## Independent audit disposition
 
-- Phase 0 remains acceptable as
+- Phase 0 is approved at the audited target commit as
   `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`.
-- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` remains open and
-  must be completed against real PostgreSQL 17 before live readiness.
-- Watcher remediation round 2 at the audited target commit is REJECTED.
-  Many requested protections are real and useful, but several fail-open and
-  replay paths remain. The implementation does not yet satisfy the required
-  deterministic, restart-safe, idempotent, fail-closed standard.
-- Phase 1 is NOT authorized.
-- Do not change `last_orchestrator_approved_phase`, `approved_commit`, or
-  begin Phase 1 work.
+- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` remains open.
+  It does not block Phase 1, but it must be closed against real PostgreSQL
+  17 before live readiness may be approved.
+- Watcher remediation round 3 is accepted for continued build orchestration.
+  Its unsigned, file-trust attribution boundary remains documented and must
+  not be overstated.
+- Phase 1 is authorized by this instruction.
+- Phase 1.5 and all later phases remain forbidden.
+- No live trade, mainnet canary, signing, private-key access, credential
+  disclosure, paid-provider upgrade, live arming, threshold relaxation, or
+  phase skip is authorized.
 
-## Scope
+## Mandatory session start and state transition
 
-Remediate only the GitHub orchestration protocol, local watcher, watcher
-tests, and directly related operational documentation/evidence. Do not
-change MASTER_SPEC.md or ARGUS application architecture. Allowed files are:
+Before changing code:
 
-- `scripts/argus_orchestrator_watch.py`
-- `tests/unit/test_orchestrator_watch.py`
-- `orchestration/PROTOCOL.md`
-- `docs/OPERATIONS.md`
-- `docs/DECISION_LOG.md`
-- the operational-tooling note in `docs/BUILD_STATE.md`
-- a new checkpoint, bundle, and `orchestration/AGENT_HANDOFF.md`
+1. Run `git status --porcelain`, `git pull --ff-only`, and
+   `git log -5 --oneline`.
+2. Read the six canonical files in the exact order required by PROTOCOL.md.
+3. Verify the checked-out instruction commit is exactly one instruction-only
+   commit whose parent is the exact target above.
+4. Verify the worktree is clean and local HEAD equals the remote branch.
+5. Update BUILD_STATE only as permitted by this approval:
+   - mark Phase 0 orchestrator-approved;
+   - set `last_orchestrator_approved_phase` to `0`;
+   - set `approved_commit` to the exact audited target commit above;
+   - enter Phase 1 without claiming it complete or approved.
+6. If any precondition is false, stop with a PARTIAL/FAIL handoff. Do not
+   improvise around the gate.
 
-If a required safety fix cannot be completed in this scope, return
-`STATUS: PARTIAL` and stop. Do not broaden scope silently.
+## Phase 1 goal
 
-## Defects independently reproduced
+Prove reliable, auditable acquisition and deterministic canonical parsing of
+live Solana chain data using the fixed modular-monolith, free-first
+architecture.
 
-### 1. A self-authored next instruction can launch on the next tick
+Implement Phase 1 only:
 
-The round-2 regression test is not adversarial enough. It gives the
-self-authored instruction an old target, while also changing another file.
-That fails target-diff scope, but a realistic bypass remains:
+- Helius/Solana standard RPC adapter;
+- standard Solana WebSocket adapter;
+- reconnect handling and per-wallet subscriptions;
+- persistent per-wallet stream/reconciliation watermarks;
+- deterministic truth-path reconciliation and stream-gap detection;
+- provider capability, history, and usage probes;
+- HTTP and streaming usage accounting;
+- DexScreener adapter;
+- GeckoTerminal adapter;
+- Jupiter quote/order-construction adapter with no signing;
+- centralized request-priority scheduler;
+- immutable `chain_events`;
+- transaction fetching;
+- deterministic generic balance-delta swap parser;
+- sanitized golden transaction fixtures.
 
-1. During an authorized run, the implementation agent commits its work and
-   evidence.
-2. It then makes a final commit that changes only the orchestrator
-   instruction file.
-3. That self-authored instruction targets the immediately preceding
-   implementation commit and contains otherwise valid next-phase metadata.
-4. The current run correctly fails because the instruction bytes changed.
-5. On the next tick, the new instruction ID differs from the failed run's
-   ID; its target is an ancestor and only the instruction file differs.
-   Current target and phase checks therefore allow it to launch.
+Do not implement token/wallet discovery, scoring, shadow trading, execution,
+signing, Phase 1.5 historical feasibility work, or any later-phase feature.
 
-This violates the requirement that a self-authored instruction can never
-launch.
+## Provider architecture and cost controls
 
-Implement both protections:
+Keep provider response objects behind typed adapters/protocols. Domain and
+persistence code must consume canonical ARGUS models, never provider-specific
+objects.
 
-- A detected implementation-agent modification of the instruction file is a
-  terminal trust breach, not an ordinary retryable failure. Persist a
-  distinct fail-closed/quarantined state. No later ACTIVE instruction,
-  regardless of ID or target, may launch automatically from that state.
-  Recovery requires explicit human/operator restoration and a deliberate
-  local reset procedure documented in OPERATIONS.md.
-- Tighten ordinary target provenance: an ACTIVE instruction must be
-  introduced by exactly one instruction-only commit whose parent is the
-  exact `TARGET_COMMIT`. Reject target-equals-HEAD, multiple commits between
-  target and HEAD, merge commits, or any changed path other than the
-  instruction file.
+Use the fixed free-first provider baseline:
 
-Do not claim that unsigned Git commits authenticate the orchestrator.
-Document the remaining file-trust boundary honestly. Do not add a new API,
-service, or paid system.
+- Helius standard RPC and standard WebSocket functionality for initial live
+  chain access;
+- DexScreener for pair/token lookup and current market state;
+- GeckoTerminal for historical OHLCV/fallback use, not high-frequency live
+  dependence;
+- Jupiter for executable quotes and unsigned order construction only.
 
-### 2. Safety-critical Git command errors still fail open
+No paid or accelerated endpoint may be enabled. No provider allowance may be
+treated as an architecture constant. Use conservative configurable local
+limits below published maxima.
 
-Several helpers collapse Git errors into empty results. Examples:
+Every outbound request must record the fields required by MASTER_SPEC section
+14, including provider, endpoint, request class, timing, latency, status,
+retry count, estimated credits, bytes received, and cache-hit state.
+Streaming accounting must record connection, subscription, reconnect, bytes,
+and estimated-credit counters. Implement usage reporting for today,
+month-to-date, 30-day projection, allowance percentage, and warnings at
+70%, 85%, and 95%. Never auto-upgrade.
 
-- a failed commit-body/log read becomes an empty list, so commit attribution
-  can pass without checking any commit;
-- a failed merge-query can pass as “no merges”;
-- a failed status command can look like a clean worktree;
-- a failed diff can look like “no unexpected paths”;
-- a failed range enumeration can still allow the final head to count as the
-  only run commit.
+Implement the canonical Jupiter priority order exactly:
 
-Refactor safety-critical Git reads to return explicit success/error results
-or raise a controlled verification error. Every nonzero exit, timeout,
-unparseable result, missing expected record, or ambiguous condition must
-fail the current check. Never treat command failure as empty/clean/absent.
+- P0 emergency live exit;
+- P1 ordinary live exit;
+- P2 live entry order;
+- P3 live safety/sellability check;
+- P4 prospective copyability quote;
+- P5 shadow exit quote;
+- P6 background research.
 
-### 3. Commit-message attribution does not require a real trailer
+Phase 1 must test scheduler ordering and starvation protection, but it must
+not execute any live action. When constrained, background research may be
+delayed or dropped with an explicit missing-data reason; safety-class
+requests must never be silently starved.
 
-The code accepts the expected text on any line anywhere in a commit body.
-A prose paragraph can contain the exact line and pass without a Git trailer.
+Provider probes must report reachability, supported functions, configured
+throttle, response-contract status, latency, and health. History probes must
+report the earliest/latest available data, partitions/freshness where
+applicable, estimated query/download size, and limitations. Do not infer
+availability from marketing text.
 
-Require exactly one parsed terminal trailer with key
-`ARGUS-INSTRUCTION-ID` and exact value equal to the active instruction ID.
-Use `git interpret-trailers --parse` or an equivalently strict parser.
-Reject a matching line in ordinary body prose, duplicate trailers,
-conflicting trailers, extra whitespace/value text, or an absent trailer.
+If a credential is genuinely required and is not already configured locally,
+do not request or print it. Emit only the MASTER_SPEC section 108
+`LOCAL CREDENTIAL REQUIRED` notice and return PARTIAL. Do not substitute a
+mocked provider probe and claim live acceptance.
 
-### 4. Launch failures and diagnostics are not fully safe
+## Immutable event ledger and observation-time truth
 
-Only timeout and `OSError` are converted immediately to FAILED. An
-unexpected `Exception` from the launch wrapper leaves the state RUNNING
-until a later tick, and an interactive `--once` run can exit without
-persisting FAILED. Catch all ordinary launch exceptions, persist FAILED
-immediately, and never run success verification afterward.
+Implement canonical `chain_events` with immutable raw evidence and
+deduplication. At minimum preserve:
 
-Do not log Claude stdout/stderr. Truncation is not credential redaction.
-A secret in the first 300 characters is still leaked. Log only safe,
-whitelisted metadata such as exit code, timeout duration, and exception
-class. Sanitize control characters/newlines in every log detail so process
-output cannot forge watcher log entries.
+- UUID event ID;
+- chain and slot;
+- block time;
+- `first_seen_at`;
+- confirmed/finalized timestamps when known;
+- provider and provider receipt time;
+- transaction signature;
+- event type;
+- optional wallet and mint;
+- raw payload or immutable payload reference;
+- payload hash;
+- parser version;
+- creation timestamp.
 
-### 5. Timestamp validation is only a shape check
+Raw observations are append-only. Derived data may be recomputed without
+rewriting raw point-in-time truth. Always keep block time, first-seen time,
+confirmed time, and finalized time distinct.
 
-The regular expression accepts impossible values such as month 99, hour 99,
-or invalid calendar dates. Parse the timestamp with a real UTC datetime
-parser and require canonical `YYYY-MM-DDTHH:MM:SSZ` round-trip form.
+Use integer raw units for on-chain quantities and Decimal for canonical
+prices/accounting. Do not use binary float for canonical financial values.
 
-Apply real timestamp validation to ACTIVE instructions and new handoffs.
+Store commitment progression. Processed-only events may be retained for
+latency research, but no processed-only event may be eligible for future
+live execution under the standing confirmed-source policy.
 
-### 6. Evidence linkage is too weak
+## Fast path, truth path, and reconciliation
 
-The bundle validator checks only that some checkpoint markers and a few
-words occur. It does not prove the bundle contains the exact checkpoint
-named by the handoff. Require exact embedded checkpoint bytes or an
-unambiguous cryptographic digest/linkage and reject a bundle containing a
-different valid checkpoint.
+Each tracked wallet must use:
 
-Tighten semantic validation without turning Markdown into a large parser:
+- WebSocket fast-path observation;
+- periodic RPC/history truth-path reconciliation.
 
-- checkpoint `STATUS` and `GIT_COMMIT` must each occur exactly once;
-- checkpoint commit must be a full SHA and a run commit;
-- handoff `CURRENT_PHASE` must be a recognized exact phase token and match
-  the authorized scope;
-- handoff timestamp must be real canonical UTC;
-- handoff `WORKING_TREE` must state clean and the mechanical Git check must
-  independently confirm it;
-- required handoff section headings from PROTOCOL section 5 must each exist;
-- reject contradictory duplicate checkpoint identity/status fields.
+Persist at least:
 
-## Mandatory adversarial regression tests
+- last stream signature and slot;
+- last reconciled signature and slot;
+- last reconciliation timestamp;
+- stream health.
 
-Retain all useful existing tests and add tests proving at least:
+On disconnect, reconnect, process restart, timeout, subscription failure,
+clock anomaly, or host resume, perform reconciliation. If reconciliation is
+unresolved, mark the wallet live state DEGRADED. A degraded wallet can never
+produce an eligible live-entry intent.
 
-1. A run writes a self-authored next instruction in a final instruction-only
-   commit, targets the immediately preceding implementation commit, uses
-   valid predecessor approval, and exits. The first tick enters terminal
-   trust-breach state and the second and all later ticks never launch it.
-2. Terminal trust-breach recovery cannot happen merely because a new
-   instruction ID appears.
-3. Target equal to HEAD is rejected for ACTIVE instructions.
-4. More than one commit between target and instruction HEAD is rejected.
-5. The exact valid case—one instruction-only commit directly atop target—is
-   accepted as a negative control.
-6. A failed `git log`/commit-body read fails attribution.
-7. A failed merge enumeration fails attribution.
-8. A failed `git status` never counts as clean.
-9. A failed `git diff` never counts as no drift.
-10. A failed run-range enumeration fails handoff verification.
-11. The exact instruction text in ordinary commit-body prose but not as a
-    terminal trailer is rejected.
-12. Duplicate or conflicting instruction trailers are rejected.
-13. One exact terminal trailer is accepted.
-14. A launch wrapper raising `RuntimeError` immediately persists FAILED,
-    including in `--once` behavior.
-15. Claude stdout/stderr containing a fake credential and embedded newline
-    never appears in the watcher log.
-16. Impossible but shape-matching instruction timestamps are rejected.
-17. Impossible but shape-matching handoff timestamps are rejected.
-18. A bundle containing a different structurally valid checkpoint is
-    rejected.
-19. Missing required handoff section headings are rejected.
-20. Invalid/contradictory checkpoint status or commit fields are rejected.
-21. All prior mandatory regression categories remain passing.
-22. A complete valid same-phase remediation run still reaches COMPLETED.
+Implement the mandatory deterministic scenario:
 
-Use real temporary Git repositories for Git behavior. The Claude subprocess
-must remain mocked. Where command-failure injection is required, inject a
-narrow deterministic failing command result while retaining a real
-temporary repository for the surrounding scenario.
+1. stream connects;
+2. event A is observed;
+3. disconnect occurs;
+4. event B occurs while disconnected;
+5. reconnect occurs;
+6. reconciliation discovers B.
 
-## Required validation and evidence
+The final canonical ledger must contain A exactly once and B exactly once.
+Repeat the scenario across process restart and duplicate-delivery variants.
 
-Run and record exact results for:
+Use both UTC wall time and monotonic time. Persist wall timestamps and use
+monotonic time for latency/duration. Detect material clock jumps and
+suspend/resume conditions. Such conditions must block any future live-entry
+eligibility until provider reconnection, chain reconciliation, and clock
+health recovery are complete.
 
-- `uv run pytest tests/unit/test_orchestrator_watch.py -v`
+## Transaction fetching and generic parser
+
+Start with deterministic wallet-owned pre/post balance-delta reconstruction;
+do not build a separate parser for every DEX.
+
+The parser must:
+
+1. obtain and preserve raw transaction evidence;
+2. identify wallet-owned accounts;
+3. canonicalize SOL and wrapped SOL;
+4. calculate net native/token deltas;
+5. account for network fees;
+6. identify meaningful asset inflow/outflow;
+7. classify deterministically;
+8. emit confidence and parser version.
+
+Required classifications:
+
+- `SWAP_SIMPLE`
+- `SWAP_COMPLEX`
+- `TRANSFER_IN`
+- `TRANSFER_OUT`
+- `TOKEN_CREATE`
+- `LP_ACTION`
+- `UNKNOWN`
+
+Required sanitized real-chain golden fixtures:
+
+- SOL to token;
+- token to SOL;
+- token to USDC;
+- multi-hop swap;
+- simple transfer;
+- partial sell;
+- multiple token accounts;
+- ambiguous multi-asset transaction;
+- failed transaction.
+
+Any ambiguous or UNKNOWN interpretation must be preserved for research but
+must be mechanically incapable of creating an eligible live-copy signal.
+Golden-fixture output changes must fail until reviewed.
+
+## Database and restart requirements
+
+Use PostgreSQL 17 architecture, SQLAlchemy 2.x, asyncpg, and Alembic. Do not
+replace the database or introduce services outside the fixed modular
+monolith.
+
+Add migrations for Phase 1 canonical entities without weakening Phase 0 role
+separation. Verify migration from zero and upgrade from the existing Phase 0
+head. Add constraints/indexes for deterministic deduplication and replay.
+Verify transaction/event ingestion and watermarks survive process restart.
+
+Where the current environment cannot run real PostgreSQL 17, keep the
+existing deferred flag honest. A substitute server or mock may support code
+tests but must not be called PostgreSQL 17 validation.
+
+## Mandatory acceptance tests
+
+Independently demonstrate and record each as PASS, FAIL, or NOT TESTED:
+
+1. configured Solana RPC works;
+2. configured WebSocket works;
+3. disconnect is detected;
+4. reconnect works;
+5. reconciliation recovers a missed event;
+6. A and B are each canonicalized exactly once;
+7. duplicate deliveries remain idempotent;
+8. watermarks persist across restart;
+9. commitment status and progression are stored;
+10. clock health and anomalies are stored;
+11. provider priority ordering and starvation protection work;
+12. HTTP and streaming usage are counted;
+13. 70/85/95 usage warnings trigger correctly;
+14. adapter contract validation rejects malformed provider responses;
+15. retry/backoff honors configured limits and never fabricates data;
+16. every required golden parser fixture passes;
+17. raw-unit and Decimal arithmetic remain exact;
+18. ambiguous/UNKNOWN transactions cannot create live-copy signals;
+19. stream gaps and unresolved reconciliation force DEGRADED state;
+20. restart during reconciliation fails closed and resumes idempotently;
+21. migration from zero succeeds where a database is available;
+22. upgrade from the Phase 0 Alembic head succeeds;
+23. DB role grants remain least privilege;
+24. no signing, signer, private-key, seed-phrase, live-arm, or transaction
+    broadcast path exists;
+25. secret scan is clean;
+26. no paid-provider feature is enabled;
+27. no Phase 1.5 or later-phase code was started.
+
+Use deterministic unit tests, contract tests, real temporary persistence
+where suitable, replay/golden tests, and narrow live smoke probes only where
+credentials/network access are safely available. Tests must not make a
+mainnet trade or broadcast a transaction.
+
+Run and record exact results for at least:
+
+- `uv run pytest tests/unit -v`
+- `uv run pytest tests/integration -v`
+- `uv run pytest tests/golden -v`
+- `uv run pytest tests/replay -v`
 - `uv run pytest --cov --cov-report=term-missing`
 - `uv run ruff check .`
 - `uv run ruff format --check .`
 - `uv run mypy`
-- `uv run mypy scripts/argus_orchestrator_watch.py --ignore-missing-imports`
+- relevant Alembic upgrade/current checks;
+- `argus providers probe`;
+- `argus providers probe-history`;
+- `argus providers usage`.
 
-Create new immutable evidence:
+Do not claim an unrun test. Environmental failure must be reported honestly
+as PARTIAL/NOT TESTED with the exact blocker.
 
-- `orchestration/checkpoints/watcher_remediation_3.md`
-- `orchestration/bundles/watcher_remediation_3.txt`
+## Checkpoint, bundle, and handoff
 
-Update the handoff with:
+At completion:
 
-- a new unique handoff ID;
-- exact last-instruction ID `argus-watcher-remediation-003`;
-- the new evidence paths;
-- honest failures, limitations, and deferred checks;
-- Phase 1 still blocked;
-- the real Claude CLI launch limitation and PG17 validation listed
-  separately.
+- set BUILD_STATE to Phase 1 completed and awaiting orchestrator review only
+  if all required build work is actually complete;
+- do not mark Phase 1 orchestrator-approved;
+- create new immutable evidence:
+  - `orchestration/checkpoints/phase_1.md`
+  - `orchestration/bundles/phase_1.txt`;
+- generate the canonical runtime checkpoint/bundle required by MASTER_SPEC;
+- use a new unique handoff ID;
+- set the last-instruction ID exactly to `argus-phase-1-001`;
+- include honest failures, provider limitations, credential/network
+  blockers, data-quality warnings, and deferred checks;
+- state clearly that Phase 1.5 remains blocked;
+- verify remote HEAD equals local HEAD and the worktree is clean.
 
 Every commit created for this run must contain exactly one valid terminal
-trailer whose value is `argus-watcher-remediation-003`.
+trailer with value `argus-phase-1-001`.
 
-Commit and push to `claude/argus-folder-setup-77ahrk`. Verify remote HEAD
-equals local HEAD and the worktree is clean. Then STOP. Do not begin Phase 1.
-Do not modify this instruction file. Do not perform or authorize any live
-trade, mainnet canary, credential entry, paid-provider upgrade, live arming,
-threshold relaxation, or phase skip.
+Then STOP. Do not modify this instruction file. Do not begin Phase 1.5.
