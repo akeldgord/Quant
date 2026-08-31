@@ -1,0 +1,550 @@
+{
+  "candidate_wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+  "token_mint": "5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump",
+  "token_creator_wallet": "6xo262KbDXepWbF3vPTrFXysr5vJwk3mozBXmXk3hmMx",
+  "supplementary_wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+  "total_transactions_analyzed": 28,
+  "total_disagreements": 0,
+  "elapsed_seconds": 0.005878946999928303,
+  "raw_evidence_disk_bytes": 926336,
+  "rpc_calls_made": 0,
+  "provider_credits_consumed": 0,
+  "results": [
+    {
+      "file": "token_00_pumpfun_create.json",
+      "signature": "2s393PSYYxJJJfGiwHf18HZeC68nZs44ssbeB4aAkeYMyd1dyiiu3yVmGyRWZuArk5HzYDgVxYfhKLYd2CJ8kCBj",
+      "slot": 292743221,
+      "block_time": 1727637145,
+      "wallet": "6xo262KbDXepWbF3vPTrFXysr5vJwk3mozBXmXk3hmMx",
+      "independent_deltas": {
+        "SOL": -1036388800,
+        "5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump": 34612903225806
+      },
+      "parser_reported_deltas": {
+        "SOL": -1036388800,
+        "5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump": 34612903225806
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "token_creator_initial_buy"
+    },
+    {
+      "file": "wallet_01_openbook_v2_cancel_order.json",
+      "signature": "5xXck5dUK3A5sdmrp6cNbG6zaqQ6JaEkY4zojd8SnSkV9tG88LrVnooukYdjX1JtWKo1WE3MMpKiqV1jMsH7ogLr",
+      "slot": 280407888,
+      "block_time": 1722284023,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT": 58700000000
+      },
+      "parser_reported_deltas": {
+        "StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT": 58700000000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_IN",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_02_solend_deposit.json",
+      "signature": "3E3mNyiwnmwagkoSkzBvgFuwwejxBX2w1HnptSHhSJvDJe4LP4Xs6nhaYmqF8yX3mTnUFViETQvkAvBzmK7EM8g7",
+      "slot": 341281881,
+      "block_time": 1747748595,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -12994,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
+      },
+      "parser_reported_deltas": {
+        "SOL": -12994,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_03_solend_borrow.json",
+      "signature": "5ssabqGvmbgFB42eonnaUhfGjPZFdKcwnwBWvRzL7FJJm2xZgiDUTzmrVP77SMF67ZWxXmW1EB5B69DfmYgyamK4",
+      "slot": 341282608,
+      "block_time": 1747748881,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": 9966082
+      },
+      "parser_reported_deltas": {
+        "SOL": 9966082
+      },
+      "agrees": true,
+      "classification": "TRANSFER_IN",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_04_solend_repay_all.json",
+      "signature": "5mH1XYCnpDwLEuJUvFQdKT1HDfbiTTFYQ2Pd7TLE3qg25qARQyorkTsCNKECs9nttHjcpzuBUckA1DNkybZgFQHL",
+      "slot": 341299734,
+      "block_time": 1747755659,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -10024814
+      },
+      "parser_reported_deltas": {
+        "SOL": -10024814
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_05_solend_withdraw_all.json",
+      "signature": "4QZbHE9X5fN6nSwhYc1YAB3r1ajMkj3fhPBS3DE17waaz3W3aeGwMAyY6C2TJEUTMzYY7C3fx1jguUKQkC9PtY1D",
+      "slot": 341301632,
+      "block_time": 1747756416,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -13775,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 15017725
+      },
+      "parser_reported_deltas": {
+        "SOL": -13775,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 15017725
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_06_solend_deposit_with_new_obligation_acc.json",
+      "signature": "37hYQAiGqqQGiofme4uUoKW21kQepF8ujdH8n73gCETYp3hFXDTLZrpbDy94mTBdGjH2F8pPia3ckmYKGesyc6nb",
+      "slot": 341307319,
+      "block_time": 1747758667,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -9947080,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
+      },
+      "parser_reported_deltas": {
+        "SOL": -9947080,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_07_lulo_classic_deposit.json",
+      "signature": "3e8emyP9JYwAqtoU6QdbrAVQfWM9cGvH3Ld5nwp9tFqYWybwrQhq9RY6nGpSZ6v4eNNJ9f7fHA9qS6zQZGMSrHFk",
+      "slot": 352171920,
+      "block_time": 1752071596,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -5000000
+      },
+      "parser_reported_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -5000000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_08_lulo_boosted_deposit.json",
+      "signature": "XDWnZDjU8TguzQJidkUJHXXTF56XQ5uqBWuBf6L8nsJDEYHFFfmu9rTA18Hk7VBnXRYcY29fWRgGBQMiQ4wFq3h",
+      "slot": 352217568,
+      "block_time": 1752089572,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000000
+      },
+      "parser_reported_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_09_lulo_boosted_withdraw.json",
+      "signature": "3kro28jpPysvqzERojTMbNJM6tyQmi9UhG3BpATiWDMjgWz9snMW3H73dvWnj34xUME27d2UESU1qnuPdy3mpWCZ",
+      "slot": 352432543,
+      "block_time": 1752174575,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -1392000
+      },
+      "parser_reported_deltas": {
+        "SOL": -1392000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_10_lulo_boosted_withdraw_2.json",
+      "signature": "wJh9jamkb187meYbEe7HWtcEXzqQMo4BqCtWh6UPrN2Xgtx9oZFDQQF45rygmjvr7DL4pbgEhhn2XAfagcwjFJi",
+      "slot": 353522484,
+      "block_time": 1752605850,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -1392000
+      },
+      "parser_reported_deltas": {
+        "SOL": -1392000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_11_lulo_claim.json",
+      "signature": "2rAz9F5s5FsvpXSWdLCXVzGX6ZUEs8gRxmSx81ugvNgyg8bgwZnGaoW3pf2b65AiYqZNDSJXPz4qyDBfQ4GR6oWQ",
+      "slot": 353534112,
+      "block_time": 1752610477,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": 1392000,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 23005195
+      },
+      "parser_reported_deltas": {
+        "SOL": 1392000,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 23005195
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_12_meteora_dlmm_deposit.json",
+      "signature": "5T2nrVwauDeh7C9B4VM7K8cVYkByeaJ1MAvm1GkQtu6ecbyXoZeLrdR63bpVrZHBM2BsZiTNT2cdVpZ1bcmbeKLA",
+      "slot": 357905913,
+      "block_time": 1754346737,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": -61262740,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -999974
+      },
+      "parser_reported_deltas": {
+        "SOL": -61262740,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -999974
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_13_meteora_dlmm_claim.json",
+      "signature": "43rMxzRLSa7qL2Wk4szcVKtkZZ8MGKDf9SzUebsevCkm2Ys6aKhsocSzjwZyDdcr6RRy9oioi31GfggUGfFzEwPR",
+      "slot": 357907147,
+      "block_time": 1754347230,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": 2032,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 243
+      },
+      "parser_reported_deltas": {
+        "SOL": 2032,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 243
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "wallet_14_meteora_dlmm_withdraw_close_all.json",
+      "signature": "4iVr1E6ocK98ehRcpEXF9eh9gSBSbPazUkCoUZ9xE3woMSmpkNu77xJzuW9Nn8qktaUbvb7k4U2kkJc7FXrsaxuV",
+      "slot": 357908000,
+      "block_time": 1754347566,
+      "wallet": "JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+      "independent_deltas": {
+        "SOL": 67623796,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 264812
+      },
+      "parser_reported_deltas": {
+        "SOL": 67623796,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 264812
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "candidate_wallet_history"
+    },
+    {
+      "file": "suppl_01_meteora_farms_stake.json",
+      "signature": "41ZDdMHaSUBsTnQYPkdjee8C9PF6sUusKQZDhGCqomQEJZeXonv7pnMFp67xsxk3QjDrwD1yPm82LLx8LDo9cuRA",
+      "slot": 301195276,
+      "block_time": 1731521233,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "57XsTY7v5EL6TZdpA5vBtDT7VjBT81ty5iGaaMjq92Lo": -1000
+      },
+      "parser_reported_deltas": {
+        "57XsTY7v5EL6TZdpA5vBtDT7VjBT81ty5iGaaMjq92Lo": -1000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_02_flash_swap.json",
+      "signature": "5mpk4XBaCUgQA3ua3i86N48MqxUsJr6mbcipAT2eBsZiWFsW4oJ8X7Kh9WV7rmvgntH8iGQSbiP6JG7rSWCqfuPr",
+      "slot": 337965929,
+      "block_time": 1746437736,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK": -10000
+      },
+      "parser_reported_deltas": {
+        "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK": -10000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_03_flash_swap2.json",
+      "signature": "4LVJWC9NktubjCZF1Ev2tR28bS5bQNTh7DJAnEdtGDdpytrYU1StUXW3eqYwkmUbEQzyvbC4bmk26m33oczSou3e",
+      "slot": 337966621,
+      "block_time": 1746438007,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000,
+        "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK": 8951
+      },
+      "parser_reported_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000,
+        "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK": 8951
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_04_defituna_deposit_lend.json",
+      "signature": "3a5F7hbAWGk2nST3XCdB4z7KigTTSvwCCdxjbTHeXKLCAAkHRCEJME5sqqsP2B6bKUFxzcPmt5USwifiD93Qi1c5",
+      "slot": 346601948,
+      "block_time": 1749849527,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
+      },
+      "parser_reported_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_05_defituna_claim_pos_rewards.json",
+      "signature": "47pgkQL2BDTHwVaV5iE7kLDdnd9ExGPjUMjhtgAGrcveV7BdxGPdHi28w1f8RPzNmv7u7J3r8Y6iEs5W8LjpbjVA",
+      "slot": 346607556,
+      "block_time": 1749851775,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "SOL": -2024869,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -330597
+      },
+      "parser_reported_deltas": {
+        "SOL": -2024869,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -330597
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_06_kamino_account_creation.json",
+      "signature": "rbGkY2BSZx72wPPt8k3sspx6SseGhtqqKjCPZM2rCwuqUMd43PUYgnw85HR2gEDG18HXUdN5uJsgZKfpjAknXRA",
+      "slot": 350237570,
+      "block_time": 1751304614,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "SOL": -24165120,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000
+      },
+      "parser_reported_deltas": {
+        "SOL": -24165120,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000
+      },
+      "agrees": true,
+      "classification": "UNKNOWN",
+      "confidence": "0.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_07_spl_close_token_account.json",
+      "signature": "2ufzYLFMZFJPXgenxY33k1EGkeyL356DNdCgAn266sE9jqtvwYUBuETnfMhEHvb8AGL17eyFtf4483UDGNTyxPka",
+      "slot": 361339132,
+      "block_time": 1755701503,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "SOL": 2039280
+      },
+      "parser_reported_deltas": {
+        "SOL": 2039280
+      },
+      "agrees": true,
+      "classification": "TRANSFER_IN",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_08_jupiter_no_dooot.json",
+      "signature": "BMRnQSJSdTPgD2A4sLcWYEwv8gCiLne429aqR8iiDs3Upo1NTc5bcZRojHVC9gWvrpvEYmEqWB1ZFYDVvpS3JU9",
+      "slot": 363115966,
+      "block_time": 1756401410,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "xStpgUCss9piqeFUk2iLVcvJEGhAdJxJQuwLkXP555G": -1000000000,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 121276
+      },
+      "parser_reported_deltas": {
+        "xStpgUCss9piqeFUk2iLVcvJEGhAdJxJQuwLkXP555G": -1000000000,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 121276
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_09_xstep_full_stake_ix.json",
+      "signature": "3ZuwG45yBvuAFuQR1kCkhpuEc1D43v7SPCW37Uj1KknoiXA2VFMRteZ9CKuiv6tpyXHZW8VrX1WPkdJCxmsi1pzo",
+      "slot": 370071836,
+      "block_time": 1759160988,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "xStpgUCss9piqeFUk2iLVcvJEGhAdJxJQuwLkXP555G": 638253374,
+        "StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT": -1000000000
+      },
+      "parser_reported_deltas": {
+        "xStpgUCss9piqeFUk2iLVcvJEGhAdJxJQuwLkXP555G": 638253374,
+        "StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT": -1000000000
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_10_titan_swap_with_fees.json",
+      "signature": "5jvAd6i4HQisk4JDw5Ljcy2rwbwsR2joVKbWkrppaYHMLF882dVuNhHqpNv4vfp3Ps11nnEZLWWcXot7acuwQre4",
+      "slot": 372075376,
+      "block_time": 1759953389,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "SOL": 43509,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000
+      },
+      "parser_reported_deltas": {
+        "SOL": 43509,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_11_dflow_swap_with_fee.json",
+      "signature": "627zjqXdMpkogJFCxhcnVTtFCUHWpkAWXoMQPCwQKWnpCJcAzqeg5kx29p8cxmTKHAhXorxEjAVF8Rc1xryyyT7B",
+      "slot": 372276140,
+      "block_time": 1760032839,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "SOL": 4578,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
+      },
+      "parser_reported_deltas": {
+        "SOL": 4578,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_12_kamino_klend_vaults.json",
+      "signature": "2aZngDRaDSWb6vjjS9UzsP6Cwt1MH75nCPRSmLceM9aqGoidcKYJBVL16qLqQxvEUtHqHbtetgV6H7MziTzYyRwZ",
+      "slot": 374021908,
+      "block_time": 1760726336,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
+      },
+      "parser_reported_deltas": {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
+      },
+      "agrees": true,
+      "classification": "TRANSFER_OUT",
+      "confidence": "1.000",
+      "is_copy_eligible": false,
+      "role": "supplementary_cross_validation"
+    },
+    {
+      "file": "suppl_13_titan_swap_with_fees_2.json",
+      "signature": "5T4vmMjpZDRuVGKu4GHBrWGy7nb5axjmbjcAMFQTJ7EEpXiaFzGjS9tUzv4dDg2o58LvEXcZ66GiLBCM2PZLp68p",
+      "slot": 375100669,
+      "block_time": 1761155746,
+      "wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+      "independent_deltas": {
+        "SOL": 7371,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
+      },
+      "parser_reported_deltas": {
+        "SOL": 7371,
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
+      },
+      "agrees": true,
+      "classification": "SWAP_SIMPLE",
+      "confidence": "1.000",
+      "is_copy_eligible": true,
+      "role": "supplementary_cross_validation"
+    }
+  ]
+}

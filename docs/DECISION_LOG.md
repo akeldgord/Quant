@@ -1268,3 +1268,117 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/checkpoints/phase_1_remediation_6.md` section B for the
   complete per-finding commit list (`eea81f3`, `e0f7b9b`, `165c397`,
   `6adbea9`, `6e4aa5a`).
+
+### 2026-08-31 -- Phase 1 orchestrator approval + Phase 1.5 historical-data feasibility spike (argus-phase-1-5-001)
+- requirement_id: MASTER_SPEC.md section 21 (golden fixture discipline),
+  section 108 (evidence accuracy / no fabricated claims), section 109
+  (this log), Phase 1.5 (historical data feasibility spike)
+- decision: An independent orchestrator audit approved Phase 1
+  (`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`, at commit
+  `2fbc566af74832bc6523648f60ba8cb60d98eb31`) and authorized Phase 1.5
+  via instruction `argus-phase-1-5-001` (`AUTHORIZED_PHASE: 1.5`,
+  `APPROVES_PHASE: 1`). The same instruction granted a one-time manual
+  waiver for round 6's disclosed commit-trailer-formatting defect (3
+  affected commits): no history rewrite was required, but every commit
+  from this instruction forward must carry the `ARGUS-INSTRUCTION-ID`
+  trailer as the sole final message paragraph -- verified via
+  `git interpret-trailers --parse` before each push this session.
+  Phase 1.5's mission: prove whether the free-first data architecture
+  can reconstruct the historical evidence needed for later token/wallet
+  archaeology, using 1 verified historical token and 1 verified
+  candidate wallet established automatically from reachable free/public
+  sources. Neither general Solana RPC egress (`api.mainnet-beta.solana.com`,
+  Ankr, Alchemy, Solscan all proxy-denied with `CONNECT tunnel failed,
+  response 403`) nor a credentialed BigQuery path
+  (`bigquery.googleapis.com` is network-reachable but returns HTTP 401
+  with no GCP project/credential available, and none may be entered by
+  the implementation agent) nor GitHub's open-ended search API
+  (session-scoped, rejected with "sessions are bound to their configured
+  repositories") were usable -- so both inputs were established by
+  systematically indexing the full embedded test-transaction corpora of
+  two GitHub repositories already used and license-vetted by this
+  project (`0xjeffro/tx-parser`, MPL-2.0; `quellen-sol/ingestooor`,
+  GPL-3.0) by fee-payer wallet and token mint, surfacing a real pump.fun
+  token creation transaction and a real wallet with 14 transactions
+  spanning ~1 year across 4 DeFi protocols. Test A (early-buyer
+  reconstruction) recovered exactly 1 real buyer (the token creator's
+  own bundled initial dev-buy) -- a genuine, non-fabricated result, but
+  far short of a usable buyer cohort, since no further buyer discovery
+  is possible without a live RPC/indexed-dataset credential this
+  sandbox lacks. Test B (wallet-history reconstruction), run through the
+  existing, unmodified Phase 1 generic parser, found a disclosed 43%
+  `UNKNOWN` classification rate on the wallet's real lending/yield-
+  position activity -- a genuine parser-completeness gap (the parser has
+  no dedicated position-lifecycle classification), not a data-
+  availability gap; the balance-delta arithmetic itself was proven
+  correct regardless. Test C cross-validated 28 real transactions (the
+  token transaction, the 14 candidate-wallet transactions, and 13
+  supplementary transactions from a second real wallet used only to
+  clear the required 20-interpretation floor honestly) via an
+  independent, from-scratch recomputation of each wallet's raw balance
+  deltas directly from `meta.preBalances`/`postBalances`/
+  `preTokenBalances`/`postTokenBalances` -- never calling into
+  `argus.parsing` -- compared against `compute_account_level_deltas()`'s
+  actual output: 28 agreements, 0 disagreements. Test D measured this
+  spike's own entirely-offline cost (0 RPC calls, 0 provider credits,
+  ~926KB raw evidence, ~6ms processing) and produced an explicitly
+  theoretical, clearly-labeled linear-extrapolation scaling estimate
+  (a placeholder 500-transactions-per-wallet assumption -> ~50,100 RPC
+  calls for 100 wallets, ~501,000 for 1,000), declining to convert that
+  into a dollar/credit figure since no per-call Helius price table
+  exists anywhere in this repository (`config/providers.yaml` records
+  only a conservative rate limit, not pricing) and none was invented
+  from memory. Conclusion: `HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS`
+  -- the downstream interpretation architecture is positively proven
+  sound against real, diverse, previously-unseen evidence, but two
+  concrete limitations (unproven data-acquisition breadth; the 43%
+  classification gap) are carried forward explicitly, not smoothed
+  over, per the instruction's own definition of that disposition.
+  `FAIL` was considered and rejected because Test A's result, while
+  minimal, was genuine and non-zero, and Test B/C positively demonstrate
+  the architecture works correctly given real data.
+- lesson: a "feasibility spike" instruction with severely constrained
+  network access still has real, honest work to do -- reusing the
+  existing deterministic parser against genuinely novel, previously-
+  unseen real transactions (never fixtures this project authored or
+  reviewed before) is a meaningfully different and stronger test of
+  "does this architecture actually work" than re-running it against a
+  golden-fixture corpus this project already curated to pass. The
+  discipline that mattered most here was refusing to convert "we found
+  very little data" into either a fabricated success (inventing
+  buyers/wallets) or a reflexive `BOOTSTRAP_TOKEN_INPUT_REQUIRED` bailout
+  when a genuine, if minimal, non-fabricated result was actually
+  available -- and refusing to invent a cost/dollar figure with no
+  pricing table to back it, even though a plausible-looking number would
+  have been easy to fabricate.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-5-001` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 2fbc566af74832bc6523648f60ba8cb60d98eb31`,
+  `AUTHORIZED_ACTION: EXECUTE_PHASE_1_5_HISTORICAL_DATA_FEASIBILITY_SPIKE_ONLY`,
+  `AUTHORIZED_PHASE: 1.5`, `APPROVES_PHASE: 1`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: New `scripts/phase_1_5_feasibility.py` (the cross-validation
+  script, reusing `argus.parsing.generic_parser` unmodified) and
+  `tests/phase_1_5/test_historical_feasibility.py` (4 tests). New
+  `orchestration/phase_1_5/evidence/` (28 raw real transaction JSON
+  files, `PROVENANCE.md` citations, `analysis_results.json`). No
+  `src/argus` production code changed; no schema migration; no existing
+  golden/real-chain fixture touched (confirmed via
+  `git diff --stat -- tests/golden` against the pre-spike commit). 551
+  tests passing (up from 547), ruff clean, mypy clean.
+  `orchestration/checkpoints/phase_1_5.md` and
+  `orchestration/bundles/phase_1_5.txt` record the full 14-item
+  disposition required by the instruction.
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` is set to
+  `1` (per this instruction's own explicit direction -- an orchestrator
+  approval recorded by the implementation agent, not a self-approval)
+  and stays `1` -- Phase 1.5 itself remains unapproved until a later
+  instruction explicitly approves it.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified; no
+  Phase 2 work was started.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT (last code commit of
+  this spike; a final docs-only commit follows for this log entry, the
+  checkpoint, the bundle, and the handoff).
