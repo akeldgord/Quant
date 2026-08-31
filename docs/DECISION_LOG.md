@@ -992,3 +992,140 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   this round); see `orchestration/checkpoints/phase_1_remediation_4.md`
   section B for the complete per-finding commit list (`da95bcb`,
   `66fab4a`, `3e39a2b`, `558dfdc`, `f01f7ee`, `9d51dcf`).
+
+### 2026-08-31 — Phase 1 remediation round 5 (argus-phase-1-remediation-005)
+- requirement_id: MASTER_SPEC.md section 21 (golden fixture discipline),
+  section 108 (evidence accuracy / no fabricated claims), section 109
+  (this log)
+- decision: An independent orchestrator audit
+  (`argus-phase-1-remediation-005`) rejected round 4 outright
+  (`FAIL_REMEDIATION_REQUIRED`, not merely PARTIAL), citing 9 findings.
+  All 9 were remediated: (1) golden real-chain fixtures now carry a
+  typed, independently-asserted `ExpectedOutcome` (classification,
+  confidence, and a free-text rationale) that is never derived from or
+  compared against the parser's own output during import; (2) fixture
+  provenance is now bound by cryptographic evidence chaining --
+  `GitTreeAttestation` (a real `git ls-tree` against a
+  `--filter=blob:none --no-checkout` clone, captured once at import
+  time), `LicenseEvidence`, and an `evidence_chain_hash` covering both,
+  closing the gap where a hand-asserted provenance claim could drift
+  from the actual upstream source; (3) real-chain fixture category
+  coverage increased from 6 of 9 to 9 of 9 required categories by
+  sourcing genuine mainnet failed-transaction and LP-action examples,
+  with one (LP action) carrying an explicit documented label caveat
+  (parser emits `UNKNOWN` rather than a dedicated `LP_ACTION` label,
+  since the generic parser has no LP-specific classification path) left
+  for orchestrator disposition rather than silently resolved; (4) the
+  generic parser was made fail-closed for ambiguous/NFT/LP/multi-hop
+  assets -- only a `SWAP_SIMPLE` classification with both legs' decimals
+  known and confidence at or above the floor is ever copy-eligible,
+  `SWAP_COMPLEX` and multi-asset same-direction-no-offsetting shapes are
+  never eligible regardless of confidence; (5) Helius HTTP contract
+  validation was deepened further -- strict non-bool non-negative
+  integer checks on slot/fee/balance/decimals fields, structural
+  validation of both supported `accountKeys` shapes, full
+  pre/postTokenBalances entry validation, and an owner-mismatch check
+  and immutable (`MappingProxyType`) raw payload on token-account
+  records; (6) fixed a WebSocket subscription defect where
+  `HeliusWebSocketStream.open_subscription()`'s ack-matching used Python
+  `==` (so a boolean request id could equal an unrelated integer ack
+  id), discarded any non-matching message received while waiting for
+  the ack, and where `_stream_once`'s timeout/liveness handling
+  cancelled-and-recreated the receive coroutine on every timeout --
+  which, per Python async-generator semantics, permanently closes the
+  generator, so a live connection could report false stream exhaustion.
+  Fixed via exact id-type-and-value matching, buffering and later
+  draining of early notifications (parsed exactly once), a transport-
+  level `check_liveness()` ping/pong probe consulted before treating a
+  timeout as dead, and reusing a single pending receive `Task` across
+  timeout cycles instead of cancelling it; (7) production git-identity
+  resolution now verifies an override matches `HEAD` and a clean
+  checkout before trusting it, rather than accepting an override value
+  unconditionally; (8) migration 0007's `downgrade()` now runs a
+  preflight query for `(event_id, parser_version)` pairs spanning more
+  than one `build_hash` and raises
+  `Downgrade0007IncompatibleDataError` rather than silently dropping the
+  versioning column/constraint and merging or arbitrarily selecting one
+  row, proven against real Postgres for both the compatible and
+  incompatible-data cases; (9) this entry, the round-5 checkpoint, and
+  `docs/BUILD_STATE.md` were reconciled against the actual evidence
+  gathered, including two existing tests independently found to be
+  unknowingly dependent on the exact WebSocket defect fixed in (6) (a
+  race-timing assumption crossing two wallets, and a dead code path
+  where a second scripted exception in a test double was unreachable
+  because the first exception's `raise` already exits the generator's
+  loop) -- both were fixed to assert the underlying condition robustly
+  rather than incidentally, and the discovery is documented rather than
+  smoothed over, per the instruction's explicit "audit-of-the-audit"
+  requirement.
+- reason: A second independent audit finding the prior round's
+  remediation insufficient on its own terms (not merely leaving one
+  disclosed gap, as round 4 did) is a stronger signal than either
+  self-assessment or a single external review. Several of round 5's
+  findings are of the same shape as round 4's: a design that was
+  internally consistent but not actually anchored to anything outside
+  itself (fixture "expected" values not independently asserted;
+  provenance recorded but not cryptographically verifiable) or a defect
+  whose failure mode look identical to correct behavior under casual
+  testing (a boolean-vs-integer id match; a generator that appears to
+  keep working until a specific timeout/cancellation sequence poisons
+  it). The mechanism fixes -- typed independent expectations,
+  cryptographic evidence chaining, exact-type id matching, a bounded
+  liveness probe instead of a destructive cancel-and-recreate -- matter
+  more than any single finding's correctness, because they are what
+  make a *future* instance of the same defect shape detectable rather
+  than merely fixing the one instance found this round.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-005` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 2f436ae775c6185f820f59bc8dbef61ce0a95160`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_5_ONLY`,
+  `AUTHORIZED_PHASE: 1`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: Extended `src/argus/golden_fixtures.py` (`ExpectedOutcome`,
+  `GitTreeAttestation`, `LicenseEvidence`, `evidence_chain_hash`,
+  `extract_ts_const_export_default` transform step, `attest_git_tree()`)
+  and re-imported all 12 `tests/golden/fixtures/real/` fixtures (manifest
+  shape changed for every fixture, not only the new ones); extended
+  `src/argus/parsers/generic.py` (or equivalent copy-eligibility gate) to
+  fail closed on `SWAP_COMPLEX`/ambiguous multi-asset shapes; extended
+  `src/argus/providers/helius/client.py` (`_is_strict_nonneg_int`,
+  `_resolved_account_keys`, `_is_matching_request_id`, buffered-
+  notification `HeliusSubscription`, `check_liveness()`,
+  `MappingProxyType` raw payloads) and `src/argus/providers/__init__.py`
+  (`StreamSubscription.check_liveness` protocol method); rewrote
+  `src/argus/ingestion/manager.py`'s `_stream_once` receive loop to reuse
+  a pending `Task` across timeout/liveness cycles instead of cancelling
+  and recreating the async generator's `__anext__()` coroutine, and
+  `src/argus/ingestion/test_mode.py`'s `NullStreamSubscription`; extended
+  `src/argus/config.py` git-identity override verification; new
+  `Downgrade0007IncompatibleDataError` and preflight query in
+  `migrations/versions/0007_swaps_build_hash_versioning.py`. Substantially
+  expanded `tests/unit/{test_provider_adapters,test_ingestion_manager,
+  test_golden_fixtures,test_config}.py` and
+  `tests/integration/test_migrations.py`. 70 net new tests (420 -> 490).
+  Full suite: 490 passed, 87% coverage, ruff clean, mypy clean (bare
+  `uv run mypy` invocation matching `pyproject.toml`'s `packages =
+  ["argus"]` scope), alembic downgrade-to-base/upgrade-to-head clean
+  through migration 0007 including new populated-data downgrade tests.
+  Real-chain fixture coverage is 9 of 9 required categories, one (LP
+  action) with a disclosed label caveat.
+  `orchestration/checkpoints/phase_1_remediation_5.md` and
+  `orchestration/bundles/phase_1_remediation_5.txt` record the full
+  15-item PASS/PASS-WITH-CAVEAT disposition. All prior Phase 0/Phase 1/
+  round-1/round-2/round-3/round-4 evidence files (including round 4's
+  checkpoint and its own `docs/BUILD_STATE.md` phase-history row) are
+  preserved unmodified as immutable history.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified;
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `0`
+  and the Phase 0 `approved_commit` is unchanged — this task did not and
+  could not self-approve Phase 1, and Phase 1.5 remains forbidden and
+  unattempted.
+- git_commit: 6c7f4df1cce181dd54383b6dbb09f6be27df4471 (last code commit
+  of this round; a final docs-only commit follows for this log entry,
+  the checkpoint, the bundle, and the handoff); see
+  `orchestration/checkpoints/phase_1_remediation_5.md` section B for the
+  complete per-finding commit list (`d924771`, `12fb70a`, `89dfc5b`,
+  `0aa6c7a`, `a1c939b`, `6652be6`, `6c7f4df`).
