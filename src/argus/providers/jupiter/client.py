@@ -10,14 +10,15 @@ unimplemented. :class:`argus.providers.ExecutionProvider` itself has no
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import httpx
 
 from argus.clock import Clock
-from argus.providers.retry import RetryPolicy, request_with_retry
-from argus.providers.usage import RequestUsageRecord, UsageRecorder
+from argus.providers.contract import require_dict, require_numeric_string, require_str
+from argus.providers.http import send_with_usage
+from argus.providers.retry import RetryPolicy
+from argus.providers.usage import UsageRecorder
 
 DEFAULT_BASE_URL = "https://quote-api.jup.ag"
 
@@ -43,26 +44,15 @@ class JupiterClient:
         self._clock = clock or Clock()
 
     async def _send(self, send: Any, *, endpoint: str, request_class: str) -> httpx.Response:
-        requested_at = self._clock.utc_now()
-        start = time.monotonic()
-        outcome = await request_with_retry(send, policy=self._retry_policy)
-        response = outcome.response
-        if self._usage_recorder is not None:
-            await self._usage_recorder.record_request(
-                RequestUsageRecord(
-                    provider="jupiter",
-                    endpoint=endpoint,
-                    request_class=request_class,
-                    requested_at=requested_at,
-                    status="ok" if not response.is_error else "http_error",
-                    cache_hit=False,
-                    response_at=self._clock.utc_now(),
-                    latency_ms=int((time.monotonic() - start) * 1000),
-                    retry_count=outcome.retry_count,
-                    bytes_received=len(response.content),
-                )
-            )
-        return response
+        return await send_with_usage(
+            send,
+            policy=self._retry_policy,
+            usage_recorder=self._usage_recorder,
+            clock=self._clock,
+            provider="jupiter",
+            endpoint=endpoint,
+            request_class=request_class,
+        )
 
     async def get_quote(
         self, *, input_mint: str, output_mint: str, amount_raw: int, slippage_bps: int = 50
@@ -81,7 +71,9 @@ class JupiterClient:
             request_class="quote",
         )
         response.raise_for_status()
-        data: dict[str, Any] = response.json()
+        data = require_dict(response.json(), context="Jupiter get_quote")
+        require_numeric_string(data.get("inAmount"), context="Jupiter get_quote 'inAmount'")
+        require_numeric_string(data.get("outAmount"), context="Jupiter get_quote 'outAmount'")
         return data
 
     async def build_unsigned_order(
@@ -103,5 +95,8 @@ class JupiterClient:
             request_class="order_construction",
         )
         response.raise_for_status()
-        data: dict[str, Any] = response.json()
+        data = require_dict(response.json(), context="Jupiter build_unsigned_order")
+        require_str(
+            data.get("swapTransaction"), context="Jupiter build_unsigned_order 'swapTransaction'"
+        )
         return data

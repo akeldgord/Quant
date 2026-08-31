@@ -367,3 +367,189 @@ async def test_geckoterminal_records_usage_for_both_endpoints() -> None:
     assert len(usage.requests) == 2
     assert {r.endpoint for r in usage.requests} == {"token_snapshot", "historical_ohlcv"}
     await http_client.aclose()
+
+
+# --- Finding #6: adversarial malformed-response contract tests ---------
+
+
+async def test_dexscreener_malformed_pair_price_rejected() -> None:
+    from argus.providers.contract import ProviderContractError
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"pairs": [{"priceUsd": "not-a-number"}]})
+        )
+    )
+    client = DexScreenerClient(http_client=http_client)
+    with pytest.raises(ProviderContractError, match="priceUsd"):
+        await client.token_snapshot("SomeMint")
+    await http_client.aclose()
+
+
+async def test_dexscreener_pairs_not_a_list_rejected() -> None:
+    from argus.providers.contract import ProviderContractError
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"pairs": "not-a-list"}))
+    )
+    client = DexScreenerClient(http_client=http_client)
+    with pytest.raises(ProviderContractError):
+        await client.token_snapshot("SomeMint")
+    await http_client.aclose()
+
+
+async def test_geckoterminal_malformed_candle_row_rejected() -> None:
+    from argus.providers.contract import ProviderContractError
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(
+                200,
+                json={"data": {"attributes": {"ohlcv_list": [[1, 2, 3]]}}},  # only 3 elements
+            )
+        )
+    )
+    client = GeckoTerminalClient(http_client=http_client)
+    with pytest.raises(ProviderContractError, match="6-element"):
+        from datetime import UTC, datetime
+
+        await client.historical_ohlcv("SomeMint", start=datetime.now(UTC), end=datetime.now(UTC))
+    await http_client.aclose()
+
+
+async def test_geckoterminal_ohlcv_list_not_a_list_rejected() -> None:
+    from argus.providers.contract import ProviderContractError
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"data": {"attributes": {"ohlcv_list": "nope"}}})
+        )
+    )
+    client = GeckoTerminalClient(http_client=http_client)
+    with pytest.raises(ProviderContractError):
+        from datetime import UTC, datetime
+
+        await client.historical_ohlcv("SomeMint", start=datetime.now(UTC), end=datetime.now(UTC))
+    await http_client.aclose()
+
+
+async def test_jupiter_quote_missing_amount_rejected() -> None:
+    from argus.providers.contract import ProviderContractError
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"outAmount": "1"}))
+    )
+    client = JupiterClient(http_client=http_client)
+    with pytest.raises(ProviderContractError, match="inAmount"):
+        await client.get_quote(input_mint="A", output_mint="B", amount_raw=1)
+    await http_client.aclose()
+
+
+async def test_jupiter_unsigned_order_missing_swap_transaction_rejected() -> None:
+    from argus.providers.contract import ProviderContractError
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"notTheRightField": 1}))
+    )
+    client = JupiterClient(http_client=http_client)
+    with pytest.raises(ProviderContractError, match="swapTransaction"):
+        await client.build_unsigned_order(quote={}, wallet_address="Wallet")
+    await http_client.aclose()
+
+
+async def test_helius_get_signatures_malformed_entry_type_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": [{"signature": "sig", "slot": "not-an-int"}],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="wrong type"):
+        await client.get_signatures_for_address("SomeWallet")
+    await http_client.aclose()
+
+
+async def test_helius_signature_statuses_length_mismatch_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": []}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="expected 1 status entries"):
+        await client.get_signature_statuses(["sig-1"])
+    await http_client.aclose()
+
+
+# --- Finding #7: usage accounting must survive transport exhaustion ----
+
+
+async def test_transport_exhaustion_still_records_usage_then_reraises() -> None:
+    from argus.providers.retry import RetryPolicy
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient(
+        "fake-key",
+        http_client=http_client,
+        usage_recorder=usage,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0.001, max_delay_seconds=0.005),
+    )
+    with pytest.raises(httpx.ConnectError):
+        await client.get_slot()
+
+    assert len(usage.requests) == 1
+    record = usage.requests[0]
+    assert record.status == "transport_error"
+    assert record.retry_count == 2  # max_attempts - 1: every attempt was exhausted
+    assert record.bytes_received is None
+    await http_client.aclose()
+
+
+async def test_recorder_failure_never_masks_the_real_provider_outcome() -> None:
+    """A DB error while recording usage must never replace or hide the
+    real success/failure the caller actually gets back."""
+
+    class _FailingUsageRecorder:
+        async def record_request(self, record):  # noqa: ANN001
+            raise RuntimeError("usage DB is down")
+
+        async def record_streaming(self, record):  # noqa: ANN001
+            raise RuntimeError("usage DB is down")
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": 99})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(ok_handler))
+    client = HeliusRpcClient(
+        "fake-key", http_client=http_client, usage_recorder=_FailingUsageRecorder()
+    )
+    result = await client.get_slot()
+    assert result == 99  # the real success is returned despite the recorder failing
+    await http_client.aclose()
+
+    def raising_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    from argus.providers.retry import RetryPolicy
+
+    http_client2 = httpx.AsyncClient(transport=httpx.MockTransport(raising_handler))
+    client2 = HeliusRpcClient(
+        "fake-key",
+        http_client=http_client2,
+        usage_recorder=_FailingUsageRecorder(),
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0.001, max_delay_seconds=0.005),
+    )
+    with pytest.raises(
+        httpx.ConnectError
+    ):  # the real transport failure, not the recorder's RuntimeError
+        await client2.get_slot()
+    await http_client2.aclose()

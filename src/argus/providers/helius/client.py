@@ -16,7 +16,6 @@ fake transport instead of a live network connection.
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -26,8 +25,9 @@ import httpx
 from argus.clock import Clock
 from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification
 from argus.providers.credentials import require_env_credential
-from argus.providers.retry import RetryPolicy, request_with_retry
-from argus.providers.usage import RequestUsageRecord, UsageRecorder
+from argus.providers.http import send_with_usage
+from argus.providers.retry import RetryPolicy
+from argus.providers.usage import UsageRecorder
 
 HELIUS_API_KEY_ENV_VAR = "HELIUS_API_KEY"
 DEFAULT_RPC_BASE_URL = "https://mainnet.helius-rpc.com/"
@@ -67,31 +67,17 @@ class HeliusRpcClient:
 
     async def _rpc(self, method: str, params: list[Any]) -> Any:
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-        requested_at = self._clock.utc_now()
-        start = time.monotonic()
-        outcome = await request_with_retry(
+        response = await send_with_usage(
             lambda: self._http.post(
                 self._base_url, params={"api-key": self._api_key}, json=payload
             ),
             policy=self._retry_policy,
+            usage_recorder=self._usage_recorder,
+            clock=self._clock,
+            provider="helius",
+            endpoint=method,
+            request_class="rpc",
         )
-        response = outcome.response
-        latency_ms = int((time.monotonic() - start) * 1000)
-        if self._usage_recorder is not None:
-            await self._usage_recorder.record_request(
-                RequestUsageRecord(
-                    provider="helius",
-                    endpoint=method,
-                    request_class="rpc",
-                    requested_at=requested_at,
-                    status="ok" if not response.is_error else "http_error",
-                    cache_hit=False,
-                    response_at=self._clock.utc_now(),
-                    latency_ms=latency_ms,
-                    retry_count=outcome.retry_count,
-                    bytes_received=len(response.content),
-                )
-            )
         response.raise_for_status()
         data = response.json()
         if "error" in data:

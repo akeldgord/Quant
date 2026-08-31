@@ -116,7 +116,9 @@ async def test_probe_geckoterminal_success_via_mock_transport() -> None:
 
 async def test_probe_jupiter_success_via_mock_transport() -> None:
     http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"outAmount": "1"}))
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"inAmount": "1000000", "outAmount": "1"})
+        )
     )
     result = await probe_jupiter(_config(), http_client)
     assert result.reachable is True

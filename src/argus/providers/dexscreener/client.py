@@ -5,15 +5,16 @@ key required for the public free-tier endpoints used here.
 
 from __future__ import annotations
 
-import time
 from datetime import datetime
 from typing import Any
 
 import httpx
 
 from argus.clock import Clock
-from argus.providers.retry import RetryPolicy, request_with_retry
-from argus.providers.usage import RequestUsageRecord, UsageRecorder
+from argus.providers.contract import require_dict, require_key, require_list, require_numeric_string
+from argus.providers.http import send_with_usage
+from argus.providers.retry import RetryPolicy
+from argus.providers.usage import UsageRecorder
 
 DEFAULT_BASE_URL = "https://api.dexscreener.com"
 
@@ -39,30 +40,32 @@ class DexScreenerClient:
         self._clock = clock or Clock()
 
     async def token_snapshot(self, mint: str) -> dict[str, Any]:
-        requested_at = self._clock.utc_now()
-        start = time.monotonic()
-        outcome = await request_with_retry(
+        response = await send_with_usage(
             lambda: self._http.get(f"{self._base_url}/latest/dex/tokens/{mint}"),
             policy=self._retry_policy,
+            usage_recorder=self._usage_recorder,
+            clock=self._clock,
+            provider="dexscreener",
+            endpoint="token_snapshot",
+            request_class="rest",
         )
-        response = outcome.response
-        if self._usage_recorder is not None:
-            await self._usage_recorder.record_request(
-                RequestUsageRecord(
-                    provider="dexscreener",
-                    endpoint="token_snapshot",
-                    request_class="rest",
-                    requested_at=requested_at,
-                    status="ok" if not response.is_error else "http_error",
-                    cache_hit=False,
-                    response_at=self._clock.utc_now(),
-                    latency_ms=int((time.monotonic() - start) * 1000),
-                    retry_count=outcome.retry_count,
-                    bytes_received=len(response.content),
-                )
-            )
         response.raise_for_status()
-        data: dict[str, Any] = response.json()
+        data = require_dict(response.json(), context="DexScreener token_snapshot")
+        pairs = data.get("pairs")
+        if pairs is not None:
+            for pair in require_list(pairs, context="DexScreener token_snapshot 'pairs'"):
+                pair_obj = require_dict(pair, context="DexScreener token_snapshot pair entry")
+                price = pair_obj.get("priceUsd")
+                if price is not None:
+                    require_numeric_string(price, context="DexScreener pair 'priceUsd'")
+                for side in ("baseToken", "quoteToken"):
+                    token = pair_obj.get(side)
+                    if token is not None:
+                        require_key(
+                            require_dict(token, context=f"DexScreener pair {side!r}"),
+                            "address",
+                            context=f"DexScreener pair {side!r}",
+                        )
         return data
 
     async def historical_ohlcv(
