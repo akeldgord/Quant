@@ -14,7 +14,7 @@ SCOPE: Phase 1.5 remediation round 1, per orchestrator instruction
   because each has one negative and one positive asset delta.
 STATUS: HISTORICAL_DATA_PATH_PASS_WITH_LIMITATIONS
 UTC_TIMESTAMP: 2026-08-31T22:33:07Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 3aa61b4d220c3211e4dca1ca46b18b1ab510376e
 TARGET_COMMIT: b68e37393370c7f9f3eb8860fecdaaa3f9c28696
 AUTHORIZED_PHASE: 1.5
 APPROVES_PHASE: NONE
@@ -219,7 +219,7 @@ parser `UNKNOWN` rate on real position activity.
 H. Commands actually run and their test results, full-suite counts and skips
 
 All commands run against this exact commit
-(`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`) after the fix was complete:
+(`3aa61b4d220c3211e4dca1ca46b18b1ab510376e`) after the fix was complete:
 
 1. **Targeted positive-semantic-eligibility-gate tests:**
    `uv run pytest tests/golden/test_generic_parser.py -k "solend or

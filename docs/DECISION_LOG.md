@@ -1476,6 +1476,6 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   Phase 2 work was started. `orchestration/checkpoints/phase_1_5.md`
   and `orchestration/bundles/phase_1_5.txt` are preserved unmodified as
   immutable history.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT (last code commit of
+- git_commit: 3aa61b4d220c3211e4dca1ca46b18b1ab510376e (last code commit of
   this remediation round; a final docs-only commit follows for this log
   entry, the checkpoint, the bundle, and the handoff).
