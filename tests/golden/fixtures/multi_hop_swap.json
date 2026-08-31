@@ -1,0 +1,61 @@
+{
+  "blockTime": 1735000004,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "postBalances": [
+      4499995000,
+      2000000000
+    ],
+    "postTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenAFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "0",
+          "decimals": 6,
+          "uiAmount": 0.0
+        }
+      },
+      {
+        "accountIndex": 0,
+        "mint": "TokenCFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "750000000",
+          "decimals": 6,
+          "uiAmount": 750.0
+        }
+      }
+    ],
+    "preBalances": [
+      5000000000,
+      1000000000
+    ],
+    "preTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenAFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "200000000",
+          "decimals": 6,
+          "uiAmount": 200.0
+        }
+      }
+    ]
+  },
+  "slot": 100000004,
+  "transaction": {
+    "message": {
+      "accountKeys": [
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ]
+    },
+    "signatures": [
+      "golden-multi-hop-0000000000000000000000000"
+    ]
+  }
+}

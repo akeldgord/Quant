@@ -1,0 +1,382 @@
+"""Deterministic, generic balance-delta transaction parser.
+
+MASTER_SPEC.md section 21 (GENERIC TRANSACTION/SWAP PARSER): start with
+deterministic wallet-owned pre/post balance-delta reconstruction; do not
+build a separate parser for every DEX. Given a raw Solana
+``getTransaction`` response (as returned by any RPC provider -- this module
+never depends on a provider-specific object, only the standard Solana JSON
+RPC transaction shape) and the wallet address being tracked, this module:
+
+1. obtains and preserves raw transaction evidence (the caller stores it
+   verbatim in ``chain_events.raw_payload`` -- this module only reads it);
+2. identifies wallet-owned accounts (SOL via ``accountKeys`` index, tokens
+   via each token-balance entry's ``owner`` field);
+3. canonicalizes native SOL and wrapped SOL into a single logical asset;
+4. calculates net native/token deltas for the tracked wallet;
+5. accounts for the network fee (only charged to the fee payer, account
+   index 0);
+6. identifies meaningful asset inflow/outflow;
+7. classifies deterministically into one of the seven canonical
+   ``Classification`` values;
+8. emits a confidence score and this module's ``PARSER_VERSION``.
+
+Classification is a pure decision tree over signed, non-zero balance
+deltas -- no DEX-program-ID special-casing. Two of the seven values
+(``TOKEN_CREATE``, ``LP_ACTION``) rely on documented heuristics, not
+instruction parsing, since a purely balance-delta parser cannot always
+distinguish "created a new token account" or "added/removed liquidity"
+from the raw account-level deltas alone; both are architecturally free to
+be superseded by an instruction-aware parser in a later phase without
+requiring any Phase 1 schema change (``parser_version`` exists exactly to
+make different parser generations distinguishable in the ledger, per
+CORE-002/CORE-003 -- re-parsing never rewrites raw evidence).
+
+Any transaction that fails on-chain (``meta.err`` set), or whose deltas
+don't fit a confident pattern, is classified ``UNKNOWN``: preserved for
+research (MASTER_SPEC section 21) but never copy-eligible (see
+``ParsedTransaction.is_copy_eligible``).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, Final, Literal
+
+PARSER_VERSION: Final[str] = "generic_balance_delta_v1"
+
+NATIVE_SOL_ASSET: Final[str] = "SOL"
+WRAPPED_SOL_MINT: Final[str] = "So11111111111111111111111111111111111111112"
+NATIVE_SOL_DECIMALS: Final[int] = 9
+
+Classification = Literal[
+    "SWAP_SIMPLE",
+    "SWAP_COMPLEX",
+    "TRANSFER_IN",
+    "TRANSFER_OUT",
+    "TOKEN_CREATE",
+    "LP_ACTION",
+    "UNKNOWN",
+]
+
+# Classifications a copy-trading consumer may ever treat as an executable
+# trade signal. Deliberately narrow: TRANSFER_IN/OUT/TOKEN_CREATE/LP_ACTION
+# are not trades to mirror, and UNKNOWN is never eligible regardless of
+# confidence (MASTER_SPEC section 21: "no automatic copy trade" for
+# ambiguous transactions).
+_COPY_ELIGIBLE_CLASSIFICATIONS: Final[frozenset[str]] = frozenset({"SWAP_SIMPLE", "SWAP_COMPLEX"})
+_MIN_COPY_ELIGIBLE_CONFIDENCE: Final[Decimal] = Decimal("0.500")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AssetMove:
+    asset: str  # "SOL" or a mint address
+    amount_raw: int  # signed; negative = outflow, positive = inflow
+    decimals: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParsedTransaction:
+    classification: Classification
+    confidence: Decimal
+    parser_version: str
+    reason: str
+
+    wallet_address: str
+    slot: int
+    block_time: datetime | None
+
+    input_mint: str | None
+    input_amount_raw: int | None
+    input_amount_ui: Decimal | None
+
+    output_mint: str | None
+    output_amount_raw: int | None
+    output_amount_ui: Decimal | None
+
+    network_fee_raw: int
+
+    @property
+    def is_copy_eligible(self) -> bool:
+        """Mechanical gate: an ambiguous/UNKNOWN or low-confidence result
+        can never create a live-copy signal, regardless of what any
+        downstream code does or forgets to check."""
+        return (
+            self.classification in _COPY_ELIGIBLE_CLASSIFICATIONS
+            and self.confidence >= _MIN_COPY_ELIGIBLE_CONFIDENCE
+        )
+
+
+def _canonical_asset(mint: str) -> str:
+    return NATIVE_SOL_ASSET if mint == WRAPPED_SOL_MINT else mint
+
+
+def _account_keys(raw: dict[str, Any]) -> list[str]:
+    message = raw["transaction"]["message"]
+    keys = message["accountKeys"]
+    # Some RPC shapes return account keys as {"pubkey": "..."} objects
+    # (e.g. jsonParsed encoding); accept both forms deterministically.
+    return [k["pubkey"] if isinstance(k, dict) else k for k in keys]
+
+
+def _sol_deltas(raw: dict[str, Any], wallet_address: str) -> dict[str, int]:
+    keys = _account_keys(raw)
+    if wallet_address not in keys:
+        return {}
+    idx = keys.index(wallet_address)
+    meta = raw["meta"]
+    pre = meta["preBalances"][idx]
+    post = meta["postBalances"][idx]
+    delta = post - pre
+    if idx == 0:
+        # Only the fee payer (account index 0) pays the network fee; add it
+        # back so the fee is accounted for separately (step 5) rather than
+        # being misread as an asset the wallet "swapped away".
+        delta += meta.get("fee", 0)
+    return {NATIVE_SOL_ASSET: delta} if delta != 0 else {}
+
+
+def _token_deltas(
+    raw: dict[str, Any], wallet_address: str
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Returns (deltas_by_asset, decimals_by_asset). Wrapped SOL is folded
+    into the native SOL bucket per canonicalization (step 3)."""
+    meta = raw["meta"]
+    pre_by_key: dict[tuple[int, str], int] = {}
+    decimals_by_mint: dict[str, int] = {}
+    for entry in meta.get("preTokenBalances", []) or []:
+        if entry.get("owner") != wallet_address:
+            continue
+        key = (entry["accountIndex"], entry["mint"])
+        pre_by_key[key] = int(entry["uiTokenAmount"]["amount"])
+        decimals_by_mint[entry["mint"]] = entry["uiTokenAmount"]["decimals"]
+
+    post_by_key: dict[tuple[int, str], int] = {}
+    for entry in meta.get("postTokenBalances", []) or []:
+        if entry.get("owner") != wallet_address:
+            continue
+        key = (entry["accountIndex"], entry["mint"])
+        post_by_key[key] = int(entry["uiTokenAmount"]["amount"])
+        decimals_by_mint[entry["mint"]] = entry["uiTokenAmount"]["decimals"]
+
+    deltas_by_asset: dict[str, int] = {}
+    for key in set(pre_by_key) | set(post_by_key):
+        _, mint = key
+        delta = post_by_key.get(key, 0) - pre_by_key.get(key, 0)
+        if delta == 0:
+            continue
+        asset = _canonical_asset(mint)
+        decimals = NATIVE_SOL_DECIMALS if asset == NATIVE_SOL_ASSET else decimals_by_mint[mint]
+        decimals_by_mint.setdefault(asset, decimals)
+        deltas_by_asset[asset] = deltas_by_asset.get(asset, 0) + delta
+
+    decimals_out = {
+        asset: (NATIVE_SOL_DECIMALS if asset == NATIVE_SOL_ASSET else decimals_by_mint[asset])
+        for asset in deltas_by_asset
+    }
+    return deltas_by_asset, decimals_out
+
+
+def _newly_created_wallet_accounts(raw: dict[str, Any], wallet_address: str) -> set[str]:
+    """Mint addresses that gained a wallet-owned token account in this
+    transaction where none existed before (used by the TOKEN_CREATE
+    heuristic)."""
+    meta = raw["meta"]
+    pre_mints = {
+        e["mint"]
+        for e in (meta.get("preTokenBalances", []) or [])
+        if e.get("owner") == wallet_address
+    }
+    post_mints = {
+        e["mint"]
+        for e in (meta.get("postTokenBalances", []) or [])
+        if e.get("owner") == wallet_address
+    }
+    return post_mints - pre_mints
+
+
+def _ui_amount(raw_amount: int, decimals: int) -> Decimal:
+    return Decimal(raw_amount).scaleb(-decimals)
+
+
+def parse_transaction(
+    raw: dict[str, Any],
+    *,
+    wallet_address: str,
+    slot: int,
+    block_time: datetime | None,
+) -> ParsedTransaction:
+    """Deterministically classify one raw Solana transaction from the
+    perspective of ``wallet_address``. Never raises on well-formed input
+    (including a failed on-chain transaction); malformed/missing required
+    fields raise ``KeyError``/``ValueError`` so a structurally broken raw
+    payload is never silently misclassified as UNKNOWN."""
+    meta = raw["meta"]
+    fee = int(meta.get("fee", 0))
+    account_keys = _account_keys(raw)
+    is_fee_payer = bool(account_keys) and account_keys[0] == wallet_address
+    network_fee_raw = fee if is_fee_payer else 0
+
+    def _result(
+        classification: Classification,
+        confidence: str,
+        reason: str,
+        *,
+        input_asset: str | None = None,
+        input_amount: int | None = None,
+        output_asset: str | None = None,
+        output_amount: int | None = None,
+        decimals_by_asset: dict[str, int] | None = None,
+    ) -> ParsedTransaction:
+        decimals_by_asset = decimals_by_asset or {}
+
+        def _decimals(asset: str) -> int:
+            return NATIVE_SOL_DECIMALS if asset == NATIVE_SOL_ASSET else decimals_by_asset[asset]
+
+        return ParsedTransaction(
+            classification=classification,
+            confidence=Decimal(confidence),
+            parser_version=PARSER_VERSION,
+            reason=reason,
+            wallet_address=wallet_address,
+            slot=slot,
+            block_time=block_time,
+            input_mint=input_asset,
+            input_amount_raw=abs(input_amount) if input_amount is not None else None,
+            input_amount_ui=(
+                _ui_amount(abs(input_amount), _decimals(input_asset))
+                if input_amount is not None and input_asset is not None
+                else None
+            ),
+            output_mint=output_asset,
+            output_amount_raw=output_amount if output_amount is not None else None,
+            output_amount_ui=(
+                _ui_amount(output_amount, _decimals(output_asset))
+                if output_amount is not None and output_asset is not None
+                else None
+            ),
+            network_fee_raw=network_fee_raw,
+        )
+
+    if meta.get("err") is not None:
+        return _result("UNKNOWN", "0.000", "transaction failed on-chain (meta.err set)")
+
+    sol_deltas = _sol_deltas(raw, wallet_address)
+    token_deltas, token_decimals = _token_deltas(raw, wallet_address)
+
+    deltas: dict[str, int] = dict(token_deltas)
+    for asset, amount in sol_deltas.items():
+        deltas[asset] = deltas.get(asset, 0) + amount
+    deltas = {asset: amount for asset, amount in deltas.items() if amount != 0}
+
+    decimals_by_asset = dict(token_decimals)
+    decimals_by_asset.setdefault(NATIVE_SOL_ASSET, NATIVE_SOL_DECIMALS)
+
+    if not deltas:
+        return _result("UNKNOWN", "0.000", "no wallet-relevant balance change found")
+
+    negatives = {a: d for a, d in deltas.items() if d < 0}
+    positives = {a: d for a, d in deltas.items() if d > 0}
+
+    # TOKEN_CREATE heuristic: a brand-new wallet-owned token account
+    # appeared this transaction (post-only mint) with a zero resulting
+    # balance (so it never enters `deltas` at all -- a delta of 0 is
+    # filtered out above), the wallet paid SOL (rent-exemption) to do it,
+    # and no asset was actually received. This deliberately does NOT match
+    # "bought a token for the first time via a swap": that case has a
+    # *nonzero* delta for the newly-seen mint, which shows up in `positives`
+    # and correctly falls through to the swap classification below instead.
+    new_accounts = _newly_created_wallet_accounts(raw, wallet_address)
+    if (
+        new_accounts
+        and not (set(deltas) & new_accounts)
+        and set(negatives) <= {NATIVE_SOL_ASSET}
+        and not positives
+    ):
+        return _result(
+            "TOKEN_CREATE",
+            "0.600",
+            "new wallet-owned token account created with zero balance; "
+            "SOL paid for rent, no asset actually received",
+            decimals_by_asset=decimals_by_asset,
+        )
+
+    non_sol_negatives = {a: d for a, d in negatives.items() if a != NATIVE_SOL_ASSET}
+    non_sol_positives = {a: d for a, d in positives.items() if a != NATIVE_SOL_ASSET}
+
+    # LP_ACTION heuristic: two or more non-SOL assets move in the SAME
+    # direction together (both given up, or both received) -- characteristic
+    # of adding/removing liquidity, unlike a swap where one side decreases
+    # while the other increases.
+    if len(non_sol_negatives) >= 2 and not non_sol_positives:
+        return _result(
+            "LP_ACTION",
+            "0.600",
+            "two or more non-SOL assets given up together with no offsetting asset received "
+            "(liquidity-add pattern)",
+            decimals_by_asset=decimals_by_asset,
+        )
+    if len(non_sol_positives) >= 2 and not non_sol_negatives:
+        return _result(
+            "LP_ACTION",
+            "0.600",
+            "two or more non-SOL assets received together with no offsetting asset given up "
+            "(liquidity-remove pattern)",
+            decimals_by_asset=decimals_by_asset,
+        )
+
+    if len(negatives) == 1 and len(positives) == 1:
+        (in_asset, in_amount) = next(iter(negatives.items()))
+        (out_asset, out_amount) = next(iter(positives.items()))
+        return _result(
+            "SWAP_SIMPLE",
+            "1.000",
+            "exactly one asset given up and exactly one asset received",
+            input_asset=in_asset,
+            input_amount=in_amount,
+            output_asset=out_asset,
+            output_amount=out_amount,
+            decimals_by_asset=decimals_by_asset,
+        )
+
+    if negatives and positives:
+        # More than one asset moved on at least one side -- multi-hop swap.
+        in_asset, in_amount = max(negatives.items(), key=lambda kv: abs(kv[1]))
+        out_asset, out_amount = max(positives.items(), key=lambda kv: kv[1])
+        return _result(
+            "SWAP_COMPLEX",
+            "0.700",
+            "multiple assets moved on both sides; largest outflow/inflow reported as primary leg",
+            input_asset=in_asset,
+            input_amount=in_amount,
+            output_asset=out_asset,
+            output_amount=out_amount,
+            decimals_by_asset=decimals_by_asset,
+        )
+
+    if positives and not negatives:
+        out_asset, out_amount = max(positives.items(), key=lambda kv: kv[1])
+        return _result(
+            "TRANSFER_IN",
+            "1.000",
+            "only inflow(s), no offsetting outflow",
+            output_asset=out_asset,
+            output_amount=out_amount,
+            decimals_by_asset=decimals_by_asset,
+        )
+
+    if negatives and not positives:
+        in_asset, in_amount = max(negatives.items(), key=lambda kv: abs(kv[1]))
+        return _result(
+            "TRANSFER_OUT",
+            "1.000",
+            "only outflow(s), no offsetting inflow",
+            input_asset=in_asset,
+            input_amount=in_amount,
+            decimals_by_asset=decimals_by_asset,
+        )
+
+    return _result(
+        "UNKNOWN", "0.000", "balance deltas did not match any known pattern"
+    )  # pragma: no cover

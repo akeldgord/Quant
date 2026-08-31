@@ -15,7 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from argus.config import load_config  # noqa: E402
 from argus.db.base import Base  # noqa: E402
 from argus.db.connection import connection_for_admin  # noqa: E402
-from argus.domain import provider_usage  # noqa: E402,F401  (registers ORM metadata)
+from argus.domain import (
+    chain_events,  # noqa: E402,F401  (registers ORM metadata)
+    clock_health,  # noqa: E402,F401  (registers ORM metadata)
+    provider_usage,  # noqa: E402,F401  (registers ORM metadata)
+    swaps,  # noqa: E402,F401  (registers ORM metadata)
+    wallet_stream_state,  # noqa: E402,F401  (registers ORM metadata)
+)
 
 config = context.config
 if config.config_file_name is not None:

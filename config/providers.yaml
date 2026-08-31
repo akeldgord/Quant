@@ -45,3 +45,12 @@ bigquery:
   max_bytes_billed_ceiling: 0      # 0 = disabled until explicitly configured
 
 usage_warning_thresholds_pct: [70, 85, 95]  # section 14
+
+# Shared HTTP retry/backoff policy (Phase 1 mandatory acceptance criterion
+# #15). Applies only to transient failures (connection errors, 5xx
+# responses) -- never retries a well-formed 4xx or JSON-RPC application
+# error, and never fabricates a response; see argus.providers.retry.
+retry:
+  max_attempts: 3
+  base_delay_seconds: 0.5
+  max_delay_seconds: 8.0

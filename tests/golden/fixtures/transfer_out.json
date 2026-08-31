@@ -1,0 +1,29 @@
+{
+  "blockTime": 1735000010,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "postBalances": [
+      999995000,
+      1500000000
+    ],
+    "postTokenBalances": [],
+    "preBalances": [
+      2000000000,
+      500000000
+    ],
+    "preTokenBalances": []
+  },
+  "slot": 100000010,
+  "transaction": {
+    "message": {
+      "accountKeys": [
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ]
+    },
+    "signatures": [
+      "golden-transfer-out-0000000000000000000000"
+    ]
+  }
+}

@@ -110,3 +110,10 @@ class ClockHeartbeat:
     def acknowledge(self) -> None:
         """Clear a detected anomaly after successful reconciliation."""
         self.anomaly_detected = False
+
+    @property
+    def last_sample(self) -> ClockSample | None:
+        """The most recent sample compared by :meth:`tick`, if any -- lets
+        a caller (e.g. a persistence wrapper) record exactly the sample a
+        given :class:`ClockHealth` result was computed from."""
+        return self._last

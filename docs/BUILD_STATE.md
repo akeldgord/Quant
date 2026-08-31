@@ -4,11 +4,11 @@ Machine-and-human-readable state for session recovery (MASTER_SPEC.md section 8)
 Every new implementation session must read this file before doing anything else.
 
 ```yaml
-current_phase: 0
-last_completed_phase: 0  # implementation-agent build+test+acceptance complete; NOT orchestrator-approved
-last_orchestrator_approved_phase: null
-approved_commit: null
-awaiting_orchestrator_review: true
+current_phase: 1  # entered per orchestrator instruction argus-phase-1-001; NOT complete, NOT approved
+last_completed_phase: 0
+last_orchestrator_approved_phase: 0
+approved_commit: 141af487fcfdff41d1597c19ea062139f5427f52
+awaiting_orchestrator_review: false  # Phase 1 is in progress, not yet awaiting review
 
 # PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
 # (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
@@ -48,7 +48,8 @@ known_blockers:
 
 | Phase | Status | Commit | Notes |
 |-------|--------|--------|-------|
-| 0 | BUILT — remediated, awaiting orchestrator review | b838558f7eae1eac8d3559c7826ab340d604d916, remediated at ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (history rewritten 2026-08-30 to scrub inert dev-only placeholder credential strings — see docs/DECISION_LOG.md; these are the post-rewrite hashes) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
+| 0 | ORCHESTRATOR-APPROVED (`argus-phase-1-001`, 2026-08-31) | b838558f7eae1eac8d3559c7826ab340d604d916, remediated at ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (history rewritten 2026-08-30 to scrub inert dev-only placeholder credential strings — see docs/DECISION_LOG.md; these are the post-rewrite hashes) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. Approved by the ARGUS ORCHESTRATOR at commit `141af487fcfdff41d1597c19ea062139f5427f52` as `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
+| 1 | IN PROGRESS (authorized by `argus-phase-1-001`, target `141af487fcfdff41d1597c19ea062139f5427f52`) | (in progress) | Live chain data acquisition + deterministic canonical parsing: Helius RPC/WSS adapter, DexScreener/GeckoTerminal/Jupiter adapters (no signing), fast-path+truth-path reconciliation, immutable `chain_events`, generic balance-delta swap parser, priority scheduler, usage accounting. Not yet complete; not orchestrator-approved. |
 
 ## Operational tooling
 

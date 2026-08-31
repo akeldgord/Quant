@@ -1,0 +1,61 @@
+{
+  "blockTime": 1735000003,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "postBalances": [
+      1999995000,
+      1000000000
+    ],
+    "postTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenBFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "0",
+          "decimals": 6,
+          "uiAmount": 0.0
+        }
+      },
+      {
+        "accountIndex": 0,
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "250000000",
+          "decimals": 6,
+          "uiAmount": 250.0
+        }
+      }
+    ],
+    "preBalances": [
+      2000000000,
+      1000000000
+    ],
+    "preTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenBFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "1000000000",
+          "decimals": 6,
+          "uiAmount": 1000.0
+        }
+      }
+    ]
+  },
+  "slot": 100000003,
+  "transaction": {
+    "message": {
+      "accountKeys": [
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ]
+    },
+    "signatures": [
+      "golden-token-to-usdc-000000000000000000000"
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "blockTime": 1735000001,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "postBalances": [
+      3999995000,
+      2000000000
+    ],
+    "postTokenBalances": [
+      {
+        "accountIndex": 0,
+        "mint": "TokenAFixtureMintAddressNotReal1111111111",
+        "owner": "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "uiTokenAmount": {
+          "amount": "500000000",
+          "decimals": 6,
+          "uiAmount": 500.0
+        }
+      }
+    ],
+    "preBalances": [
+      5000000000,
+      1000000000
+    ],
+    "preTokenBalances": []
+  },
+  "slot": 100000001,
+  "transaction": {
+    "message": {
+      "accountKeys": [
+        "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
+        "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ]
+    },
+    "signatures": [
+      "golden-sol-to-token-0000000000000000000000"
+    ]
+  }
+}
