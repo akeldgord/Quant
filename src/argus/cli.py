@@ -7,6 +7,7 @@ subcommand here per MASTER_SPEC.md TECH-007. Phase 0 wires up ``health`` and
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -29,6 +30,8 @@ providers_app = typer.Typer(
 app.add_typer(providers_app, name="providers")
 ingest_app = typer.Typer(add_completion=False, help="Live chain data ingestion (Phase 1)")
 app.add_typer(ingest_app, name="ingest")
+fixtures_app = typer.Typer(add_completion=False, help="Golden fixture import/validation")
+app.add_typer(fixtures_app, name="fixtures")
 
 console = Console()
 
@@ -470,6 +473,108 @@ def ingest_reparse(
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
+
+
+@fixtures_app.command("import-real-chain")
+def fixtures_import_real_chain(
+    input_path: str = typer.Option(
+        ..., "--input", help="Path to a captured getTransaction JSON payload."
+    ),
+    category: str = typer.Option(
+        ...,
+        "--category",
+        help="Required fixture category (e.g. 'simple_transfer', 'sol_to_token').",
+    ),
+    upstream_repo: str = typer.Option(
+        ..., "--upstream-repo", help="owner/repo the payload's provenance traces to."
+    ),
+    upstream_commit: str = typer.Option(
+        ..., "--upstream-commit", help="Immutable upstream commit SHA the payload traces to."
+    ),
+    upstream_path: str = typer.Option(
+        ...,
+        "--upstream-path",
+        help="Exact file path (or documented signature reference) at that commit.",
+    ),
+    upstream_license: str = typer.Option(
+        ..., "--upstream-license", help="SPDX identifier of the upstream repository's license."
+    ),
+    wallet_address: str = typer.Option(
+        "",
+        "--wallet-address",
+        help="Account to parse the transaction from the perspective of. Defaults to "
+        "the transaction's fee payer (accountKeys[0]).",
+    ),
+    fixtures_dir: str = typer.Option(
+        "",
+        "--fixtures-dir",
+        help="Override the fixtures directory (default: tests/golden/fixtures/real). "
+        "Mainly for testing this command itself.",
+    ),
+) -> None:
+    """Offline import for one real-chain golden fixture (Phase 1
+    remediation round 2, finding #12): validates INPUT is a genuine
+    `getTransaction`-shaped payload, canonicalizes it, runs it through the
+    real parser, and records full provenance. Makes no network call of
+    its own -- INPUT must already contain a payload captured elsewhere
+    (this sandbox has GitHub read access but no general RPC egress)."""
+    from argus.golden_fixtures import (
+        DEFAULT_REAL_FIXTURES_DIR,
+        RealChainFixtureError,
+        import_real_chain_fixture,
+    )
+
+    try:
+        record = import_real_chain_fixture(
+            input_path=Path(input_path),
+            category=category,
+            upstream_repo=upstream_repo,
+            upstream_commit=upstream_commit,
+            upstream_path=upstream_path,
+            upstream_license=upstream_license,
+            wallet_address=wallet_address or None,
+            fixtures_dir=Path(fixtures_dir) if fixtures_dir else DEFAULT_REAL_FIXTURES_DIR,
+        )
+    except RealChainFixtureError as exc:
+        console.print(f"[red]rejected:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"imported {category!r}: signature={record.signature} slot={record.slot} "
+        f"expected={record.expected_classification} ({record.expected_confidence}) "
+        f"sanitized_sha256={record.sanitized_sha256}"
+    )
+
+
+@fixtures_app.command("validate-real-chain")
+def fixtures_validate_real_chain(
+    fixtures_dir: str = typer.Option(
+        "",
+        "--fixtures-dir",
+        help="Override the fixtures directory (default: tests/golden/fixtures/real). "
+        "Mainly for testing this command itself.",
+    ),
+) -> None:
+    """Re-verifies every currently-imported real-chain fixture: bytes
+    still hash to their recorded value, and the parser's current output
+    still matches the recorded expectation (finding #12). Zero imported
+    fixtures is reported honestly, not silently treated as a pass."""
+    from argus.golden_fixtures import DEFAULT_REAL_FIXTURES_DIR, validate_real_chain_fixtures
+
+    results = validate_real_chain_fixtures(
+        Path(fixtures_dir) if fixtures_dir else DEFAULT_REAL_FIXTURES_DIR
+    )
+    if not results:
+        console.print(
+            "no real-chain fixtures imported yet -- see tests/golden/fixtures/real/PROVENANCE.md"
+        )
+        return
+    failed = [r for r in results if not r.ok]
+    for result in results:
+        marker = "[green]ok[/green]" if result.ok else "[red]FAIL[/red]"
+        console.print(f"{result.category}: {marker} - {result.detail}")
+    if failed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
