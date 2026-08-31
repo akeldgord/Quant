@@ -300,17 +300,20 @@ class ReconciliationResult:
 @dataclasses.dataclass(frozen=True, slots=True)
 class FinalizationSweepResult:
     """Typed outcome of one :meth:`ReconciliationEngine.sweep_finalization`
-    call (Phase 1 remediation round 3, finding #6).
+    call (Phase 1 remediation round 3, finding #6; round 4, finding #8).
 
     ``ok=True`` means the provider check itself genuinely completed --
     ``promoted`` (which may legitimately be ``0``) is a real, trustworthy
-    result: no candidates to check, no wallet reconciled yet, no
-    ``RecentEventSource`` wired, or a real check that simply found nothing
-    newly finalized are all ``ok=True`` with ``promoted=0``.
+    result: no candidates to check, no wallet reconciled yet, or a real
+    check (against a correctly wired ``RecentEventSource``) that simply
+    found nothing newly finalized are all ``ok=True`` with ``promoted=0``.
 
     ``ok=False`` means the check itself could not be completed -- a
-    provider failure, a malformed/mismatched-cardinality status response,
-    or a per-event append failure -- and ``reason`` names why.
+    missing ``RecentEventSource`` (a misconfiguration, not a clean
+    result: the real manager requires this capability, so treating its
+    absence as success could hide dead finalization wiring indefinitely),
+    a provider failure, a malformed/mismatched-cardinality status
+    response, or a per-event append failure -- and ``reason`` names why.
     ``promoted`` still reports however many events *did* genuinely get
     newly promoted before/around the failure (a per-event append failure
     never discards already-committed sibling promotions from the same
@@ -898,14 +901,24 @@ class ReconciliationEngine:
         method can hit is caught and reported through the typed result
         instead.
 
-        ``ok=True, promoted=0`` (a legitimate no-op, not a failure) when:
-        no :class:`RecentEventSource` is wired, the wallet has never
-        completed a truth-path reconciliation yet, or there are simply no
-        recent candidate signatures to check."""
+        Phase 1 remediation round 4, finding #8: a missing
+        :class:`RecentEventSource` is a misconfiguration, not a clean
+        zero-result sweep -- the real manager requires this capability to
+        do finalization at all, so treating its absence as ``ok=True``
+        could hide genuinely dead finalization wiring indefinitely (no
+        candidates are ever even looked at, let alone found and rejected).
+        That case now returns ``ok=False`` with an explicit configuration
+        reason. ``ok=True, promoted=0`` (a legitimate no-op, not a
+        failure) is reserved for a *correctly wired* source that finds
+        the wallet has never completed a truth-path reconciliation yet,
+        or that returns no recent candidate signatures to check."""
         async with self._unit_of_work() as repos:
             if repos.recent_event_source is None:
                 return FinalizationSweepResult(
-                    ok=True, promoted=0, reason="no recent-event source configured"
+                    ok=False,
+                    promoted=0,
+                    reason="misconfiguration: no RecentEventSource wired -- "
+                    "finalization sweeping cannot run for this wallet at all",
                 )
             watermark = await self._get_or_init(repos, wallet_address)
             if watermark.last_reconciled_signature is None:

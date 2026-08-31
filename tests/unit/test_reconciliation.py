@@ -1078,11 +1078,13 @@ async def test_sweep_finalization_promotes_confirmed_events() -> None:
     await engine_no_source.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
     event_id = ledger.rows[("sig-A", WALLET, "TRANSACTION_OBSERVED")].event_id
 
-    # Without a RecentEventSource, sweep_finalization is a safe no-op --
-    # ok=True (this is a legitimate configuration, not a failure).
+    # Without a RecentEventSource, sweep_finalization is a misconfiguration
+    # (finding #8, round 4) -- ok=False with an explicit reason, never a
+    # clean zero-result sweep that could hide dead finalization wiring.
     result_none = await engine_no_source.sweep_finalization(WALLET)
-    assert result_none.ok is True
+    assert result_none.ok is False
     assert result_none.promoted == 0
+    assert "no RecentEventSource" in result_none.reason
 
     provider.signature_statuses["sig-A"] = SignatureStatusInfo(
         signature="sig-A", confirmation_status="finalized", err=None, slot=1

@@ -1045,3 +1045,128 @@ async def test_finalization_sweep_failure_is_logged_by_the_manager(capsys) -> No
     finally:
         stop_event.set()
         await run_task
+
+
+async def test_finalization_sweep_missing_recent_event_source_is_logged_as_misconfiguration(
+    capsys,  # noqa: ANN001
+) -> None:
+    """Phase 1 remediation round 4, finding #8: no ``RecentEventSource``
+    wired at all is a misconfiguration, not a clean zero-result sweep --
+    the manager's own real background loop must surface it as a visible
+    ``finalization_sweep_failed`` warning naming the misconfiguration,
+    exactly like any other sweep failure, not silently treat "nothing to
+    check" as success."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-initial", slot=0, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+
+    # _manager() defaults recent_event_source to None -- deliberately not
+    # passed here, simulating the exact misconfiguration this finding
+    # names.
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        config=IngestionManagerConfig(
+            reconnect_base_delay_seconds=0.001,
+            reconnect_max_delay_seconds=0.005,
+            stream_receive_timeout_seconds=3600,
+            periodic_reconciliation_interval_seconds=3600,
+            clock_heartbeat_interval_seconds=3600,
+            finalization_sweep_interval_seconds=0.01,
+        ),
+    )
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.ensure_future(manager.run(stop_event=stop_event))
+    try:
+        async with asyncio.timeout(2.0):
+            while True:
+                out = capsys.readouterr().out
+                if "finalization_sweep_failed" in out and "RecentEventSource" in out:
+                    break
+                await asyncio.sleep(0.01)
+    finally:
+        stop_event.set()
+        await run_task
+
+
+async def test_finalization_sweep_recovers_after_restart_with_source_wired() -> None:
+    """A misconfigured sweep (no RecentEventSource) followed by a
+    "restart" (a fresh manager instance, simulating an operator fixing
+    the wiring) must promote normally once correctly configured -- the
+    misconfiguration must never leave behind state that blocks recovery."""
+    from argus.domain.commitment import COMMITMENT_FINALIZED
+    from argus.ingestion.commitment import derive_current_state
+    from argus.providers import SignatureStatusInfo
+    from tests.unit.test_reconciliation import FakeRecentEventSource
+
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-initial", slot=0, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    commitment_store = FakeCommitmentStore()
+    fast_config = IngestionManagerConfig(
+        reconnect_base_delay_seconds=0.001,
+        reconnect_max_delay_seconds=0.005,
+        stream_receive_timeout_seconds=3600,
+        periodic_reconciliation_interval_seconds=3600,
+        clock_heartbeat_interval_seconds=3600,
+        finalization_sweep_interval_seconds=0.01,
+    )
+
+    misconfigured_manager = _manager(
+        provider,
+        FakeLiveStream(),
+        ledger,
+        store,
+        (WALLET_A,),
+        commitment_store=commitment_store,
+        config=fast_config,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.ensure_future(misconfigured_manager.run(stop_event=stop_event))
+    try:
+        async with asyncio.timeout(2.0):
+            while ("sig-initial", WALLET_A, "TRANSACTION_OBSERVED") not in ledger.rows:
+                await asyncio.sleep(0.01)
+    finally:
+        stop_event.set()
+        await run_task
+
+    event_id = ledger.rows[("sig-initial", WALLET_A, "TRANSACTION_OBSERVED")].event_id
+    provider.signature_statuses["sig-initial"] = SignatureStatusInfo(
+        signature="sig-initial", confirmation_status="finalized", err=None, slot=0
+    )
+
+    restarted_manager = _manager(
+        provider,
+        FakeLiveStream(),
+        ledger,
+        store,
+        (WALLET_A,),
+        commitment_store=commitment_store,
+        recent_event_source=FakeRecentEventSource([(event_id, "sig-initial")]),
+        config=fast_config,
+    )
+
+    async def finalized() -> bool:
+        state = derive_current_state(await commitment_store.list_for_event(event_id))
+        return state.commitment_level == COMMITMENT_FINALIZED
+
+    stop_event2 = asyncio.Event()
+    run_task2 = asyncio.ensure_future(restarted_manager.run(stop_event=stop_event2))
+    try:
+        async with asyncio.timeout(2.0):
+            while not await finalized():
+                await asyncio.sleep(0.01)
+    finally:
+        stop_event2.set()
+        await run_task2
+
+    state = derive_current_state(await commitment_store.list_for_event(event_id))
+    assert state.commitment_level == COMMITMENT_FINALIZED
