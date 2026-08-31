@@ -127,41 +127,64 @@ def resolve_production_git_commit(
 ) -> str:
     """The exact, reproducible point-in-time git commit identity required
     for production ingestion/reparse parse-attempt evidence (MASTER_SPEC.md
-    CORE-004; Phase 1 remediation round 4, finding #7).
+    CORE-004; Phase 1 remediation round 4, finding #7; round 5, finding
+    #7 fixed an override-precedence defect in round 4's implementation).
 
     Unlike :func:`git_commit_sha` (best-effort, never raises), this fails
     closed by default: a dirty checkout, a missing/unreachable git
-    checkout with no override, or an invalid override all raise
+    checkout with no override, an override that disagrees with a real
+    checkout's HEAD, or a malformed override all raise
     :class:`GitIdentityUnavailableError` rather than silently degrading to
     the ``GIT_COMMIT_UNAVAILABLE`` sentinel. Resolution order:
 
-    1. ``ARGUS_BUILD_GIT_COMMIT`` env var, if set -- a build-time
-       deployment value (e.g. baked in at image build time, for a
-       checkout with no ``.git`` directory present at runtime). Must be a
-       full 40-character lowercase hex SHA; an invalid value always
-       raises, even with ``allow_unverified=True`` -- a malformed override
-       is a configuration bug, never silently downgraded.
-    2. Otherwise, the live checkout: rejected as dirty if
-       ``git status --porcelain`` reports any uncommitted change (staged,
-       unstaged, or untracked), then the real ``git rev-parse HEAD``.
+    1. ``ARGUS_BUILD_GIT_COMMIT`` env var, if set, is first validated as a
+       full 40-character lowercase hex SHA -- an invalid value always
+       raises immediately, even with ``allow_unverified=True``; a
+       malformed override is a configuration bug, never silently
+       downgraded.
+    2. Whether git metadata (a ``.git`` checkout) is present at
+       ``repo_root`` is checked *before* the override is ever trusted
+       (round 4's implementation checked the override first, so a dirty
+       checkout could hand back any valid-looking SHA and a clean
+       checkout's override could silently diverge from its real HEAD --
+       neither is possible now).
+    3. If **no** git metadata is present, a well-formed override is the
+       only possible source of an identity (there's a real checkout to
+       verify a live HEAD against) and is returned directly -- this is
+       the one case a build-time override (e.g. baked in at image build
+       time for a checkout with no ``.git`` directory present at
+       runtime) is actually used.
+    4. If git metadata **is** present, the checkout's clean/dirty state
+       and its real ``git rev-parse HEAD`` are always resolved first,
+       regardless of whether an override was also supplied. A dirty
+       checkout fails closed unconditionally -- an override can never
+       substitute for it. Once HEAD is resolved from a clean checkout, a
+       supplied override must exactly equal that HEAD or the call fails
+       closed; it is never used to silently override or diverge from
+       what the checkout actually contains.
 
     ``allow_unverified=True`` is the explicit non-production escape hatch
     (``--test-mode``, or a unit test that isn't itself testing this
-    fail-closed behavior): every failure mode *except* an invalid
-    override then returns ``GIT_COMMIT_UNAVAILABLE`` instead of raising.
+    fail-closed behavior): every failure mode *except* a malformed
+    override then returns ``GIT_COMMIT_UNAVAILABLE`` instead of raising --
+    it never turns a supplied-but-unverifiable or dirty-checkout identity
+    into a value that looks like a verified production SHA.
     """
     environ = env if env is not None else dict(os.environ)
     override = environ.get(GIT_BUILD_COMMIT_ENV_VAR, "").strip()
-    if override:
-        if not _FULL_GIT_SHA_RE.match(override):
-            raise GitIdentityUnavailableError(
-                f"{GIT_BUILD_COMMIT_ENV_VAR} is set but is not a valid 40-character "
-                f"lowercase hex git commit SHA: {override!r}"
-            )
-        return override
+    if override and not _FULL_GIT_SHA_RE.match(override):
+        raise GitIdentityUnavailableError(
+            f"{GIT_BUILD_COMMIT_ENV_VAR} is set but is not a valid 40-character "
+            f"lowercase hex git commit SHA: {override!r}"
+        )
 
     dirty = _is_dirty_checkout(repo_root)
+
     if dirty is None:
+        # No git checkout at all: nothing exists to verify a live HEAD
+        # against, so a well-formed override is the only possible source.
+        if override:
+            return override
         if allow_unverified:
             return GIT_COMMIT_UNAVAILABLE
         raise GitIdentityUnavailableError(
@@ -169,15 +192,20 @@ def resolve_production_git_commit(
             f"{GIT_BUILD_COMMIT_ENV_VAR} build-time override is set -- production "
             "ingestion cannot establish a validated git identity"
         )
+
+    # Git metadata is present -- always verify clean state and resolve
+    # the real HEAD first, before an override is ever trusted.
     if dirty:
         if allow_unverified:
             return GIT_COMMIT_UNAVAILABLE
         raise GitIdentityUnavailableError(
             f"git checkout at {repo_root} has uncommitted changes -- production "
             "ingestion requires an exact, reproducible git identity; commit or "
-            f"stash before running, or set an explicit {GIT_BUILD_COMMIT_ENV_VAR} "
-            "build-time override"
+            f"stash before running. {GIT_BUILD_COMMIT_ENV_VAR} is never accepted "
+            "as a substitute for a dirty checkout -- an override is only used "
+            "when no git checkout is present at all."
         )
+
     sha = git_commit_sha(repo_root)
     if sha == GIT_COMMIT_UNAVAILABLE:
         if allow_unverified:
@@ -186,6 +214,16 @@ def resolve_production_git_commit(
             f"git rev-parse HEAD failed at {repo_root} even though the checkout "
             "appeared clean -- production ingestion cannot establish a validated "
             "git identity"
+        )
+
+    if override and override != sha:
+        if allow_unverified:
+            return GIT_COMMIT_UNAVAILABLE
+        raise GitIdentityUnavailableError(
+            f"{GIT_BUILD_COMMIT_ENV_VAR} ({override}) does not match the resolved "
+            f"git HEAD ({sha}) at {repo_root} -- an override present alongside a "
+            "real git checkout must exactly equal HEAD, never silently diverge "
+            "from what the checkout actually contains"
         )
     return sha
 

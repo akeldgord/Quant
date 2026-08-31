@@ -196,7 +196,7 @@ def test_resolve_production_git_commit_allow_unverified_returns_sentinel_on_miss
     )
 
 
-def test_resolve_production_git_commit_valid_build_time_override_used(tmp_path: Path) -> None:
+def test_resolve_production_git_commit_no_git_checkout_valid_override_used(tmp_path: Path) -> None:
     override = "a" * 40
     result = resolve_production_git_commit(
         repo_root=tmp_path,  # not even a git repository -- the override never needs one
@@ -205,15 +205,81 @@ def test_resolve_production_git_commit_valid_build_time_override_used(tmp_path: 
     assert result == override
 
 
-def test_resolve_production_git_commit_override_takes_precedence_over_dirty_checkout(
+# --- Phase 1 remediation round 5, finding #7: round 4's implementation --
+# --- checked the override BEFORE checking dirty/HEAD at all, so a -------
+# --- dirty checkout could hand back any valid-looking override SHA, ----
+# --- and a clean checkout's override could silently diverge from its ---
+# --- real HEAD. Both are now impossible: git metadata presence and ----
+# --- clean/HEAD are always resolved first; an override is only ever ----
+# --- trusted when no git checkout exists at all, or when it exactly ----
+# --- equals a clean checkout's real HEAD. -------------------------------
+
+
+def test_resolve_production_git_commit_dirty_checkout_with_override_raises(
     tmp_path: Path,
 ) -> None:
+    """dirty + an override that happens to equal the real (uncommitted)
+    HEAD -- a dirty checkout fails closed unconditionally; the override
+    can never substitute for it."""
+    head = _init_git_repo(tmp_path, dirty=True)
+    with pytest.raises(GitIdentityUnavailableError, match="uncommitted changes"):
+        resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": head})
+
+
+def test_resolve_production_git_commit_dirty_checkout_with_mismatched_override_raises(
+    tmp_path: Path,
+) -> None:
+    """dirty + an override that does NOT match HEAD either -- same
+    fail-closed outcome as the matching-override case above; dirty state
+    alone is dispositive."""
     _init_git_repo(tmp_path, dirty=True)
     override = "b" * 40
+    with pytest.raises(GitIdentityUnavailableError, match="uncommitted changes"):
+        resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override})
+
+
+def test_resolve_production_git_commit_dirty_checkout_override_never_returned_even_unverified(
+    tmp_path: Path,
+) -> None:
+    """The explicit non-production escape hatch returns the honest
+    sentinel, never the (unverified) override value -- "may not turn a
+    supplied or dirty identity into a verified production SHA"."""
+    _init_git_repo(tmp_path, dirty=True)
+    override = "c" * 40
     result = resolve_production_git_commit(
-        repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override}
+        repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override}, allow_unverified=True
     )
-    assert result == override
+    assert result == GIT_COMMIT_UNAVAILABLE
+    assert result != override
+
+
+def test_resolve_production_git_commit_clean_checkout_matching_override_returns_sha(
+    tmp_path: Path,
+) -> None:
+    head = _init_git_repo(tmp_path)
+    result = resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": head})
+    assert result == head
+
+
+def test_resolve_production_git_commit_clean_checkout_mismatched_override_raises(
+    tmp_path: Path,
+) -> None:
+    _init_git_repo(tmp_path)
+    override = "d" * 40
+    with pytest.raises(GitIdentityUnavailableError, match="does not match the resolved"):
+        resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override})
+
+
+def test_resolve_production_git_commit_clean_checkout_mismatched_override_unverified_sentinel(
+    tmp_path: Path,
+) -> None:
+    _init_git_repo(tmp_path)
+    override = "e" * 40
+    result = resolve_production_git_commit(
+        repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override}, allow_unverified=True
+    )
+    assert result == GIT_COMMIT_UNAVAILABLE
+    assert result != override
 
 
 @pytest.mark.parametrize("bad_override", ["not-a-sha", "a" * 39, "a" * 41, "A" * 40])
