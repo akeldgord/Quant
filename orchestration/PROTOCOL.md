@@ -101,7 +101,8 @@ implementation agent.
 ## 4. Instruction-state contract (`ORCHESTRATOR_INSTRUCTIONS.md`)
 
 `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` must carry these
-machine-readable fields near the top of the file:
+machine-readable fields near the top of the file, each present **exactly
+once**:
 
 ```
 INSTRUCTION_ID:
@@ -109,6 +110,7 @@ ISSUED_AT:
 TARGET_COMMIT:
 AUTHORIZED_ACTION:
 AUTHORIZED_PHASE:
+APPROVES_PHASE:
 STATUS:
 ```
 
@@ -118,14 +120,28 @@ Allowed `STATUS` values:
 - `ACTIVE` — this instruction is currently in force.
 - `SUPERSEDED` — a later instruction has replaced this one.
 
+For an `ACTIVE` instruction, the watcher additionally requires: a duplicate
+of any field is rejected outright; `ISSUED_AT` a valid UTC timestamp
+(`YYYY-MM-DDTHH:MM:SSZ`); `TARGET_COMMIT` a full 40-character commit SHA;
+`AUTHORIZED_ACTION` non-empty and not the literal `NONE`; `AUTHORIZED_PHASE`
+a recognized entry in the canonical phase sequence (`#7`); `APPROVES_PHASE`
+either the literal `NONE` or a recognized phase entry.
+
 The implementation agent creates the file with the initial placeholder
 (see `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` for the exact current
 content) and **must not change this file after creating that placeholder**.
-Only the orchestrator writes to it from that point forward.
+Only the orchestrator writes to it from that point forward. This is
+mechanically enforced, not just convention: the watcher records the blob
+hash of this file's on-disk content immediately before launching Claude and
+compares it again once Claude exits (via `git hash-object`, which reflects
+an uncommitted edit too, not only a committed one). Any difference — even
+one later committed and pushed by the implementation agent itself — marks
+the run `FAILED` outright, before any other evidence is even considered.
 
 ## 5. Agent handoff contract (`AGENT_HANDOFF.md`)
 
-`orchestration/AGENT_HANDOFF.md` must include these fields near the top:
+`orchestration/AGENT_HANDOFF.md` must include these fields near the top,
+each present **exactly once, non-empty**:
 
 ```
 HANDOFF_ID:
@@ -156,14 +172,36 @@ the full checkpoint lives in `orchestration/checkpoints/` (and, per the
 existing MASTER_SPEC.md contract, in `runtime/reports/`).
 
 **Contract enforced mechanically by `scripts/argus_orchestrator_watch.py`**
-(not just convention — a run violating either is marked `FAILED`, not
-`COMPLETED`):
+(not just convention — a run violating any of the following is marked
+`FAILED`, not `COMPLETED`):
 
+- Every field above must appear exactly once and non-empty. A duplicate or
+  missing field fails the run.
 - `LAST_ORCHESTRATOR_INSTRUCTION_ID` must be **exactly** the instruction's
   `INSTRUCTION_ID` — no other text appended or reworded.
-- `CHECKPOINT_PATH` and `BUNDLE_PATH` must reference files that are part of
-  the commit(s) pushed during that run — a path that merely exists on disk
-  (e.g. left over from an earlier handoff) is not accepted as evidence.
+- `HANDOFF_ID` must differ from the value recorded immediately before this
+  run started — a reused id fails the run.
+- `CURRENT_COMMIT`, and the `GIT_COMMIT` field inside the checkpoint file
+  itself, must each resolve to a real commit created during this run (an
+  implementation commit or a later documentation-only hash-fill commit in
+  the same run is fine; anything that predates the run, or doesn't resolve
+  at all, is not).
+- `CHECKPOINT_PATH` and `BUNDLE_PATH` must be normalized, repository-relative
+  paths inside `orchestration/checkpoints/` and `orchestration/bundles/`
+  respectively, with the correct extension (`.md` / `.txt`); an absolute
+  path, a `..` traversal segment, a symlink, or the wrong directory/extension
+  fails the run.
+- Both evidence paths must be **newly added** by this run's own commits —
+  present at all at the pre-launch `HEAD`, or merely modified rather than
+  added, fails the run as stale evidence. An existing checkpoint or bundle
+  must never be overwritten.
+- The checkpoint file must be nonempty, start and end with the standard
+  ARGUS checkpoint markers, and identify PROJECT ARGUS, the authorized
+  phase or operational scope, `STATUS`, `GIT_COMMIT`, commands actually run,
+  test results, acceptance criteria, deviations, known debt, security
+  state, and a next-action/STOP statement. The bundle file must be
+  nonempty, contain the checkpoint, and contain the required review
+  evidence. A one-line placeholder in either file fails the run.
 
 ## 6. Session-start rule
 
@@ -215,13 +253,54 @@ implementation commit is clearly still the intended target and work may
 proceed. This check must be applied conservatively: when in doubt, treat it
 as a mismatch and stop.
 
-**Phase-authorization protection.** `AUTHORIZED_PHASE` is not trusted
-blindly either: the watcher reads `current_phase` from `docs/BUILD_STATE.md`
-and refuses to launch Claude unless `AUTHORIZED_PHASE` is a well-formed
-non-negative integer no greater than `current_phase + 1`. This is what
-makes "Phase 1 must not be authorized while current_phase is still 0"
-(or any phase skip-ahead) an enforced property of the watcher itself, not
-merely something asked of the Claude prompt.
+**Phase-authorization protection.** ARGUS phases form a canonical ordered
+sequence, including the mandatory sub-phase gates, represented as exact
+string tokens — never compared as floats/binary values:
+
+```
+0, 1, 1.5, 2, 3, 4, 5, 6, 6.5, 7, 8, 9, 10, 11
+```
+
+`AUTHORIZED_PHASE` and `APPROVES_PHASE` are never trusted blindly. The
+watcher reads `current_phase`, `last_completed_phase`, and
+`awaiting_orchestrator_review` from `docs/BUILD_STATE.md` (also as exact
+string/boolean tokens) and enforces:
+
+- **Same-phase remediation** (`APPROVES_PHASE: NONE`, as this instruction
+  uses): allowed only when `AUTHORIZED_PHASE == current_phase`. This is the
+  case for operational/tooling remediation that doesn't advance the phase.
+- **Advancing to the immediate successor phase**: requires all of
+  `APPROVES_PHASE == current_phase`, `last_completed_phase ==
+  current_phase`, `awaiting_orchestrator_review == true`, and
+  `AUTHORIZED_PHASE` equal to the *immediate* next entry after
+  `current_phase` in the sequence above. No instruction may skip a phase or
+  sub-phase — Phase 1.5 cannot be bypassed on the way from 1 to 2, for
+  example.
+- The implementation agent must never infer approval, or edit
+  `last_orchestrator_approved_phase`/`approved_commit`
+  in `docs/BUILD_STATE.md`, without a currently-`ACTIVE` orchestrator
+  instruction whose `APPROVES_PHASE` says so explicitly.
+
+This is what makes "Phase 1 must not be authorized while Phase 0 is still
+awaiting orchestrator review" (or any phase/sub-phase skip) an enforced
+property of the watcher itself, not merely something asked of the Claude
+prompt.
+
+**Branch-movement and commit-attribution protection.** Passing the checks
+above is necessary but not sufficient — the watcher additionally verifies,
+after Claude exits and before accepting any evidence:
+
+- Local `HEAD` and `origin/<branch>` `HEAD` are captured and compared
+  immediately before launch (not just after).
+- Post-run `HEAD` must descend **linearly** from the pre-launch `HEAD`:
+  rewritten ancestry, non-fast-forward movement, and any merge commit
+  anywhere in the run's commit range are all rejected.
+- Every commit in that range must carry the exact trailer
+  `ARGUS-INSTRUCTION-ID: <the ACTIVE instruction's INSTRUCTION_ID>` — a
+  differently-worded or merely-similar trailer does not count. This makes
+  concurrent, unattributed branch movement during a run visible and
+  rejected rather than silently accepted because local/remote `HEAD`
+  happened to match again by the time the run finished.
 
 ## 8. End-of-work rule
 
@@ -232,11 +311,17 @@ Whenever authorized work is finished:
 3. Generate the normal review bundle (per MASTER_SPEC.md section 105,
    written to `runtime/reports/` as always).
 4. Copy the committed versions into `orchestration/checkpoints/` and
-   `orchestration/bundles/` under a phase-specific filename (never
-   overwriting an already-committed historical entry).
+   `orchestration/bundles/` under a phase-specific filename, as **newly
+   added** files (never overwriting or merely editing an already-committed
+   historical entry).
 5. Update `orchestration/AGENT_HANDOFF.md`.
 6. Update `docs/BUILD_STATE.md`.
-7. Commit.
+7. Commit. When running under the local watcher
+   (`scripts/argus_orchestrator_watch.py`), every commit made during the run
+   — including any documentation/hash-fill commit — must carry the exact
+   commit-message trailer `ARGUS-INSTRUCTION-ID: <INSTRUCTION_ID>` on its
+   own line, or the watcher rejects the entire run regardless of anything
+   else it produced.
 8. Push.
 9. Verify a clean working tree (`git status --porcelain` empty).
 10. **STOP.**

@@ -58,16 +58,30 @@ known_blockers:
   TARGET_COMMIT and phase-authorization checks, launches the local Claude
   CLI non-interactively to execute exactly that instruction under
   `orchestration/PROTOCOL.md`. Not running by default — the human operator
-  starts it explicitly. See `docs/OPERATIONS.md` for usage,
-  `orchestration/checkpoints/watcher_setup.md` for the original build/test
-  record, and `orchestration/checkpoints/watcher_remediation.md` for a
-  four-defect remediation pass (AUTHORIZED_PHASE was never validated;
-  handoff instruction-id matching used substring containment instead of
-  exact equality; checkpoint/bundle evidence was only checked for
-  existence, not that it was actually produced by the run; a crash between
-  CLAIMED and RUNNING was never recovered on restart — all four fixed,
-  with regression tests). This is operational tooling, not ARGUS phase
-  work — `current_phase` above is unaffected.
+  starts it explicitly. See `docs/OPERATIONS.md` for usage.
+  Evidence history:
+  - `orchestration/checkpoints/watcher_setup.md` — original build/test record.
+  - `orchestration/checkpoints/watcher_remediation.md` — a four-defect
+    remediation pass (AUTHORIZED_PHASE was never validated; handoff
+    instruction-id matching used substring containment instead of exact
+    equality; checkpoint/bundle evidence was only checked for existence;
+    a crash between CLAIMED and RUNNING was never recovered on restart).
+  - `orchestration/checkpoints/watcher_remediation_2.md` — a second,
+    orchestrator-requested remediation pass (instruction
+    `argus-watcher-remediation-002`), rejecting the first pass as
+    insufficient and requiring: strict fail-closed state handling
+    (including a handoff-cross-check on state loss); a failed Claude
+    process now always fails the run before any evidence is considered;
+    evidence must be newly added, immutable, and structurally valid (not a
+    placeholder); branch-movement/merge-commit/commit-attribution
+    (`ARGUS-INSTRUCTION-ID:` trailer) verification; a blob-hash check that
+    mechanically prevents the implementation agent from modifying
+    `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` during a run; explicit
+    string-sequence phase gating (`0, 1, 1.5, 2, ..., 6, 6.5, ..., 11`) via
+    a new `APPROVES_PHASE` field; strict instruction-field parsing; and a
+    conservative, ordered post-run verification sequence. 26 new/updated
+    adversarial regression tests. This is operational tooling, not ARGUS
+    phase work — `current_phase` above is unaffected.
 
 ## Rules
 

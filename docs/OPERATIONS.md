@@ -70,10 +70,26 @@ rm runtime/ORCHESTRATION_PAUSED      # resume
 - `runtime/orchestrator_watcher_state.json` — current watcher state
   (`IDLE` / `CLAIMED` / `RUNNING` / `COMPLETED` / `FAILED`), which
   instruction ID was last processed, and which one (if any) is in flight.
-  Gitignored; written atomically. If you need to reset a `FAILED` state to
-  let the watcher retry a specific instruction, that's a deliberate manual
-  edit — the watcher never blindly retries on its own (see
+  Gitignored; written atomically (with `fsync` on the file and its parent
+  directory) so a crash never leaves a half-written state file. Reading is
+  strict: a missing, unreadable, corrupt, or schema-invalid state file is
+  **never** silently treated as "fresh" while an `ACTIVE` instruction is
+  outstanding — see the state-loss handling below. If you need to reset a
+  `FAILED` state to let the watcher retry a specific instruction, that's a
+  deliberate manual edit — the watcher never blindly retries on its own
+  (a retry requires the orchestrator to issue a new `INSTRUCTION_ID`; see
   `orchestration/PROTOCOL.md` section 4).
+- **State-loss handling.** If `runtime/orchestrator_watcher_state.json` is
+  missing (e.g. `runtime/` was wiped) while
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` has an `ACTIVE` instruction,
+  the watcher does not assume this is a first execution. It cross-checks
+  `orchestration/AGENT_HANDOFF.md` (tracked in git, so it survives a local
+  `runtime/` wipe): if that instruction is already recorded as complete
+  there, the watcher marks it processed without relaunching
+  (`STATE_REBUILT_FROM_HANDOFF`); otherwise it fails closed
+  (`STATE_MISSING_FAIL_CLOSED`) and requires a new `INSTRUCTION_ID` to
+  proceed, rather than risk replaying or duplicating a run whose outcome is
+  unknown.
 - `runtime/orchestrator_watcher.lock` — flock-based single-instance lock.
   A second watcher process started while one is already running exits
   immediately with a message on stderr. The lock releases automatically if
@@ -81,10 +97,17 @@ rm runtime/ORCHESTRATION_PAUSED      # resume
 - `runtime/logs/orchestrator_watcher.log` — append-only event log
   (`WATCHER_STARTED`, `NEW_INSTRUCTION`, `DIRTY_WORKTREE`,
   `GIT_PULL_FAILED`, `TARGET_COMMIT_MISMATCH`, `PHASE_AUTHORIZATION_INVALID`,
-  `CLAUDE_STARTED`, `CLAUDE_EXITED`, `HANDOFF_VERIFIED`, `RUN_COMPLETED`,
-  `RUN_FAILED`, `WATCHER_PAUSED`, `WATCHER_STOPPED`, ...).
+  `STATE_INVALID`, `STATE_MISSING_FAIL_CLOSED`, `STATE_REBUILT_FROM_HANDOFF`,
+  `INSTRUCTIONS_INVALID`, `CLAUDE_STARTED`, `CLAUDE_EXITED`,
+  `HANDOFF_VERIFIED`, `RUN_COMPLETED`, `RUN_FAILED`, `TICK_EXCEPTION`,
+  `WATCHER_PAUSED`, `WATCHER_STOPPED`, ...).
   Never contains API keys, tokens, credentials, or raw environment/command
-  dumps — only short structured event lines.
+  dumps — only short structured event lines, with any subprocess
+  stdout/stderr diagnostic bounded to a few hundred characters.
+- A single bad tick (an unexpected exception anywhere in `tick()`) is caught
+  at the `run_forever` loop level and logged as `TICK_EXCEPTION` rather than
+  crashing the whole watcher process; `--once` runs let such an exception
+  propagate normally, since an operator is watching interactively.
 
 ### Running in the background
 
