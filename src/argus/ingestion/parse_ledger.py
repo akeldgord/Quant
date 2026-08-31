@@ -44,21 +44,34 @@ class ParseAttemptIdentity:
     git_commit: str
 
 
-def capture_parse_identity(config: ArgusConfig) -> ParseAttemptIdentity:
+def capture_parse_identity(
+    config: ArgusConfig, *, allow_unverified_git: bool = False
+) -> ParseAttemptIdentity:
     """Real production wiring's single source of truth for
     :class:`ParseAttemptIdentity` -- every value is a genuine, non-empty
     capture, never a placeholder: the parser module's own content hash,
     this process's effective config hash, MASTER_SPEC.md's own hash, and
-    the current git commit (or the explicit ``GIT_COMMIT_UNAVAILABLE``
-    sentinel if git itself is unavailable -- never fabricated)."""
-    from argus.config import git_commit_sha, master_spec_hash
+    a validated exact git commit.
+
+    Phase 1 remediation round 4, finding #7: ``allow_unverified_git``
+    defaults to ``False``, meaning the git identity is resolved via
+    :func:`argus.config.resolve_production_git_commit`, which *fails
+    closed* (raises ``GitIdentityUnavailableError``) on a dirty checkout,
+    a missing git checkout with no build-time override, or an invalid
+    override -- production ingestion/reparse must never silently record
+    an unverifiable git identity as if it were real. Pass
+    ``allow_unverified_git=True`` only from an explicit non-production
+    caller (``--test-mode``) where the best-effort
+    ``GIT_COMMIT_UNAVAILABLE`` sentinel is an acceptable, honest fallback
+    instead of a hard failure."""
+    from argus.config import master_spec_hash, resolve_production_git_commit
     from argus.parsing.generic_parser import PARSER_BUILD_HASH
 
     return ParseAttemptIdentity(
         build_hash=PARSER_BUILD_HASH,
         config_hash=config.config_hash,
         master_spec_hash=master_spec_hash(),
-        git_commit=git_commit_sha(),
+        git_commit=resolve_production_git_commit(allow_unverified=allow_unverified_git),
     )
 
 

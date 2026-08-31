@@ -233,6 +233,7 @@ def ingest_run(
     command or anything it calls (MASTER_SPEC.md section 108 / absolute
     prohibitions)."""
     from argus.clock import Clock
+    from argus.config import GitIdentityUnavailableError
     from argus.ingestion.manager import (
         IngestionManager,
         IngestionManagerConfig,
@@ -253,16 +254,21 @@ def ingest_run(
         wallets = tuple(wallet or ()) or ("TestModeWallet1111111111111111111111111111",)
         provider = NullChainProvider()
         # Finding #5: even --test-mode's offline deterministic run stamps
-        # a real, non-empty build/config/spec/git identity onto every
-        # parse attempt it records -- this exercises the real production
-        # wiring end-to-end, so it must never fall back to a placeholder.
+        # a real, non-empty build/config/spec identity onto every parse
+        # attempt it records -- this exercises the real production wiring
+        # end-to-end, so it must never fall back to a placeholder. Git
+        # identity is the one exception (round 4, finding #7):
+        # --test-mode is explicitly non-production, so it passes
+        # allow_unverified_git=True rather than failing closed on a dirty
+        # sandbox checkout, matching production's own honest fallback
+        # sentinel rather than aborting a deliberately offline smoke test.
         engine = ReconciliationEngine(
             chain_provider=provider,
             unit_of_work=InMemoryReconciliationUnitOfWork(),
             clock=Clock(),
             provider_name="test-mode",
             parser_version=PARSER_VERSION,
-            parse_identity=capture_parse_identity(load_config()),
+            parse_identity=capture_parse_identity(load_config(), allow_unverified_git=True),
         )
         manager = IngestionManager(
             wallet_source=StaticWalletSource(wallets),
@@ -317,6 +323,16 @@ def ingest_run(
             console.print(str(exc))
             return 1
 
+        # Finding #7: a validated, exact git identity is required before
+        # any real ingestion work begins -- fails closed here (dirty
+        # checkout, no git checkout with no build-time override, or an
+        # invalid override), never silently falling back to a placeholder.
+        try:
+            identity = capture_parse_identity(config)
+        except GitIdentityUnavailableError as exc:
+            console.print(f"error: {exc}")
+            return 1
+
         db_info = connection_for_role(config, DbRole.INGEST)
         db_engine = create_async_engine(db_info.as_asyncpg_url())
         # A session factory, not one shared session (finding #2): every
@@ -342,7 +358,7 @@ def ingest_run(
                 clock=Clock(),
                 provider_name="helius",
                 parser_version=PARSER_VERSION,
-                parse_identity=capture_parse_identity(config),
+                parse_identity=identity,
             )
             manager = IngestionManager(
                 wallet_source=StaticWalletSource(tuple(wallet or ())),
@@ -419,8 +435,17 @@ def ingest_reparse(
         # Finding #5: identity is captured once per reparse run, at the
         # current code/config/git state -- never inherited from whatever
         # identity produced the original (now-immutable) failing attempt
-        # this sweep is retrying.
-        identity = capture_parse_identity(config)
+        # this sweep is retrying. Finding #7 (round 4): reparse is a
+        # production path, so the git identity fails closed here too --
+        # never falls back to a placeholder on a dirty/unverifiable
+        # checkout.
+        from argus.config import GitIdentityUnavailableError
+
+        try:
+            identity = capture_parse_identity(config)
+        except GitIdentityUnavailableError as identity_exc:
+            console.print(f"error: {identity_exc}")
+            return 1
         db_info = connection_for_role(config, DbRole.INGEST)
         db_engine = create_async_engine(db_info.as_asyncpg_url())
         sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
