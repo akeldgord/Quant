@@ -31,6 +31,7 @@ from argus.domain.swaps import Swap
 from argus.ingestion.commitment import CommitmentTracker, derive_current_state
 from argus.ingestion.commitment_repository import SqlCommitmentObservationStore
 from argus.ingestion.event_repository import SqlEventRecorder
+from argus.ingestion.parse_ledger import ParseAttemptIdentity
 from argus.ingestion.reconciliation import (
     ChainEventDraft,
     ReconciliationEngine,
@@ -42,6 +43,18 @@ from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
 from argus.ingestion.watermark_repository import SqlWatermarkStore
 from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
 from argus.providers import SignatureInfo, StreamNotification
+
+# Phase 1 remediation round 3, finding #5: ReconciliationEngine now
+# requires an explicit ParseAttemptIdentity -- a real, non-empty
+# placeholder here since every engine below records against a live
+# Postgres database whose parse_attempts columns are NOT NULL with a
+# length > 0 CHECK constraint.
+_TEST_PARSE_IDENTITY = ParseAttemptIdentity(
+    build_hash="replay-test-build-hash",
+    config_hash="replay-test-config-hash",
+    master_spec_hash="replay-test-master-spec-hash",
+    git_commit="replay-test-git-commit",
+)
 
 WALLET = "ReplayTestWallet1111111111111111111111111"
 COUNTERPARTY = "ReplayCounterpartyWallet22222222222222222"
@@ -257,6 +270,7 @@ async def test_duplicate_delivery_replay_is_idempotent(admin_engine) -> None:
             clock=Clock(),
             provider_name="replay-test",
             parser_version=PARSER_VERSION,
+            parse_identity=_TEST_PARSE_IDENTITY,
         )
         for _ in range(3):  # "replaying" the identical fast-path delivery 3 times
             await recon_engine.observe_stream_event(
@@ -312,6 +326,7 @@ async def test_process_restart_replay_recovers_missed_events_from_persisted_boun
             clock=Clock(),
             provider_name="replay-test",
             parser_version=PARSER_VERSION,
+            parse_identity=_TEST_PARSE_IDENTITY,
         )
         result = await recon_engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
         assert result.new_events == 1
@@ -335,6 +350,7 @@ async def test_process_restart_replay_recovers_missed_events_from_persisted_boun
             clock=Clock(),
             provider_name="replay-test",
             parser_version=PARSER_VERSION,
+            parse_identity=_TEST_PARSE_IDENTITY,
         )
         restart_result = await restarted_engine.reconcile(
             wallet, ReconciliationTrigger.PROCESS_RESTART
@@ -467,6 +483,7 @@ async def test_concurrent_wallet_replay_uses_independent_sessions_no_cross_conta
                 clock=Clock(),
                 provider_name="replay-test",
                 parser_version=PARSER_VERSION,
+                parse_identity=_TEST_PARSE_IDENTITY,
             )
             engine_b = ReconciliationEngine(
                 chain_provider=provider_b,
@@ -474,6 +491,7 @@ async def test_concurrent_wallet_replay_uses_independent_sessions_no_cross_conta
                 clock=Clock(),
                 provider_name="replay-test",
                 parser_version=PARSER_VERSION,
+                parse_identity=_TEST_PARSE_IDENTITY,
             )
             results = await asyncio.gather(
                 engine_a.reconcile(wallet_a, ReconciliationTrigger.SCHEDULED),
@@ -540,6 +558,7 @@ async def test_pagination_replay_recovers_a_multi_page_gap_without_loss_or_dupli
             clock=Clock(),
             provider_name="replay-test",
             parser_version=PARSER_VERSION,
+            parse_identity=_TEST_PARSE_IDENTITY,
             page_size=2,
         )
         first_result = await first_engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
@@ -557,6 +576,7 @@ async def test_pagination_replay_recovers_a_multi_page_gap_without_loss_or_dupli
                 clock=Clock(),
                 provider_name="replay-test",
                 parser_version=PARSER_VERSION,
+                parse_identity=_TEST_PARSE_IDENTITY,
                 page_size=2,
             )
             replay_result = await replay_engine.reconcile(
@@ -667,6 +687,138 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
         await engine.dispose()
 
 
+async def test_reparse_records_new_build_identity_without_touching_prior_attempt(
+    admin_engine,
+) -> None:
+    """Phase 1 remediation round 3, finding #5: a durable parse attempt
+    preserves the exact build/config/MASTER_SPEC/git identity captured at
+    attempt time, and a later reparse (simulating code having changed
+    between the original attempt and the retry) appends an independent,
+    differently-identified row rather than rewriting the immutable
+    original -- proven against a real database, matching
+    ``argus.cli.ingest_reparse``'s own ``SqlParseAttemptRecorder`` usage."""
+    from argus.ingestion.parse_attempt_repository import SqlParseAttemptRecorder
+    from argus.ingestion.parse_ledger import ParseAttemptDraft, outcome_for, payload_hash
+
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    wallet = f"{WALLET}-{uuid.uuid4().hex[:8]}"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    raw_payload = _valid_raw_payload(signature="replay-sig-identity", amount_in=250, wallet=wallet)
+
+    original_identity = ParseAttemptIdentity(
+        build_hash="original-build-hash",
+        config_hash="original-config-hash",
+        master_spec_hash="original-master-spec-hash",
+        git_commit="original-git-commit",
+    )
+    reparse_identity = ParseAttemptIdentity(
+        build_hash="reparsed-build-hash",
+        config_hash="reparsed-config-hash",
+        master_spec_hash="reparsed-master-spec-hash",
+        git_commit="reparsed-git-commit",
+    )
+
+    try:
+        async with sessionmaker() as session:
+            draft = ChainEventDraft(
+                event_id=uuid.uuid4(),
+                chain="solana",
+                slot=1,
+                block_time=None,
+                first_seen_at=now,
+                provider="replay-test",
+                provider_received_at=now,
+                transaction_signature="replay-sig-identity",
+                event_type="TRANSACTION_OBSERVED",
+                wallet_address=wallet,
+                mint=None,
+                raw_payload=raw_payload,
+                payload_hash=_payload_hash(raw_payload),
+                parser_version=PARSER_VERSION,
+                created_at=now,
+            )
+            event_id = (await SqlEventRecorder(session).record(draft)).event_id
+
+            outcome, retry_disposition = outcome_for(classification="TRANSFER_IN", exc=None)
+            await SqlParseAttemptRecorder(session).record(
+                ParseAttemptDraft(
+                    attempt_id=uuid.uuid4(),
+                    event_id=event_id,
+                    parser_version=PARSER_VERSION,
+                    attempted_at=now,
+                    outcome=outcome,
+                    error_class=None,
+                    error_reason=None,
+                    input_payload_hash=payload_hash(raw_payload),
+                    retry_disposition=retry_disposition,
+                    build_hash=original_identity.build_hash,
+                    config_hash=original_identity.config_hash,
+                    master_spec_hash=original_identity.master_spec_hash,
+                    git_commit=original_identity.git_commit,
+                    created_at=now,
+                )
+            )
+            await session.commit()
+
+        # Reparse: a new attempt row under a *different* captured identity
+        # -- as if the code/config/git state genuinely changed between the
+        # original attempt and this retry -- must never touch the first
+        # row.
+        async with sessionmaker() as session:
+            await SqlParseAttemptRecorder(session).record(
+                ParseAttemptDraft(
+                    attempt_id=uuid.uuid4(),
+                    event_id=event_id,
+                    parser_version=PARSER_VERSION,
+                    attempted_at=now,
+                    outcome=outcome,
+                    error_class=None,
+                    error_reason=None,
+                    input_payload_hash=payload_hash(raw_payload),
+                    retry_disposition=retry_disposition,
+                    build_hash=reparse_identity.build_hash,
+                    config_hash=reparse_identity.config_hash,
+                    master_spec_hash=reparse_identity.master_spec_hash,
+                    git_commit=reparse_identity.git_commit,
+                    created_at=now,
+                )
+            )
+            await session.commit()
+
+        async with sessionmaker() as session:
+            from argus.domain.parse_attempts import ParseAttempt
+
+            rows = (
+                (
+                    await session.execute(
+                        select(ParseAttempt).where(ParseAttempt.event_id == event_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(rows) == 2  # the original attempt was never overwritten or removed
+            by_build_hash = {r.build_hash: r for r in rows}
+            assert by_build_hash.keys() == {
+                original_identity.build_hash,
+                reparse_identity.build_hash,
+            }
+            original_row = by_build_hash[original_identity.build_hash]
+            assert original_row.config_hash == original_identity.config_hash
+            assert original_row.master_spec_hash == original_identity.master_spec_hash
+            assert original_row.git_commit == original_identity.git_commit
+            reparse_row = by_build_hash[reparse_identity.build_hash]
+            assert reparse_row.config_hash == reparse_identity.config_hash
+            assert reparse_row.master_spec_hash == reparse_identity.master_spec_hash
+            assert reparse_row.git_commit == reparse_identity.git_commit
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await engine.dispose()
+
+
 async def test_replay_pruned_boundary_never_advances_watermark_or_loses_prior_state(
     admin_engine,
 ) -> None:
@@ -700,6 +852,7 @@ async def test_replay_pruned_boundary_never_advances_watermark_or_loses_prior_st
                 clock=Clock(),
                 provider_name="replay-test",
                 parser_version=PARSER_VERSION,
+                parse_identity=_TEST_PARSE_IDENTITY,
             )
             result = await recon_engine.reconcile(wallet, ReconciliationTrigger.PROCESS_RESTART)
             assert result.ok is False

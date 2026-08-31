@@ -239,6 +239,7 @@ def ingest_run(
         IngestionManagerFailure,
         StaticWalletSource,
     )
+    from argus.ingestion.parse_ledger import capture_parse_identity
     from argus.ingestion.reconciliation import ReconciliationEngine
     from argus.parsing.generic_parser import PARSER_VERSION
 
@@ -251,12 +252,17 @@ def ingest_run(
 
         wallets = tuple(wallet or ()) or ("TestModeWallet1111111111111111111111111111",)
         provider = NullChainProvider()
+        # Finding #5: even --test-mode's offline deterministic run stamps
+        # a real, non-empty build/config/spec/git identity onto every
+        # parse attempt it records -- this exercises the real production
+        # wiring end-to-end, so it must never fall back to a placeholder.
         engine = ReconciliationEngine(
             chain_provider=provider,
             unit_of_work=InMemoryReconciliationUnitOfWork(),
             clock=Clock(),
             provider_name="test-mode",
             parser_version=PARSER_VERSION,
+            parse_identity=capture_parse_identity(load_config()),
         )
         manager = IngestionManager(
             wallet_source=StaticWalletSource(wallets),
@@ -336,6 +342,7 @@ def ingest_run(
                 clock=Clock(),
                 provider_name="helius",
                 parser_version=PARSER_VERSION,
+                parse_identity=capture_parse_identity(config),
             )
             manager = IngestionManager(
                 wallet_source=StaticWalletSource(tuple(wallet or ())),
@@ -396,7 +403,12 @@ def ingest_reparse(
     from argus.db.roles import DbRole
     from argus.domain.chain_events import ChainEvent
     from argus.ingestion.parse_attempt_repository import SqlParseAttemptRecorder
-    from argus.ingestion.parse_ledger import ParseAttemptDraft, outcome_for, payload_hash
+    from argus.ingestion.parse_ledger import (
+        ParseAttemptDraft,
+        capture_parse_identity,
+        outcome_for,
+        payload_hash,
+    )
     from argus.ingestion.swap_repository import SqlSwapRecorder
     from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
 
@@ -404,6 +416,11 @@ def ingest_reparse(
 
     async def _run() -> int:
         config = load_config()
+        # Finding #5: identity is captured once per reparse run, at the
+        # current code/config/git state -- never inherited from whatever
+        # identity produced the original (now-immutable) failing attempt
+        # this sweep is retrying.
+        identity = capture_parse_identity(config)
         db_info = connection_for_role(config, DbRole.INGEST)
         db_engine = create_async_engine(db_info.as_asyncpg_url())
         sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -457,6 +474,10 @@ def ingest_reparse(
                         error_reason=str(exc)[:512] if exc is not None else None,
                         input_payload_hash=payload_hash(row.raw_payload),
                         retry_disposition=retry_disposition,
+                        build_hash=identity.build_hash,
+                        config_hash=identity.config_hash,
+                        master_spec_hash=identity.master_spec_hash,
+                        git_commit=identity.git_commit,
                         created_at=now,
                     )
                 )

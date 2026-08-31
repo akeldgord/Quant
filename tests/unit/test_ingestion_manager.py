@@ -32,6 +32,7 @@ from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationR
 from argus.providers import StreamNotification
 from argus.providers.usage import RequestUsageRecord, StreamingUsageRecord
 from tests.unit.test_reconciliation import (
+    TEST_PARSE_IDENTITY,
     FakeChainProvider,
     FakeCommitmentStore,
     FakeEventLedger,
@@ -171,6 +172,7 @@ def _manager(
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
+        parse_identity=TEST_PARSE_IDENTITY,
         clock_monitor=clock_monitor,
     )
     return IngestionManager(
@@ -862,6 +864,7 @@ async def test_periodic_reconciliation_task_dying_fails_the_whole_manager() -> N
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
+        parse_identity=TEST_PARSE_IDENTITY,
     )
     exploding_engine = _ExplodingEngine(real_engine)
 

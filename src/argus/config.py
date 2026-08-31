@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,36 @@ def master_spec_hash(path: Path = MASTER_SPEC_PATH) -> str:
             f"MASTER_SPEC.md not found at {path} — it must be saved verbatim at the repo root."
         )
     return hash_file(path)
+
+
+GIT_COMMIT_UNAVAILABLE = "GIT_COMMIT_UNAVAILABLE"
+
+
+def git_commit_sha(repo_root: Path = REPO_ROOT) -> str:
+    """Phase 1 remediation round 3, finding #5: the git identity CORE-004
+    requires every meaningful decision to record, e.g. on a durable parse
+    attempt (``argus.ingestion.parse_ledger.ParseAttemptIdentity``).
+
+    Runs ``git rev-parse HEAD`` against ``repo_root``. Never raises: a
+    missing ``git`` binary, a non-repository checkout, or any other
+    failure returns the explicit sentinel ``GIT_COMMIT_UNAVAILABLE``
+    rather than fabricating a commit SHA -- this is a best-effort
+    identity capture, not something that may ever abort the durable write
+    it is attached to.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return GIT_COMMIT_UNAVAILABLE
+    sha = result.stdout.strip()
+    return sha if sha else GIT_COMMIT_UNAVAILABLE
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

@@ -11,7 +11,7 @@ import dataclasses
 import hashlib
 import uuid
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from argus.domain.parse_attempts import (
     PARSE_OUTCOME_FAILURE,
@@ -21,7 +21,45 @@ from argus.domain.parse_attempts import (
     PARSE_RETRY_RETRYABLE,
 )
 
+if TYPE_CHECKING:
+    from argus.config import ArgusConfig
+
 _CLASSIFICATION_UNKNOWN = "UNKNOWN"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParseAttemptIdentity:
+    """The canonical build/config/spec/git identities MASTER_SPEC.md's
+    CORE-004 requires every meaningful decision to record (Phase 1
+    remediation round 3, finding #5) -- captured once per process (or
+    once per reparse sweep run) and stamped onto every
+    :class:`ParseAttemptDraft` recorded under it, so a durable parse
+    attempt can always be reproduced against the exact code and
+    configuration that produced it, not just the human-assigned
+    ``parser_version`` label."""
+
+    build_hash: str
+    config_hash: str
+    master_spec_hash: str
+    git_commit: str
+
+
+def capture_parse_identity(config: ArgusConfig) -> ParseAttemptIdentity:
+    """Real production wiring's single source of truth for
+    :class:`ParseAttemptIdentity` -- every value is a genuine, non-empty
+    capture, never a placeholder: the parser module's own content hash,
+    this process's effective config hash, MASTER_SPEC.md's own hash, and
+    the current git commit (or the explicit ``GIT_COMMIT_UNAVAILABLE``
+    sentinel if git itself is unavailable -- never fabricated)."""
+    from argus.config import git_commit_sha, master_spec_hash
+    from argus.parsing.generic_parser import PARSER_BUILD_HASH
+
+    return ParseAttemptIdentity(
+        build_hash=PARSER_BUILD_HASH,
+        config_hash=config.config_hash,
+        master_spec_hash=master_spec_hash(),
+        git_commit=git_commit_sha(),
+    )
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -35,6 +73,10 @@ class ParseAttemptDraft:
     error_reason: str | None
     input_payload_hash: str
     retry_disposition: str
+    build_hash: str
+    config_hash: str
+    master_spec_hash: str
+    git_commit: str
     created_at: datetime
 
 

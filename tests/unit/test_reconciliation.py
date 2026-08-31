@@ -33,7 +33,7 @@ from argus.ingestion.commitment import (
     InMemoryCommitmentObservationStore,
     derive_current_state,
 )
-from argus.ingestion.parse_ledger import InMemoryParseAttemptRecorder
+from argus.ingestion.parse_ledger import InMemoryParseAttemptRecorder, ParseAttemptIdentity
 from argus.ingestion.reconciliation import (
     ChainEventDraft,
     ReconciliationEngine,
@@ -53,6 +53,18 @@ FakeCommitmentStore = InMemoryCommitmentObservationStore
 
 WALLET = "TestWallet1111111111111111111111111111111"
 COUNTERPARTY = "CounterpartyWallet22222222222222222222222"
+
+# Phase 1 remediation round 3, finding #5: every ReconciliationEngine now
+# requires an explicit ParseAttemptIdentity (no default -- see its
+# docstring), so every test constructing one needs a real, non-empty
+# placeholder identity. Shared here since tests/unit/test_ingestion_manager.py
+# and others import fakes/constants from this module already.
+TEST_PARSE_IDENTITY = ParseAttemptIdentity(
+    build_hash="test-build-hash",
+    config_hash="test-config-hash",
+    master_spec_hash="test-master-spec-hash",
+    git_commit="test-git-commit",
+)
 
 
 def _valid_raw_payload(
@@ -261,6 +273,7 @@ def _engine(
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
+        parse_identity=TEST_PARSE_IDENTITY,
         clock_monitor=clock_monitor,
         page_size=page_size,
         max_pages=max_pages,

@@ -23,6 +23,20 @@ event and parser version it was attempted against, so:
 
 Never updated or deleted by application code (finding #6's immutability
 requirement applies equally to this ledger).
+
+Phase 1 remediation round 3 (argus-phase-1-remediation-003), finding #5:
+``parser_version`` and ``input_payload_hash`` alone cannot reproduce an
+attempt against the exact code/configuration that produced it -- a
+human-assigned version label can be forgotten to bump, and neither field
+says anything about the runtime configuration or MASTER_SPEC.md contract
+version in force at the time. Adds four further identity columns
+(MASTER_SPEC.md CORE-004: every meaningful decision records algorithm
+version, config version/hash, and git commit): ``build_hash`` (a
+reproducible content hash of the exact parsing-algorithm source that
+ran), ``config_hash`` (``ArgusConfig.config_hash()``), ``master_spec_hash``
+(the hash of ``MASTER_SPEC.md`` itself), and ``git_commit``
+(``git rev-parse HEAD``). All four are required (never empty) at the
+database layer, not merely by application-code convention.
 """
 
 from __future__ import annotations
@@ -58,6 +72,12 @@ class ParseAttempt(Base):
             "retry_disposition IN ('NOT_APPLICABLE', 'RETRYABLE')",
             name="ck_parse_attempts_retry_disposition",
         ),
+        CheckConstraint("length(build_hash) > 0", name="ck_parse_attempts_build_hash_nonempty"),
+        CheckConstraint("length(config_hash) > 0", name="ck_parse_attempts_config_hash_nonempty"),
+        CheckConstraint(
+            "length(master_spec_hash) > 0", name="ck_parse_attempts_master_spec_hash_nonempty"
+        ),
+        CheckConstraint("length(git_commit) > 0", name="ck_parse_attempts_git_commit_nonempty"),
     )
 
     attempt_id: Mapped[uuid.UUID] = mapped_column(
@@ -74,6 +94,11 @@ class ParseAttempt(Base):
     error_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
     input_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     retry_disposition: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    build_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    master_spec_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    git_commit: Mapped[str] = mapped_column(String(64), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

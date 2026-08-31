@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from argus.config import hash_file, load_config, master_spec_hash
+from argus.config import (
+    GIT_COMMIT_UNAVAILABLE,
+    git_commit_sha,
+    hash_file,
+    load_config,
+    master_spec_hash,
+)
 
 
 def _write_yaml(path: Path, content: str) -> None:
@@ -88,3 +94,29 @@ def test_real_master_spec_file_hashes_successfully() -> None:
     # generated").
     h = master_spec_hash()
     assert len(h) == 64
+
+
+# --- Phase 1 remediation round 3, finding #5: git commit identity -------
+
+
+def test_git_commit_sha_returns_the_real_repo_head() -> None:
+    sha = git_commit_sha()
+    assert sha != GIT_COMMIT_UNAVAILABLE
+    assert len(sha) == 40  # a real git commit SHA-1 hex digest
+    assert all(c in "0123456789abcdef" for c in sha)
+
+
+def test_git_commit_sha_is_stable_across_repeated_calls() -> None:
+    assert git_commit_sha() == git_commit_sha()
+
+
+def test_git_commit_sha_returns_sentinel_when_not_a_git_repository(tmp_path: Path) -> None:
+    # tmp_path is never a git checkout -- `git rev-parse HEAD` fails, and
+    # this must never raise or fabricate a commit SHA, only return the
+    # explicit sentinel.
+    assert git_commit_sha(repo_root=tmp_path) == GIT_COMMIT_UNAVAILABLE
+
+
+def test_git_commit_sha_returns_sentinel_when_git_binary_missing(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("PATH", "")
+    assert git_commit_sha() == GIT_COMMIT_UNAVAILABLE

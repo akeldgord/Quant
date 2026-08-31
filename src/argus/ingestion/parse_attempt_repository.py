@@ -33,6 +33,10 @@ class SqlParseAttemptRecorder:
             error_reason=draft.error_reason,
             input_payload_hash=draft.input_payload_hash,
             retry_disposition=draft.retry_disposition,
+            build_hash=draft.build_hash,
+            config_hash=draft.config_hash,
+            master_spec_hash=draft.master_spec_hash,
+            git_commit=draft.git_commit,
             created_at=draft.created_at,
         )
         self._session.add(row)

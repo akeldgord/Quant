@@ -93,6 +93,7 @@ from argus.ingestion.commitment import (
 )
 from argus.ingestion.parse_ledger import (
     ParseAttemptDraft,
+    ParseAttemptIdentity,
     ParseAttemptRecorder,
     outcome_for,
     payload_hash,
@@ -329,6 +330,7 @@ class ReconciliationEngine:
         clock: Clock,
         provider_name: str,
         parser_version: str,
+        parse_identity: ParseAttemptIdentity,
         clock_monitor: PersistentClockMonitor | None = None,
         page_size: int = DEFAULT_PAGE_SIZE,
         max_pages: int = DEFAULT_MAX_PAGES,
@@ -342,6 +344,11 @@ class ReconciliationEngine:
         self._clock = clock
         self._provider_name = provider_name
         self._parser_version = parser_version
+        # Phase 1 remediation round 3, finding #5: the build/config/
+        # MASTER_SPEC/git identity stamped onto every ParseAttemptDraft
+        # this engine records (see _process_one_item below) -- required,
+        # no default, so a caller can never silently forget to capture it.
+        self._parse_identity = parse_identity
         self._clock_monitor = clock_monitor
         self._page_size = page_size
         self._max_pages = max_pages
@@ -693,6 +700,10 @@ class ReconciliationEngine:
                     error_reason=str(exc)[:512] if exc is not None else None,
                     input_payload_hash=payload_hash(raw_payload),
                     retry_disposition=retry_disposition,
+                    build_hash=self._parse_identity.build_hash,
+                    config_hash=self._parse_identity.config_hash,
+                    master_spec_hash=self._parse_identity.master_spec_hash,
+                    git_commit=self._parse_identity.git_commit,
                     created_at=now,
                 )
             )

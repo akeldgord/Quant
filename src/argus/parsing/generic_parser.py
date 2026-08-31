@@ -40,11 +40,24 @@ research (MASTER_SPEC section 21) but never copy-eligible (see
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Final, Literal
 
 PARSER_VERSION: Final[str] = "generic_balance_delta_v1"
+
+# Phase 1 remediation round 3, finding #5: a reproducible content hash of
+# this exact algorithm's source, computed once at import time. Distinct
+# from PARSER_VERSION (a human-assigned label above that can be forgotten
+# to bump when this file changes) and from a git commit SHA (which
+# changes on any commit anywhere in the repo, not just here, and does not
+# reflect uncommitted local edits during development) -- this hash always
+# changes exactly when, and only when, this file's bytes change, so a
+# durable ``parse_attempts`` row stamped with it can always be checked
+# against the exact code that produced it.
+PARSER_BUILD_HASH: Final[str] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 NATIVE_SOL_ASSET: Final[str] = "SOL"
 WRAPPED_SOL_MINT: Final[str] = "So11111111111111111111111111111111111111112"

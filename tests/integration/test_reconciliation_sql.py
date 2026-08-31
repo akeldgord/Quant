@@ -33,11 +33,24 @@ from argus.domain.parse_attempts import PARSE_OUTCOME_SUCCESS, ParseAttempt
 from argus.domain.swaps import Swap
 from argus.ingestion.commitment import derive_current_state
 from argus.ingestion.commitment_repository import SqlCommitmentObservationStore
+from argus.ingestion.parse_ledger import ParseAttemptIdentity
 from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationTrigger
 from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
 from argus.providers import SignatureInfo, StreamNotification
 
 pytestmark = pytest.mark.asyncio
+
+# Phase 1 remediation round 3, finding #5: ReconciliationEngine now
+# requires an explicit ParseAttemptIdentity -- a real, non-empty
+# placeholder here since this test exercises the real
+# SqlParseAttemptRecorder against a live database whose ``parse_attempts``
+# columns are NOT NULL with a length > 0 CHECK constraint.
+_TEST_PARSE_IDENTITY = ParseAttemptIdentity(
+    build_hash="sql-test-build-hash",
+    config_hash="sql-test-config-hash",
+    master_spec_hash="sql-test-master-spec-hash",
+    git_commit="sql-test-git-commit",
+)
 
 
 def _valid_raw_payload(wallet: str, signature: str, amount_in: int) -> dict[str, Any]:
@@ -118,6 +131,7 @@ def _engine(
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
+        parse_identity=_TEST_PARSE_IDENTITY,
         page_size=page_size,
     )
 
@@ -238,6 +252,18 @@ async def test_reconciliation_engine_with_real_sql_repositories(admin_engine) ->
             )
             assert len(attempt_rows) == 2
             assert all(row.outcome == PARSE_OUTCOME_SUCCESS for row in attempt_rows)
+
+            # Finding #5: every durable parse attempt also round-trips the
+            # exact build/config/MASTER_SPEC/git identity the engine was
+            # constructed with -- through a real Postgres write/read, not
+            # just the in-memory dataclass.
+            assert all(row.build_hash == _TEST_PARSE_IDENTITY.build_hash for row in attempt_rows)
+            assert all(row.config_hash == _TEST_PARSE_IDENTITY.config_hash for row in attempt_rows)
+            assert all(
+                row.master_spec_hash == _TEST_PARSE_IDENTITY.master_spec_hash
+                for row in attempt_rows
+            )
+            assert all(row.git_commit == _TEST_PARSE_IDENTITY.git_commit for row in attempt_rows)
     finally:
         await _cleanup(admin_engine, wallet)
         await ingest_engine.dispose()
