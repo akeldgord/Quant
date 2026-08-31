@@ -25,6 +25,7 @@ import httpx
 
 from argus.clock import Clock
 from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification
+from argus.providers.contract import ProviderResponseError
 from argus.providers.credentials import require_env_credential
 from argus.providers.http import send_with_usage
 from argus.providers.retry import RetryPolicy
@@ -37,8 +38,24 @@ DEFAULT_WS_BASE_URL = "wss://mainnet.helius-rpc.com/"
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 
-class HeliusRpcError(RuntimeError):
-    """A well-formed JSON-RPC error response from Helius."""
+class HeliusRpcError(ProviderResponseError):
+    """A well-formed JSON-RPC error response from Helius, or a
+    malformed/unexpected-shape response body.
+
+    ``usage_status`` defaults to ``"rpc_error"`` -- a genuine well-formed
+    provider-level error response is the common case this exception
+    represents. The one raise site inside :meth:`HeliusRpcClient._rpc` for
+    a response missing both ``result`` and ``error`` overrides it to
+    ``"contract_error"`` (Phase 1 remediation round 2, finding #8): that
+    case is a contract violation -- neither a well-formed RPC error nor a
+    successful result -- not an application-level error the provider
+    actually reported."""
+
+    usage_status: str
+
+    def __init__(self, message: str, *, usage_status: str = "rpc_error") -> None:
+        super().__init__(message)
+        self.usage_status = usage_status
 
 
 def resolve_helius_api_key(env: Mapping[str, str]) -> str:
@@ -68,10 +85,29 @@ class HeliusRpcClient:
 
     async def _rpc(self, method: str, params: list[Any]) -> Any:
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-        response = await send_with_usage(
+
+        def _process(response: httpx.Response) -> Any:
+            response.raise_for_status()
+            data = response.json()
+            if "error" in data:
+                raise HeliusRpcError(f"{method} failed: {data['error']}")
+            if "result" not in data:
+                # Malformed/unexpected-shape response: neither a well-formed
+                # JSON-RPC error nor a result. Rejected explicitly here rather
+                # than left to raise a bare KeyError below (acceptance
+                # criterion #14: adapter contract validation must reject
+                # malformed provider responses, not crash unpredictably).
+                raise HeliusRpcError(
+                    f"{method}: malformed response, missing both 'result' and 'error': {data!r}",
+                    usage_status="contract_error",
+                )
+            return data["result"]
+
+        return await send_with_usage(
             lambda: self._http.post(
                 self._base_url, params={"api-key": self._api_key}, json=payload
             ),
+            process=_process,
             policy=self._retry_policy,
             usage_recorder=self._usage_recorder,
             clock=self._clock,
@@ -79,20 +115,6 @@ class HeliusRpcClient:
             endpoint=method,
             request_class="rpc",
         )
-        response.raise_for_status()
-        data = response.json()
-        if "error" in data:
-            raise HeliusRpcError(f"{method} failed: {data['error']}")
-        if "result" not in data:
-            # Malformed/unexpected-shape response: neither a well-formed
-            # JSON-RPC error nor a result. Rejected explicitly here rather
-            # than left to raise a bare KeyError below (acceptance
-            # criterion #14: adapter contract validation must reject
-            # malformed provider responses, not crash unpredictably).
-            raise HeliusRpcError(
-                f"{method}: malformed response, missing both 'result' and 'error': {data!r}"
-            )
-        return data["result"]
 
     async def get_transaction(self, signature: str) -> dict[str, Any]:
         result: dict[str, Any] = await self._rpc(

@@ -41,45 +41,48 @@ class DexScreenerClient:
         self._clock = clock or Clock()
 
     async def token_snapshot(self, mint: str) -> TokenSnapshot:
-        response = await send_with_usage(
+        def _process(response: httpx.Response) -> TokenSnapshot:
+            response.raise_for_status()
+            data = require_dict(response.json(), context="DexScreener token_snapshot")
+            pairs = data.get("pairs")
+            price_usd: Decimal | None = None
+            pairs_found = 0
+            if pairs is not None:
+                for pair in require_list(pairs, context="DexScreener token_snapshot 'pairs'"):
+                    pairs_found += 1
+                    pair_obj = require_dict(pair, context="DexScreener token_snapshot pair entry")
+                    price = pair_obj.get("priceUsd")
+                    if price is not None:
+                        validated_price = require_numeric_string(
+                            price, context="DexScreener pair 'priceUsd'"
+                        )
+                        if price_usd is None:
+                            price_usd = Decimal(validated_price)
+                    for side in ("baseToken", "quoteToken"):
+                        token = pair_obj.get(side)
+                        if token is not None:
+                            require_key(
+                                require_dict(token, context=f"DexScreener pair {side!r}"),
+                                "address",
+                                context=f"DexScreener pair {side!r}",
+                            )
+            return TokenSnapshot(
+                provider="dexscreener",
+                mint=mint,
+                price_usd=price_usd,
+                pairs_found=pairs_found,
+                raw=data,
+            )
+
+        return await send_with_usage(
             lambda: self._http.get(f"{self._base_url}/latest/dex/tokens/{mint}"),
+            process=_process,
             policy=self._retry_policy,
             usage_recorder=self._usage_recorder,
             clock=self._clock,
             provider="dexscreener",
             endpoint="token_snapshot",
             request_class="rest",
-        )
-        response.raise_for_status()
-        data = require_dict(response.json(), context="DexScreener token_snapshot")
-        pairs = data.get("pairs")
-        price_usd: Decimal | None = None
-        pairs_found = 0
-        if pairs is not None:
-            for pair in require_list(pairs, context="DexScreener token_snapshot 'pairs'"):
-                pairs_found += 1
-                pair_obj = require_dict(pair, context="DexScreener token_snapshot pair entry")
-                price = pair_obj.get("priceUsd")
-                if price is not None:
-                    validated_price = require_numeric_string(
-                        price, context="DexScreener pair 'priceUsd'"
-                    )
-                    if price_usd is None:
-                        price_usd = Decimal(validated_price)
-                for side in ("baseToken", "quoteToken"):
-                    token = pair_obj.get(side)
-                    if token is not None:
-                        require_key(
-                            require_dict(token, context=f"DexScreener pair {side!r}"),
-                            "address",
-                            context=f"DexScreener pair {side!r}",
-                        )
-        return TokenSnapshot(
-            provider="dexscreener",
-            mint=mint,
-            price_usd=price_usd,
-            pairs_found=pairs_found,
-            raw=data,
         )
 
     async def historical_ohlcv(self, mint: str, *, start: datetime, end: datetime) -> OhlcvPage:

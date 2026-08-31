@@ -10,7 +10,8 @@ unimplemented. :class:`argus.providers.ExecutionProvider` itself has no
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 import httpx
 
@@ -20,6 +21,8 @@ from argus.providers.http import send_with_usage
 from argus.providers.models import ExecutableQuote, UnsignedOrderResult
 from argus.providers.retry import RetryPolicy
 from argus.providers.usage import UsageRecorder
+
+T = TypeVar("T")
 
 DEFAULT_BASE_URL = "https://quote-api.jup.ag"
 
@@ -44,9 +47,17 @@ class JupiterClient:
         self._usage_recorder = usage_recorder
         self._clock = clock or Clock()
 
-    async def _send(self, send: Any, *, endpoint: str, request_class: str) -> httpx.Response:
+    async def _send(
+        self,
+        send: Callable[[], Awaitable[httpx.Response]],
+        *,
+        process: Callable[[httpx.Response], T],
+        endpoint: str,
+        request_class: str,
+    ) -> T:
         return await send_with_usage(
             send,
+            process=process,
             policy=self._retry_policy,
             usage_recorder=self._usage_recorder,
             clock=self._clock,
@@ -58,7 +69,25 @@ class JupiterClient:
     async def get_quote(
         self, *, input_mint: str, output_mint: str, amount_raw: int, slippage_bps: int = 50
     ) -> ExecutableQuote:
-        response = await self._send(
+        def _process(response: httpx.Response) -> ExecutableQuote:
+            response.raise_for_status()
+            data = require_dict(response.json(), context="Jupiter get_quote")
+            in_amount = require_numeric_string(
+                data.get("inAmount"), context="Jupiter get_quote 'inAmount'"
+            )
+            out_amount = require_numeric_string(
+                data.get("outAmount"), context="Jupiter get_quote 'outAmount'"
+            )
+            return ExecutableQuote(
+                provider="jupiter",
+                input_mint=input_mint,
+                output_mint=output_mint,
+                in_amount_raw=int(in_amount),
+                out_amount_raw=int(out_amount),
+                raw=data,
+            )
+
+        return await self._send(
             lambda: self._http.get(
                 f"{self._base_url}/v6/quote",
                 params={
@@ -68,24 +97,9 @@ class JupiterClient:
                     "slippageBps": slippage_bps,
                 },
             ),
+            process=_process,
             endpoint="get_quote",
             request_class="quote",
-        )
-        response.raise_for_status()
-        data = require_dict(response.json(), context="Jupiter get_quote")
-        in_amount = require_numeric_string(
-            data.get("inAmount"), context="Jupiter get_quote 'inAmount'"
-        )
-        out_amount = require_numeric_string(
-            data.get("outAmount"), context="Jupiter get_quote 'outAmount'"
-        )
-        return ExecutableQuote(
-            provider="jupiter",
-            input_mint=input_mint,
-            output_mint=output_mint,
-            in_amount_raw=int(in_amount),
-            out_amount_raw=int(out_amount),
-            raw=data,
         )
 
     async def build_unsigned_order(
@@ -94,7 +108,19 @@ class JupiterClient:
         """Returns an UNSIGNED transaction payload for inspection/research
         only. There is deliberately no method anywhere in this client that
         signs or submits it."""
-        response = await self._send(
+
+        def _process(response: httpx.Response) -> UnsignedOrderResult:
+            response.raise_for_status()
+            data = require_dict(response.json(), context="Jupiter build_unsigned_order")
+            swap_transaction = require_str(
+                data.get("swapTransaction"),
+                context="Jupiter build_unsigned_order 'swapTransaction'",
+            )
+            return UnsignedOrderResult(
+                provider="jupiter", unsigned_transaction_base64=swap_transaction, raw=data
+            )
+
+        return await self._send(
             lambda: self._http.post(
                 f"{self._base_url}/v6/swap",
                 json={
@@ -103,14 +129,7 @@ class JupiterClient:
                     "wrapAndUnwrapSol": True,
                 },
             ),
+            process=_process,
             endpoint="build_unsigned_order",
             request_class="order_construction",
-        )
-        response.raise_for_status()
-        data = require_dict(response.json(), context="Jupiter build_unsigned_order")
-        swap_transaction = require_str(
-            data.get("swapTransaction"), context="Jupiter build_unsigned_order 'swapTransaction'"
-        )
-        return UnsignedOrderResult(
-            provider="jupiter", unsigned_transaction_base64=swap_transaction, raw=data
         )

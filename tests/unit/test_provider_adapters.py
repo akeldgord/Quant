@@ -570,3 +570,166 @@ async def test_recorder_failure_never_masks_the_real_provider_outcome() -> None:
     ):  # the real transport failure, not the recorder's RuntimeError
         await client2.get_slot()
     await http_client2.aclose()
+
+
+# --- Finding #8: usage records exactly one outcome, decided only after ---
+# --- decode/validation, never a premature "ok" -----------------------------
+
+
+async def test_usage_not_recorded_ok_before_decode_failure() -> None:
+    """A 200 response whose body isn't valid JSON must never leave an "ok"
+    usage row behind -- the old code recorded "ok" as soon as the status
+    code wasn't an error, before ``response.json()`` was ever called."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json at all")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(Exception, match="not json at all|Expecting value"):
+        await client.get_slot()
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "decode_error"
+    await http_client.aclose()
+
+
+async def test_usage_records_http_error_not_ok_for_error_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal error")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.get_slot()
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "http_error"
+    await http_client.aclose()
+
+
+async def test_usage_records_rpc_error_not_ok_for_well_formed_rpc_error() -> None:
+    """A well-formed JSON-RPC error response is a 200 at the transport
+    level -- the old code recorded it as "ok"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "bad request"}},
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError):
+        await client.get_balance("SomeWallet")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "rpc_error"
+    await http_client.aclose()
+
+
+async def test_usage_records_contract_error_for_malformed_rpc_envelope() -> None:
+    """Missing both 'result' and 'error' is a contract violation, not a
+    well-formed application-level error -- distinct from rpc_error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="malformed response"):
+        await client.get_slot()
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_usage_records_contract_error_for_dexscreener_bad_shape() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"pairs": [{"priceUsd": "not-a-number"}]})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = DexScreenerClient(http_client=http_client, usage_recorder=usage)
+    from argus.providers.contract import ProviderContractError
+
+    with pytest.raises(ProviderContractError):
+        await client.token_snapshot("SomeMint")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_usage_records_timeout_distinct_from_transport_error() -> None:
+    from argus.providers.retry import RetryPolicy
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient(
+        "fake-key",
+        http_client=http_client,
+        usage_recorder=usage,
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0.001, max_delay_seconds=0.005),
+    )
+    with pytest.raises(httpx.ConnectTimeout):
+        await client.get_slot()
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "timeout"
+    await http_client.aclose()
+
+
+async def test_usage_records_ok_exactly_once_for_a_real_success() -> None:
+    """No duplicate/contradictory rows for the ordinary success path --
+    exactly one row, and it says "ok"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": 42})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    result = await client.get_slot()
+    assert result == 42
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "ok"
+    await http_client.aclose()
+
+
+async def test_cancellation_during_process_records_nothing() -> None:
+    """A cancellation while ``process`` (decode/validation) is running must
+    never leave behind a fabricated row -- no terminal outcome actually
+    happened, so nothing is recorded, not even a "cancelled" status.
+    Exercised directly against ``send_with_usage`` (not through an
+    adapter) so the assertion is deterministic rather than dependent on
+    real task-scheduling timing."""
+    import asyncio
+
+    from argus.clock import Clock
+    from argus.providers.http import send_with_usage
+    from argus.providers.retry import RetryPolicy
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    def _process(response: httpx.Response) -> Any:
+        raise asyncio.CancelledError
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    with pytest.raises(asyncio.CancelledError):
+        await send_with_usage(
+            lambda: http_client.get("https://example.invalid/x"),
+            process=_process,
+            policy=RetryPolicy(),
+            usage_recorder=usage,
+            clock=Clock(),
+            provider="test",
+            endpoint="test_endpoint",
+            request_class="rest",
+        )
+    assert usage.requests == []
+    await http_client.aclose()

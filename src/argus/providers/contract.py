@@ -16,10 +16,31 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
-class ProviderContractError(RuntimeError):
+class ProviderResponseError(RuntimeError):
+    """Base for a failure discovered while turning an already-received HTTP
+    response into an adapter's typed result -- a well-formed
+    application-level error, a malformed/unexpected shape, or any other
+    "the response could not be turned into a valid result" outcome.
+    Distinct from a transport-level failure (no response was ever
+    received) and from an HTTP error status.
+
+    Every such exception sets ``usage_status`` (either as a plain class
+    attribute, for an exception type with one fixed outcome, or as an
+    instance attribute set in ``__init__``, for one that can represent more
+    than one outcome -- see ``HeliusRpcError``) so
+    :func:`argus.providers.http.send_with_usage` records the precise
+    terminal usage-accounting outcome for it (Phase 1 remediation round 2,
+    finding #8) instead of a generic catch-all."""
+
+    usage_status: str = "processing_error"
+
+
+class ProviderContractError(ProviderResponseError):
     """A provider's response failed explicit contract validation --
     distinct from "unreachable" (network/connection failure) and from a
     well-formed application-level error response."""
+
+    usage_status: str = "contract_error"
 
 
 def require_dict(value: Any, *, context: str) -> dict[str, Any]:
