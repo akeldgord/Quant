@@ -4,11 +4,11 @@ Machine-and-human-readable state for session recovery (MASTER_SPEC.md section 8)
 Every new implementation session must read this file before doing anything else.
 
 ```yaml
-current_phase: 1  # remediation round 1 complete per this session; NOT yet orchestrator-approved
-last_completed_phase: 1  # implementation-agent-reported complete (remediation round 1); awaiting orchestrator review
+current_phase: 1  # remediation round 2 complete per this session; NOT yet orchestrator-approved
+last_completed_phase: 1  # implementation-agent-reported complete (remediation round 2); awaiting orchestrator review
 last_orchestrator_approved_phase: 0  # unchanged -- only the orchestrator may advance this
 approved_commit: 141af487fcfdff41d1597c19ea062139f5427f52  # unchanged -- Phase 0's approved commit
-awaiting_orchestrator_review: true  # Phase 1 remediation round 1 complete; see orchestration/checkpoints/phase_1_remediation_1.md
+awaiting_orchestrator_review: true  # Phase 1 remediation round 2 complete; see orchestration/checkpoints/phase_1_remediation_2.md
 
 # PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
 # (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
@@ -42,24 +42,29 @@ known_blockers:
      record. Per explicit orchestrator instruction, this deferred check does
      NOT block Phase 1, but IS required before live readiness can be
      approved."
-  - "REALCHAIN_GOLDEN_FIXTURES = NOT_TESTED_BLOCKED. Orchestrator
-     instruction argus-phase-1-remediation-001 (finding #5) required
-     sanitized real-chain golden transaction fixtures for every required
-     parser category. This sandbox has no general internet egress
-     (confirmed directly via curl to api.mainnet-beta.solana.com and
-     api.dexscreener.com, and via the proxy's own status endpoint, which
-     reports an explicit gateway-level policy denial for both hosts) and
-     no already-available safe source of authentic transaction data. Per
-     the instruction's own explicit fallback for this exact case, the
-     existing 11 synthetic fixtures remain, individually labeled synthetic
-     in tests/golden/fixtures/PROVENANCE.md, and mandatory acceptance
-     criterion 15 is reported honestly as NOT TESTED/blocked rather than
-     PASS. See orchestration/checkpoints/phase_1_remediation_1.md section
-     E item 15 and docs/DECISION_LOG.md for the full decision record.
-     Closing this out requires either running the acquisition step from an
-     environment with real network access, or an explicit orchestrator
-     decision on whether synthetic-but-schema-accurate fixtures are an
-     acceptable permanent substitute for this criterion."
+  - "REALCHAIN_GOLDEN_FIXTURES = PARTIAL_4_OF_9_CATEGORIES. Orchestrator
+     instruction argus-phase-1-remediation-002 (finding #12) required
+     authentic captured real-chain golden transaction fixtures, sourced
+     via this sandbox's read-only GitHub access (general RPC/market-data
+     egress remains confirmed blocked -- re-verified directly via curl to
+     api.mainnet-beta.solana.com, distinct from the GitHub git-clone path
+     which does work). solana-labs/explorer (MIT) embeds genuine captured
+     mainnet getTransaction payloads in its own test fixtures, explicitly
+     labeled mainnet-* by the upstream project itself; 4 real fixtures
+     were imported via the new `argus fixtures import-real-chain` offline
+     tool, covering the 'simple transfer' required category from both the
+     sender's and receiver's perspective plus two additional real
+     data points (multi-recipient transfer, USDC token transfer). The
+     remaining 8 of 9 round-1-required categories (every DEX-swap-shaped
+     one) remain honestly NOT TESTED -- no repository checked among the 6
+     searched embeds real swap-transaction bytes; see
+     tests/golden/fixtures/real/SEARCH_LOG.md for the full search log and
+     orchestration/checkpoints/phase_1_remediation_2.md section E item 21
+     for the disposition. Closing this out fully requires either sourcing
+     a DEX/AMM program repository's own committed real-swap test
+     transactions (not yet checked), or running the acquisition step from
+     an environment with real RPC egress against the real signatures
+     already identified in SEARCH_LOG.md."
 ```
 
 ## Phase history
@@ -68,7 +73,8 @@ known_blockers:
 |-------|--------|--------|-------|
 | 0 | ORCHESTRATOR-APPROVED (`argus-phase-1-001`, 2026-08-31) | b838558f7eae1eac8d3559c7826ab340d604d916, remediated at ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (history rewritten 2026-08-30 to scrub inert dev-only placeholder credential strings — see docs/DECISION_LOG.md; these are the post-rewrite hashes) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. Approved by the ARGUS ORCHESTRATOR at commit `141af487fcfdff41d1597c19ea062139f5427f52` as `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
 | 1 | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-001`, target `141af487fcfdff41d1597c19ea062139f5427f52`) | 28a88f74d28e70542050f5d5e8d9a9d139f26bb8 | Live chain data acquisition + deterministic canonical parsing: Helius RPC/WSS adapter, DexScreener/GeckoTerminal/Jupiter adapters (no signing), fast-path+truth-path reconciliation with per-wallet watermarks and DEGRADED gating, durable clock-anomaly detection wired into reconciliation, immutable `chain_events`/`swaps`/`clock_health_events` ledger, generic balance-delta swap parser (11 golden fixtures), P0-P6 priority scheduler, provider usage accounting with 70/85/95% warnings wired into every real adapter call, HTTP retry/backoff, provider capability/history/usage probe CLI. 204 tests passing, 91% coverage, ruff+mypy clean. STATUS `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`: acceptance criteria 1-2 (live Solana RPC/WebSocket) NOT TESTED -- no `HELIUS_API_KEY` configured and no general internet egress in this sandbox; no end-to-end stream-manager orchestration loop exists yet (each piece is built and tested in isolation). See `orchestration/checkpoints/phase_1.md` for the full 27-item disposition and disclosed gaps. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation row below** -- an independent orchestrator audit (`argus-phase-1-remediation-001`) rejected this self-assessment as overstated; this row is kept unmodified as immutable history. |
-| 1 (remediation round 1) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-001`, target `32c2898ab8c278c2f75f4a2f40fedd9d35b24b08`) | 83bb38497ac3af1402f38dabee6858e00ce2e9fb | Remediated all 10 audit findings from `argus-phase-1-remediation-001`: production `IngestionManager`/`argus ingest run` composing the WebSocket stream, reconciliation, and clock monitor into real runtime behavior; bounded cursor-based truth-path pagination that never silently truncates a gap; an auditable append-only commitment-observation model (replacing the dead `confirmed_at`/`finalized_at` columns) with regression/conflict rejection; parsing wired end-to-end into `swaps` persistence via a real `SqlSwapRecorder`; typed provider-contract validation replacing bare `isinstance(dict)` checks; usage accounting that survives transport exhaustion and is wired into the manager's real streaming code path; a dispatch-count-bounded scheduler starvation guarantee; 6 real `tests/replay` tests (was 0 collected). 260 tests passing, 84% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean. STATUS `PARTIAL_NOT_TESTED_REALCHAIN_FIXTURES`: 25 of 26 mandatory acceptance criteria PASS; criterion 15 (authenticated real-chain golden fixtures) is honestly NOT TESTED/blocked -- this sandbox has no general internet egress and no already-available safe source of authentic transaction data, per the instruction's own explicit fallback for this exact case. See `orchestration/checkpoints/phase_1_remediation_1.md` for the full 26-item disposition. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. |
+| 1 (remediation round 1) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-001`, target `32c2898ab8c278c2f75f4a2f40fedd9d35b24b08`) | 83bb38497ac3af1402f38dabee6858e00ce2e9fb | Remediated all 10 audit findings from `argus-phase-1-remediation-001`: production `IngestionManager`/`argus ingest run` composing the WebSocket stream, reconciliation, and clock monitor into real runtime behavior; bounded cursor-based truth-path pagination that never silently truncates a gap; an auditable append-only commitment-observation model (replacing the dead `confirmed_at`/`finalized_at` columns) with regression/conflict rejection; parsing wired end-to-end into `swaps` persistence via a real `SqlSwapRecorder`; typed provider-contract validation replacing bare `isinstance(dict)` checks; usage accounting that survives transport exhaustion and is wired into the manager's real streaming code path; a dispatch-count-bounded scheduler starvation guarantee; 6 real `tests/replay` tests (was 0 collected). 260 tests passing, 84% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean. STATUS `PARTIAL_NOT_TESTED_REALCHAIN_FIXTURES`: 25 of 26 mandatory acceptance criteria PASS; criterion 15 (authenticated real-chain golden fixtures) is honestly NOT TESTED/blocked -- this sandbox has no general internet egress and no already-available safe source of authentic transaction data, per the instruction's own explicit fallback for this exact case. See `orchestration/checkpoints/phase_1_remediation_1.md` for the full 26-item disposition. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation round 2 row below** -- an independent orchestrator audit (`argus-phase-1-remediation-002`) rejected round 1 as still insufficient; this row is kept unmodified as immutable history. |
+| 1 (remediation round 2) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-002`, target `04f367b8e03e99718812f872a34e73e170c44f0d`) | e44b5885b8aa02105e13051af4045e23e17b084c | Remediated all 12 audit findings from `argus-phase-1-remediation-002`: session-per-operation unit-of-work (no `AsyncSession` shared across concurrent tasks); explicit subscription-acknowledgement lifecycle with three independent recovery dimensions (stream/reconciliation/clock) so no single dimension can restore OK alone; structured task supervision (`IngestionManagerFailure`, fail-closed on any child-task death); finalization sweep wired into a real manager background loop; deterministic atomic commitment derivation (monotonic `sequence` column, `pg_advisory_xact_lock` serialization, full-same-level-state conflict validation, `commitment_observation_rejections` audit table); mechanical append-only enforcement at the database role layer; typed canonical provider response models (`argus.providers.models`) replacing provider-shaped dicts; usage records exactly one terminal outcome decided after decode/validation (including a visible signal on recorder failure); durable versioned `parse_attempts` ledger + `argus ingest reparse`; pagination continuity/ordering validation; a cancelled scheduler submission can never execute; and 4 genuine real-chain golden fixtures (of 9 required categories) sourced via this sandbox's working GitHub read access, imported through a new offline `argus fixtures import-real-chain`/`validate-real-chain` tool. 327 tests passing, 85% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean through migration 0005. STATUS `PARTIAL_REALCHAIN_FIXTURES_4_OF_9_CATEGORIES`: 26 of 27 mandatory acceptance criteria PASS; criterion 21 (real-chain golden fixtures) is honestly PARTIAL -- 4 of 9 required categories now genuinely real-chain evidenced, the remaining 8 (every DEX-swap-shaped category) are NOT TESTED since no repository searched embeds real swap-transaction bytes. See `orchestration/checkpoints/phase_1_remediation_2.md` for the full 27-item disposition and `tests/golden/fixtures/real/SEARCH_LOG.md` for the search log. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. |
 
 ## Operational tooling
 

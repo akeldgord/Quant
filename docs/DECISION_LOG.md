@@ -697,3 +697,104 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/checkpoints/phase_1_remediation_1.md` section B for the
   complete per-finding commit list (`6320af3`, `934a9fd`, `9061009`,
   `acb93b8`, `b84884c`, `83bb384`).
+
+### 2026-08-31 — Phase 1 remediation round 2: 12 audit findings + real-chain
+    fixtures partially sourced via GitHub
+- requirement_id: MASTER_SPEC.md section 10 (PROVIDER ARCHITECTURE),
+  section 12 (adapter reliability, PROV-001..004), section 14 (PROVIDER
+  COST GUARD), section 15 (scheduler), section 19 (truth-path
+  reconciliation/recovery), section 21 (golden fixture discipline),
+  section 108 (evidence accuracy / no fabricated claims), section 109
+  (this log)
+- decision: An independent orchestrator audit
+  (`argus-phase-1-remediation-002`) rejected round 1's remediation as
+  still insufficient, citing 12 new findings across session-safety,
+  subscription lifecycle, task supervision, finalization tracking,
+  commitment atomicity/ordering, ledger immutability, typed provider
+  models, usage-accounting terminal-outcome lifecycle, a durable parse
+  ledger, pagination continuity, scheduler cancellation, and real-chain
+  fixtures. All 12 are remediated with real, tested code (see
+  `orchestration/checkpoints/phase_1_remediation_2.md` section B for full
+  per-finding detail). Two gaps in this round's own acceptance-criteria
+  coverage were found and closed during the final review before this
+  checkpoint was written: `tests/replay` was missing coverage of the new
+  concurrency/pagination paths (criterion 20), and the commitment-write
+  serialization criterion (10) was only proven against an in-memory
+  lock, not the real Postgres `pg_advisory_xact_lock` mechanism finding
+  #5 actually implements — both closed with new real-Postgres tests. A
+  usage-recorder-failure signal gap (finding #8's own text requires a
+  "safe operational-health signal", which the initial commit omitted)
+  was likewise found and fixed during the same review pass. Finding #12
+  (real-chain fixtures) is the one criterion left PARTIAL: this sandbox's
+  read-only GitHub access was confirmed working for the first time this
+  project (anonymous `git clone` via the session's proxy succeeds against
+  public repositories, distinct from general chain-data/market-data RPC
+  egress, which remains confirmed blocked). Searching 6 open-source
+  Solana repositories via this access, `solana-labs/explorer` (MIT) was
+  found to embed genuine captured mainnet `getTransaction` payloads in
+  its own test fixtures (explicitly labeled `mainnet-*` by the upstream
+  project itself, not inferred from payload shape alone); 4 real
+  fixtures were imported via a new offline `argus fixtures
+  import-real-chain`/`validate-real-chain` tool. The remaining 8 of 9
+  round-1-required categories (every DEX-swap-shaped one) remain
+  honestly NOT TESTED — no repository checked embeds real
+  swap-transaction bytes; this is recorded as PARTIAL, not fabricated and
+  not claimed as full PASS, per the instruction's own explicit allowance
+  for a category that cannot be fully sourced from available evidence.
+- reason: An independent audit is a stronger integrity check than
+  self-assessment. This round's own findings (the two acceptance-
+  criteria coverage gaps and the usage-recorder signal gap) were caught
+  by the same discipline the round itself was applying to the codebase —
+  scoring every acceptance criterion individually against real evidence
+  before writing PASS, not asserting a blanket claim. Acceptance
+  criterion 21 (real-chain fixtures) advances materially over round 1's
+  0-of-9 NOT TESTED state without overstating what was actually found:
+  the sandbox's GitHub access is a genuinely new capability this round
+  discovered and used, but it does not by itself provide real swap
+  transaction data, which is what the remaining 8 categories require and
+  what MASTER_SPEC.md section 108's evidence-accuracy requirement
+  forbids inventing.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-002` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 04f367b8e03e99718812f872a34e73e170c44f0d`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_2_ONLY`,
+  `AUTHORIZED_PHASE: 1`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: New `src/argus/golden_fixtures.py`,
+  `src/argus/ingestion/unit_of_work.py`,
+  `src/argus/ingestion/parse_attempt_repository.py`,
+  `src/argus/ingestion/parse_ledger.py`, `src/argus/db/errors.py`,
+  `src/argus/domain/parse_attempts.py`; substantially rewritten
+  `src/argus/ingestion/{reconciliation,commitment,manager}.py`,
+  `src/argus/providers/{__init__,http,scheduler,contract,usage}.py` and
+  every provider adapter client; migrations `0004`
+  (commitment sequence + CHECK constraints, rejection audit table, parse
+  ledger, immutability grants) and `0005` (independent
+  `reconciliation_ok` dimension); new
+  `tests/golden/fixtures/real/` (4 real fixtures + provenance +
+  search log); new `tests/unit/test_golden_fixtures.py`,
+  `tests/unit/test_db_errors.py`; substantially expanded
+  `tests/unit/test_{commitment,reconciliation,priority_scheduler,
+  provider_adapters,ingestion_manager}.py`,
+  `tests/integration/test_reconciliation_sql.py`,
+  `tests/integration/test_immutability_grants.py` (new),
+  `tests/replay/test_replay.py`. 67 net new tests (260 -> 327). Full
+  suite: 327 passed, 85% coverage, ruff clean, mypy clean, alembic
+  downgrade-to-base/upgrade-to-head clean through migration 0005.
+  `orchestration/checkpoints/phase_1_remediation_2.md` and
+  `orchestration/bundles/phase_1_remediation_2.txt` record the full
+  27-item PASS/PARTIAL disposition. All prior Phase 0/Phase 1/round-1
+  evidence files are preserved unmodified as immutable history.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified;
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `0`
+  and the Phase 0 `approved_commit` is unchanged — this task did not and
+  could not self-approve Phase 1, and Phase 1.5 remains forbidden and
+  unattempted.
+- git_commit: e44b5885b8aa02105e13051af4045e23e17b084c (last commit of
+  this round); see `orchestration/checkpoints/phase_1_remediation_2.md`
+  section B for the complete per-finding commit list (`da74172`,
+  `bccd2a2`, `494a9ba`, `18cab36`, `4e6035d`, `93ab89a`, `6759cec`,
+  `0943368`, `e44b588`).

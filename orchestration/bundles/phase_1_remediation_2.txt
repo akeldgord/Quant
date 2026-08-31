@@ -1,0 +1,523 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE
+instruction_id: argus-phase-1-remediation-002
+STATUS: PARTIAL_REALCHAIN_FIXTURES_4_OF_9_CATEGORIES
+GIT_COMMIT: e44b5885b8aa02105e13051af4045e23e17b084c
+TEST_STATUS: unit 266/266 passed; integration 30/30 passed (real
+  PostgreSQL 16); golden 23/23 passed; replay 8/8 passed (was 6 before
+  this round's own review added concurrency/pagination coverage); full
+  suite 327/327 passed, 85% coverage; ruff clean; mypy clean; alembic
+  downgrade-to-base then upgrade-to-head clean through 0005.
+
+This bundle contains the full checkpoint (below) plus additional review
+evidence: all 27 mandatory acceptance criteria scored individually in
+the checkpoint's section E, and the real
+`argus providers probe`/`probe-history`/`usage`,
+`argus ingest run --test-mode`, and
+`argus fixtures validate-real-chain` output captured live during this
+task (checkpoint section C), plus the direct `curl` re-confirmation
+that general RPC egress remains blocked even though GitHub read access
+is now confirmed to work (also section C).
+
+================================================================
+FULL CHECKPOINT
+================================================================
+
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 1 remediation round 2 — remediate the 12 audit findings in
+  orchestrator instruction argus-phase-1-remediation-002, which rejected
+  round 1's self-assessment and Phase 1 itself as still not approved.
+STATUS: PARTIAL — all 12 findings remediated with real, tested code;
+  acceptance criterion 21 (authenticated real-chain golden fixtures) is
+  honestly PARTIAL: 4 of the 9 round-1-required categories now have
+  genuine real mainnet fixtures (sourced via this sandbox's working
+  GitHub read access), the remaining 8 (every DEX-swap-shaped category)
+  are honestly NOT TESTED — no reachable upstream repository embeds real
+  swap-transaction bytes, per the instruction's own explicit fallback for
+  this exact case. Phase 1 remains NOT orchestrator-approved.
+UTC_TIMESTAMP: 2026-08-31T10:05:00Z
+GIT_COMMIT: e44b5885b8aa02105e13051af4045e23e17b084c
+TARGET_COMMIT: 04f367b8e03e99718812f872a34e73e170c44f0d
+AUTHORIZED_PHASE: 1
+APPROVES_PHASE: NONE
+
+B. What was built
+
+Per orchestrator instruction argus-phase-1-remediation-002
+(AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_2_ONLY, APPROVES_PHASE: NONE),
+all 12 audit findings were remediated with real production code and
+tests. Commits below (each carries `ARGUS-INSTRUCTION-ID:
+argus-phase-1-remediation-002`):
+
+1. **Finding #2, #5, #6, #9, #10** (`da74172`) — session-per-operation
+   unit of work, atomic commitment derivation, durable parse ledger,
+   pagination continuity, ledger immutability. `ReconciliationEngine`
+   takes a `ReconciliationUnitOfWork` factory (`SqlReconciliationUnitOfWork`
+   opens/commits/closes its own `AsyncSession` per atomic operation) instead
+   of one shared session across every concurrent task. `commitment_observations`
+   gains a database-generated monotonic `sequence` column, per-event
+   `pg_advisory_xact_lock` serialization, full-same-level-state
+   conflict validation (not just the first row), a `CommitmentAppendOutcome`
+   (APPENDED/DUPLICATE_NOOP/REJECTED/FAILED) enum, and a durable
+   `commitment_observation_rejections` audit table. Migration 0004
+   revokes UPDATE on `chain_events`/`commitment_observations` from
+   `argus_ingest` (append-only enforced at the database role layer,
+   verified with the ingest role's own connection). A new durable
+   `parse_attempts` ledger records every parse attempt in the same
+   transaction as the watermark advance; a new `argus ingest reparse`
+   sweep retries pending/failed events without rewriting raw evidence.
+   `argus.db.errors.constraint_name()` fixes a real bug found this round
+   (asyncpg wraps `constraint_name` two levels deeper than the naive
+   `exc.orig` lookup) so only the exact expected constraint is ever
+   treated as an idempotent dedup collision. Pagination now validates
+   newest-first ordering and cross-page signature uniqueness (subsuming
+   both immediate-repeat and multi-step cursor cycles).
+
+2. **Finding #1, #3, #4** (`bccd2a2`) — explicit subscription
+   acknowledgement, structured task supervision, finalization sweep
+   wiring. `LiveChainStream.subscribe_wallet()` (an implicit async
+   generator whose connect/subscribe/ack happened lazily on first
+   iteration) is replaced by `open_subscription()`, a real `async def`
+   that only returns once connect + subscribe-request-sent + a valid
+   matching acknowledgement have all genuinely completed, returning a
+   `StreamSubscription`. `WalletWatermark` tracks three independent
+   recovery dimensions — `stream_health` (manager-owned via
+   `mark_stream_ready`/`mark_degraded`, never touched by `reconcile()`),
+   `reconciliation_ok` (new persisted column, owned exclusively by
+   `reconcile()` — migration 0005), and clock health (computed live,
+   never persisted) — with `wallet_live_state` always derived from all
+   three; no single dimension can restore OK alone. `IngestionManager.run()`
+   now races every supervised task against the stop condition; any
+   unexpected completion marks every tracked wallet DEGRADED, cancels
+   every sibling task, and raises `IngestionManagerFailure`, which the
+   CLI catches and exits 1 on. A new `_run_finalization_sweep` background
+   task actually calls `sweep_finalization()` on a configurable cadence
+   (it previously existed but no production loop ever called it).
+
+3. **Finding #7** (`494a9ba`) — typed canonical provider response
+   models. New `argus.providers.models` (`TokenSnapshot`, `OhlcvCandle`,
+   `OhlcvPage`, `ExecutableQuote`, `UnsignedOrderResult`, frozen
+   dataclasses, `Decimal`/integer financial fields). `MarketDataProvider`/
+   `ExecutionProvider` protocols and every adapter (DexScreener,
+   GeckoTerminal, Jupiter) now return these instead of provider-shaped
+   `dict[str, Any]`; probes assert `isinstance` against the canonical
+   types instead of `dict`.
+
+4. **Finding #8** (`18cab36`, extended `0943368`) — terminal usage
+   outcome recorded after decode/validation. `send_with_usage()` now
+   takes the adapter's own `process` step (raise_for_status + decode +
+   contract validation) and records exactly one terminal outcome decided
+   only once that step finishes: ok / http_error / rpc_error /
+   contract_error / decode_error / transport_error / timeout (split from
+   transport_error since `httpx.TimeoutException` is a materially
+   different signal); cancellation is a `BaseException` so nothing is
+   recorded for it. `HeliusRpcError` distinguishes a well-formed RPC
+   error (`rpc_error`) from a malformed envelope (`contract_error`). A
+   follow-up fix (`0943368`, found during this checkpoint's own
+   acceptance-criteria review) makes a usage-recorder failure emit a
+   `usage_recorder_failed` structlog warning instead of disappearing via
+   a bare `contextlib.suppress` — the instruction's own text requires
+   this ("must emit a safe operational-health signal rather than
+   disappear silently"), and the initial commit had stopped masking the
+   provider outcome but not yet added the signal.
+
+5. **Finding #11** (`4e6035d`) — a cancelled scheduler submission can
+   never execute. A done-callback registered on every accepted item's
+   future (before the first `await` after enqueueing, so always attached
+   before anything could cancel it) proactively removes it from the
+   queue and decrements its pending count the moment cancellation
+   happens. `_dispatch_next` itself also refuses to run `coro_factory`
+   for an already-cancelled item even in the narrow race where dispatch
+   reaches it first, retrying the next queued item on the same
+   already-acquired concurrency slot. The starvation-aging scan skips a
+   cancelled candidate outright so it can never win the aging tie-break
+   ahead of a genuinely still-waiting item.
+
+6. **Finding #12** (`93ab89a`) — real-chain golden fixtures via GitHub
+   evidence. New `argus.golden_fixtures` module + `argus fixtures
+   import-real-chain`/`validate-real-chain` CLI: an offline import/
+   validation tool (no network call of its own — this sandbox has
+   confirmed read-only GitHub access but confirmed-still-blocked general
+   RPC egress) that validates a captured `getTransaction` payload's
+   shape, unwraps a raw JSON-RPC envelope when present, canonicalizes it,
+   runs it through the real parser, and records full provenance. Searched
+   6 open-source Solana repositories (see
+   `tests/golden/fixtures/real/SEARCH_LOG.md`); `solana-labs/explorer`
+   (MIT) embeds genuine mainnet transaction payloads in its own test
+   fixtures, explicitly named/typed `mainnet-*` by the upstream project
+   itself. Imported 4 real fixtures: a real SOL transfer from both the
+   sender's (TRANSFER_OUT) and receiver's (TRANSFER_IN) perspective, a
+   real multi-recipient SOL transfer, and a real USDC SPL-token transfer.
+   The 8 remaining round-1-required categories (every DEX-swap-shaped
+   one) were not sourced — no repository checked embeds real
+   swap-transaction bytes; honestly left NOT TESTED per the instruction's
+   own explicit allowance.
+
+7. **Replay/real-SQL coverage gaps closed during final review**
+   (`6759cec`, `e44b588`) — acceptance criterion 20 requires
+   `tests/replay` to cover the round's new concurrency, commitment,
+   parser, and pagination paths; the existing suite covered commitment/
+   parser but not concurrency/pagination. Added
+   `test_concurrent_wallet_replay_uses_independent_sessions_no_cross_contamination`
+   and `test_pagination_replay_recovers_a_multi_page_gap_without_loss_or_duplication`.
+   Criterion 10 ("concurrent commitment writes serialize safely") was
+   only covered by the in-memory `asyncio.Lock` version of
+   `CommitmentObservationStore`, not the real `pg_advisory_xact_lock`
+   production mechanism; added
+   `test_concurrent_commitment_writes_serialize_via_real_advisory_lock`
+   in `tests/integration/test_reconciliation_sql.py` (real Postgres). This
+   test caught a genuine test-design bug on its first draft: racing at
+   COMMITMENT_CONFIRMED (a level `reconcile()` itself already writes)
+   meant one racer legitimately resolved DUPLICATE_NOOP rather than
+   APPENDED against the pre-existing observation; fixed by racing at
+   COMMITMENT_FINALIZED instead, a level only this test writes to.
+
+Three genuine bugs were found and fixed along the way, all caught by
+dedicated regression tests before reaching committed evidence: the
+asyncpg `constraint_name` wrapping-depth bug (finding #9), a replay test
+reusing one draft's `event_id` across two `record()` calls (not
+representative of the real engine), and the commitment-race test's own
+level-choice bug described above.
+
+C. Commands actually run
+
+All commands below were run against this exact commit
+(`e44b5885b8aa02105e13051af4045e23e17b084c`) after all 12 findings and
+the 3 review-driven follow-ups were complete:
+
+- `uv run pytest tests/unit -v` — 266 passed, 0 failed, 0 skipped.
+- `uv run pytest tests/integration -v` — 30 passed, 0 failed, 0 skipped
+  (real local PostgreSQL 16 — see PG17_COMPOSE_VALIDATION disposition,
+  unchanged, in section F).
+- `uv run pytest tests/golden -v` — 23 passed, 0 failed, 0 skipped.
+- `uv run pytest tests/replay -v` — 8 passed, 0 failed, 0 skipped (was 6
+  before this round's replay-coverage follow-up).
+- `uv run pytest --cov --cov-report=term-missing` — 327 passed, 85%
+  overall coverage (2715 statements, 371 missed). Lowest-covered new/
+  changed modules: `src/argus/cli.py` 33% (the `ingest run`/`fixtures
+  import-real-chain` branches are exercised functionally via the CLI
+  smoke tests below and `tests/integration/test_cli.py`, not via
+  `--cov`'s in-process instrumentation), `src/argus/providers/helius/client.py`
+  69% (validation-failure branches for methods never exercised against a
+  live credential in this sandbox), `src/argus/ingestion/test_mode.py` 0%
+  and `src/argus/providers/helius/websocket_connector.py` 0% (both
+  exercised only via the real CLI process / a live credential, never
+  faked as "tested" under `--cov`).
+- `uv run ruff check .` — All checks passed.
+- `uv run ruff format --check .` — 144 files already formatted.
+- `uv run mypy` — Success: no issues found in 75 source files.
+- `uv run alembic downgrade base` then `uv run alembic upgrade head` then
+  `uv run alembic current` — clean migration-from-zero cycle through
+  0001 -> 0002 -> 0003 -> 0004 -> 0005 and back; `current` reports `0005
+  (head)`.
+- `uv run argus providers probe` — Helius: `CREDENTIAL_REQUIRED` (exact
+  section-108 notice, no value printed); DexScreener/GeckoTerminal/
+  Jupiter: `UNREACHABLE` (`ProxyError: 403 Forbidden`); exit code 1; no
+  crash, no fabricated data.
+- `uv run argus providers probe-history` — GeckoTerminal: `UNREACHABLE`
+  (same network blocker); exit code 1; no crash.
+- `uv run argus providers usage --provider helius` — today/MTD/projected
+  credits = 0 (honest: no real provider call has ever succeeded in this
+  environment to generate usage rows).
+- `uv run argus ingest run --test-mode --duration-seconds 3 --wallet
+  TestWallet1111111111111111111111111111111` — "test-mode: ran cleanly
+  for 3.0s across 1 wallet(s) -- no crash, no network, no
+  signing/execution/broadcast path exists"; exit code 0.
+- `uv run argus fixtures validate-real-chain` — all 4 imported real-chain
+  fixtures report `ok`; exit code 0.
+- Direct `curl -X POST https://api.mainnet-beta.solana.com -d
+  '{"jsonrpc":"2.0","id":1,"method":"getVersion"}'` — `CONNECT tunnel
+  failed, response 403` (re-confirms general RPC egress is still
+  blocked, distinct from the newly-confirmed-working GitHub read access
+  finding #12 relies on).
+- `git grep`-based secret scan across all tracked files for common
+  secret patterns (AWS-style keys, PEM private-key headers, inline
+  password/api-key literals) — clean. `.env` confirmed untracked and
+  gitignored (`git ls-files` returns nothing for it).
+- `git grep` scan for signing/broadcast keywords
+  (`sign_transaction`/`send_transaction`/`sendRawTransaction`/
+  `private_key`/`Keypair(`/`broadcast`) across `src/argus/` — every match
+  is a docstring/comment stating the prohibition; no executable
+  signing/broadcast code exists.
+- `git diff --stat 04f367b..HEAD` (excluding `orchestration/`) — every
+  changed file is inside the existing Phase 1 module set (`src/argus/{cli.py,
+  db,domain,golden_fixtures.py,ingestion,providers}`, `migrations/`,
+  `tests/`); no config/provider-tier change; no new top-level
+  trade/execution/wallet-discovery module.
+
+D. Test results
+
+- unit: 266 passed
+- integration: 30 passed (real PostgreSQL 16)
+- golden: 23 passed
+- replay: 8 passed (was 6 pre-round; +2 for concurrency/pagination
+  replay coverage)
+- full suite with coverage: 327 passed, 0 failed, 85% overall coverage
+- ruff check: clean
+- ruff format --check: clean
+- mypy: clean, 75 source files
+- alembic downgrade-to-base / upgrade-to-head: clean cycle through 0005
+
+E. Acceptance criteria (27 mandatory acceptance tests, scored
+   individually, per this instruction's own evidence-accuracy
+   requirement — do not mark PASS while a required runtime path is
+   absent)
+
+1. PASS — no wallet becomes OK before a real subscription-ready
+   acknowledgement: `open_subscription()` (finding #1) only returns after
+   genuine connect+subscribe+ack;
+   `tests/unit/test_provider_adapters.py::test_helius_ws_stream_lazy_ack_lifecycle_gates_readiness`-
+   style lifecycle tests plus
+   `tests/unit/test_reconciliation.py::test_mark_stream_ready_alone_never_restores_ok`.
+2. PASS — periodic reconciliation cannot restore OK while disconnected:
+   `test_reconcile_alone_never_restores_ok_without_stream_ready`.
+3. PASS — recovery requires stream-ready + complete reconciliation +
+   healthy clock: `test_stream_ready_then_reconcile_both_required_and_sufficient`,
+   `test_mark_degraded_clears_stream_dimension_without_touching_reconciliation_ok`.
+4. PASS — multi-wallet real-SQL concurrency uses no shared AsyncSession
+   and has no cross-commit/cross-rollback:
+   `tests/integration/test_reconciliation_sql.py::test_concurrent_wallets_use_independent_sessions_no_cross_commit`
+   plus the new
+   `tests/replay/test_replay.py::test_concurrent_wallet_replay_uses_independent_sessions_no_cross_contamination`
+   (real Postgres, both).
+5. PASS — any child-task death terminates the manager fail-closed:
+   `tests/unit/test_ingestion_manager.py` periodic/clock/wallet-loop
+   death tests, `IngestionManagerFailure` propagation to the CLI.
+6. PASS — manager shutdown/cancellation closes resources and leaves safe
+   state: existing shutdown tests plus finding #3's structured
+   supervision tests (clean-shutdown-never-raises counterpart).
+7. PASS — running manager performs confirmed-to-finalized promotion
+   exactly once:
+   `tests/unit/test_ingestion_manager.py::test_finalization_sweep_runs_from_the_manager_real_code_path`
+   (the manager's own background loop, not a direct call) +
+   `tests/unit/test_reconciliation.py::test_sweep_finalization_promotes_confirmed_events`
+   (promoted count) + `tests/unit/test_commitment.py::test_duplicate_observation_same_value_is_idempotent_noop`
+   (the `CommitmentAppendOutcome` mechanism that makes re-observation
+   never double-count, which `sweep_finalization()`'s own docstring cites
+   by name).
+8. PASS — commitment ordering is stable across independent SQL sessions
+   and ties: migration 0004's database-generated monotonic `sequence`
+   column + SQL ordering by it (finding #5); `tests/unit/test_commitment.py`
+   tie-break tests.
+9. PASS — unknown->known->conflicting-known rejects and durably audits
+   conflict: `test_commitment_regression_and_conflict_are_rejected_and_audited`,
+   full-same-level-state validation tests in `tests/unit/test_commitment.py`.
+10. PASS — concurrent commitment writes serialize safely:
+    `tests/unit/test_commitment.py::test_concurrent_conflicting_writes_serialize_and_only_one_is_appended`
+    (in-memory logic proof) plus the new
+    `tests/integration/test_reconciliation_sql.py::test_concurrent_commitment_writes_serialize_via_real_advisory_lock`
+    (real Postgres `pg_advisory_xact_lock`, added during this
+    checkpoint's own review after the in-memory-only coverage was
+    identified as insufficient for this specific criterion).
+11. PASS — immutable ledger UPDATE/DELETE is denied at the database and
+    role layers: `tests/integration/test_immutability_grants.py` (4
+    tables x UPDATE/DELETE denial, using the ingest role's own
+    connection, not just an `information_schema` grants check).
+12. PASS — provider protocols return canonical typed ARGUS models:
+    `src/argus/providers/models.py` + protocol signature changes
+    (finding #7); `tests/unit/test_provider_adapters.py`/`test_probes.py`
+    assert on model attributes, no adapter/consumer indexes a
+    provider-shaped dict.
+13. PASS — contract/RPC/JSON failures produce non-OK terminal usage
+    records: `tests/unit/test_provider_adapters.py`'s finding #8 tests
+    (`test_usage_not_recorded_ok_before_decode_failure`,
+    `test_usage_records_rpc_error_not_ok_for_well_formed_rpc_error`,
+    `test_usage_records_contract_error_for_malformed_rpc_envelope`, one
+    per adapter family).
+14. PASS — usage recorder failure is visible but never masks provider
+    outcome: `test_recorder_failure_never_masks_the_real_provider_outcome`
+    (outcome never replaced) + the new
+    `test_recorder_failure_emits_a_visible_operational_health_signal`
+    (captures stdout, proves the `usage_recorder_failed` warning is
+    actually emitted — added during this checkpoint's review after the
+    initial finding #8 commit left this half of the criterion
+    unaddressed).
+15. PASS — parser failures persist and are replayable after restart: new
+    durable `parse_attempts` ledger (finding #9), `argus ingest reparse`
+    sweep, `tests/unit/test_reconciliation.py::test_reparse_under_same_parser_version_is_idempotent`,
+    `tests/replay/test_replay.py::test_reparse_under_new_parser_version_preserves_prior_result`.
+16. PASS — unrelated IntegrityError is never swallowed as a duplicate:
+    `argus.db.errors.constraint_name()` (fixes the real asyncpg
+    wrapping-depth bug found this round) + `tests/unit/test_db_errors.py`
+    (3 tests) + constraint-specific handling in
+    `event_repository.py`/`swap_repository.py`.
+17. PASS — pagination rejects overlap, cycles, ordering faults, and
+    missing boundary: `test_multi_step_cursor_cycle_fails_degraded`,
+    `test_non_progressing_cursor_fails_degraded_without_losing_prior_pages`
+    (duplicate-signature detection subsumes both), `test_out_of_order_slot_within_a_page_fails_degraded`,
+    `test_boundary_present_pagination_respects_until_across_pages`.
+18. PASS — safety-ceiling recovery is deterministic and operator-visible:
+    `test_safety_ceiling_exceeded_fails_degraded` (fails DEGRADED with an
+    explicit reason, watermark untouched so the next call safely
+    retries — documented in `reconciliation.py`'s own docstring as
+    indistinguishable-from-pruning from this surface alone, which is
+    itself the honest operator-visible signal).
+19. PASS — cancelled scheduler submissions never execute (finding #11):
+    `test_cancelled_submission_never_executes_coro_factory`,
+    `test_cancelled_item_proactively_removed_from_queue_before_dispatch`,
+    `test_cancelled_item_never_selected_by_starvation_aging`,
+    `test_dispatch_skips_cancelled_item_and_runs_next_on_same_capacity_slot`.
+20. PASS — replay tests cover the new concurrency, commitment, parser,
+    and pagination paths: `tests/replay/test_replay.py` (8 tests) —
+    concurrency and pagination coverage added during this checkpoint's
+    own review (`test_concurrent_wallet_replay_uses_independent_sessions_no_cross_contamination`,
+    `test_pagination_replay_recovers_a_multi_page_gap_without_loss_or_duplication`)
+    after the pre-existing 6 were found to cover only commitment/parser.
+21. **PARTIAL** — every required authenticated real-chain fixture and
+    provenance hash validates, or the item remains explicitly NOT
+    TESTED/PARTIAL: 4 of 9 round-1-required categories now have
+    genuine, provenance-complete real-chain fixtures (all validating via
+    `argus fixtures validate-real-chain` — see section C), sourced from
+    `solana-labs/explorer` (MIT, real mainnet `getTransaction` payloads,
+    upstream-labeled as such, not inferred from shape alone). The
+    remaining 8 (every DEX-swap-shaped category) are honestly NOT TESTED
+    — see `tests/golden/fixtures/real/SEARCH_LOG.md` for the full search
+    log across 6 repositories and why none embedded real swap-transaction
+    bytes. Not claimed as PASS.
+22. PASS (where a database is available) — migration from zero and
+    upgrade from Phase 0 head succeed: `alembic downgrade base` ->
+    `alembic upgrade head` cycle verified clean through 0001->0005 against
+    real local PostgreSQL 16 (PG17_COMPOSE_VALIDATION deferral unchanged,
+    section F).
+23. PASS — DB role grants remain least privilege:
+    `tests/integration/test_db_roles.py` + `test_immutability_grants.py`
+    (new, criterion 11); migration 0004's grant changes follow the same
+    least-privilege pattern as every existing Phase 1 table.
+24. PASS — no signing, signer, private-key, seed-phrase, live-arm, or
+    broadcast path exists: `git grep` scan (section C) confirms every
+    match on signing/broadcast keywords across `src/argus/` is a
+    docstring/comment stating the prohibition; no executable path exists.
+25. PASS — secret scan is clean: `git grep`-based scan across all tracked
+    files, clean; `.env` untracked and gitignored (section C).
+26. PASS — no paid-provider feature is enabled: `git diff --stat` against
+    the target commit confirms zero `config/` changes this round; all
+    provider calls remain free-tier-compatible.
+27. PASS — no Phase 1.5 or later-phase code is started: `git diff --stat`
+    (section C) confirms every changed file is inside the existing Phase
+    1 module set; no wallet-discovery/DB-backed source, no trade/copy-
+    execution code anywhere; the new `argus.golden_fixtures` module is
+    fixture-tooling (offline import/validation of test data), not
+    execution or discovery code.
+
+Summary: 26 of 27 mandatory acceptance criteria PASS. 1 of 27 (#21) is
+honestly PARTIAL — real progress (4 genuine real-chain fixtures, up from
+0) but not complete coverage of all 9 round-1-required categories, exactly
+as the instruction's own fallback anticipates for a category that
+genuinely cannot be sourced from GitHub evidence, and is not claimed as
+full PASS.
+
+F. Environmental deferrals (unchanged from Phase 1/round 1, per this
+   instruction's own "Live RPC/WebSocket checks and real PostgreSQL 17
+   Compose validation may remain explicit environmental deferrals"
+   allowance)
+
+- Live Helius RPC connectivity — NOT TESTED (no `HELIUS_API_KEY`
+  configured in this sandbox; the exact section-108 `LOCAL CREDENTIAL
+  REQUIRED` notice is produced, never a mocked live claim).
+- Live Helius WebSocket connectivity — NOT TESTED (same credential
+  blocker).
+- Real PostgreSQL 17 Compose validation
+  (`PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`) — unchanged;
+  this sandbox's egress policy blocks Docker Hub's image CDN. All
+  migration/application logic this round was verified against the same
+  substitute local PostgreSQL 16 server used throughout this project.
+- DexScreener/GeckoTerminal/Jupiter live reachability — UNREACHABLE
+  (confirmed via direct `curl` and `argus providers probe`; this
+  sandbox's general RPC/market-data egress remains blocked even though
+  GitHub read access is now confirmed to work — these are genuinely
+  different network paths, not the same blocker).
+
+None of these deferrals is claimed as PASS, and none authorizes live
+readiness by itself.
+
+G. Deviation from the audit instruction
+
+No deviation from the instruction's authorized scope: work was strictly
+limited to `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_2_ONLY` against
+the 12 named findings and the 27 named acceptance criteria. No phase was
+self-approved; `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not
+modified; no live trade, signing, credential disclosure, paid-provider
+upgrade, or threshold relaxation was performed or attempted. The one
+substantive deviation from a literal PASS is finding #12 / criterion 21,
+disclosed above as PARTIAL (4 of 9 categories) per the instruction's own
+explicit allowance for a category that cannot be fully sourced from
+GitHub evidence, not silently worked around or claimed complete.
+
+H. Known bugs found and fixed during this round
+
+- asyncpg `constraint_name` wrapping-depth bug: SQLAlchemy's asyncpg
+  dialect exposes `constraint_name` on `exc.orig.__cause__`, not
+  `exc.orig` itself as the naive lookup assumed — caught by a real-
+  Postgres integration test failure where a legitimate duplicate-key
+  collision was being re-raised as "unrecognized" instead of treated as
+  idempotent. Fixed via `argus.db.errors.constraint_name()`.
+- Replay test event_id reuse: an early version of a replay test reused
+  one draft's `event_id` across two `record()` calls, which is not
+  representative of the real engine (which always generates a fresh
+  `event_id`) and caused a `chain_events_pkey` violation instead of the
+  intended dedup-collision test. Fixed via `dataclasses.replace(draft,
+  event_id=uuid.uuid4())`.
+- Usage-recorder-failure signal gap: the initial finding #8 commit
+  stopped a recorder failure from masking the provider outcome but left
+  it disappearing completely silently, missing half of the instruction's
+  own explicit requirement ("must emit a safe operational-health signal
+  rather than disappear silently"). Caught during this checkpoint's own
+  acceptance-criteria review (criterion 14), fixed in `0943368`.
+- Concurrent-commitment-write test level-choice bug: an early version of
+  the new real-Postgres advisory-lock test raced at COMMITMENT_CONFIRMED,
+  a level `reconcile()` itself already writes to for every ingested
+  event — so one racer legitimately resolved DUPLICATE_NOOP against the
+  pre-existing observation instead of the intended APPENDED/REJECTED
+  race. Caught by the test's own first run failing with an assertion
+  mismatch (not silently passing on a weaker guarantee); fixed by racing
+  at COMMITMENT_FINALIZED instead, a level only the test itself writes
+  to.
+
+All four are covered by dedicated regression tests/evidence, listed in
+sections B/E above. No known bugs remain open from this round's own work.
+
+I. Security state
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` — unaffected by this round.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast
+  path exists anywhere in `src/argus/` (section C, criterion 24).
+- Credential handling for `HELIUS_API_KEY` is unchanged: missing
+  credential raises the exact section-108 `LOCAL CREDENTIAL REQUIRED`
+  notice, never a mocked fallback claiming live acceptance.
+- Secret scan clean (section C, criterion 25); `.env` confirmed untracked
+  and gitignored.
+- Immutable ledgers (chain_events, commitment_observations,
+  commitment_observation_rejections, parse_attempts) now mechanically
+  deny UPDATE/DELETE at the database role layer, not just by convention
+  (finding #6, criterion 11).
+- DB role grants remain least privilege (section C, criterion 23).
+- No paid-provider feature enabled (criterion 26).
+- No Phase 1.5 or later-phase code started (criterion 27); Phase 1.5
+  remains explicitly forbidden and unattempted.
+
+J. Next specified phase
+
+Per orchestrator instruction argus-phase-1-remediation-002, this
+instruction approves no phase and authorizes remediation only. Phase 1.5
+and all later phases remain forbidden.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified.
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` (0) and the
+Phase 0 `approved_commit` are left unchanged, exactly as the instruction
+requires — this session does not and cannot self-approve Phase 1. The one
+open item for orchestrator review is criterion 21 (real-chain golden
+fixtures): 4 of 9 required categories are now genuinely real-chain
+evidenced; the remaining 8 (every DEX-swap-shaped category) require
+either running the acquisition step in an environment with real RPC
+egress against a DEX/AMM program repository not yet checked (see
+`tests/golden/fixtures/real/SEARCH_LOG.md`'s "For a future network-enabled
+host" section), or an explicit orchestrator decision on whether the
+current partial real-chain coverage is acceptable for this specific
+criterion going forward.
+STOP. Await orchestrator review of this checkpoint before any further
+phase work.
+
+================ END ARGUS CHECKPOINT =========================
