@@ -389,25 +389,34 @@ def test_reimporting_the_same_category_overwrites_its_record(tmp_path: Path) -> 
     assert provenance["tool_self_test"] == second
 
 
-def test_real_fixtures_directory_currently_has_4_genuinely_imported_fixtures() -> None:
-    """Regression guard on the honest current state (round 2, finding
-    #12): this sandbox found `solana-labs/explorer` (MIT-licensed)
-    embedding genuine captured mainnet `getTransaction` payloads with
-    their own upstream `mainnet-*` naming/typing distinguishing them from
-    synthetic/devnet/local-validator fixtures -- see
+def test_real_fixtures_directory_currently_has_10_genuinely_imported_fixtures() -> None:
+    """Regression guard on the honest current state. Round 2 (finding
+    #12) found `solana-labs/explorer` (MIT-licensed) embedding genuine
+    captured mainnet `getTransaction` payloads with their own upstream
+    `mainnet-*` naming/typing distinguishing them from synthetic/devnet/
+    local-validator fixtures. Round 3 (argus-phase-1-remediation-003,
+    finding #1) found `0xjeffro/tx-parser` (MPL-2.0) embedding genuine
+    captured DEX-swap/DCA transactions, named after the exact program
+    instruction each one captures -- see
     `tests/golden/fixtures/real/SEARCH_LOG.md` for the full search log
-    and which required categories these do and do not satisfy. Every
-    other DeFi-swap category remains genuinely NOT TESTED. This test
-    intentionally targets the real, committed
-    tests/golden/fixtures/real/ directory (not a tmp_path) -- it is a
-    regression guard on the fixtures' continued internal consistency
-    (hash + parser output), not a claim that all required categories are
-    covered."""
+    and which required categories these do and do not satisfy. Two
+    categories (multiple token-account/LP-style action, and a genuinely
+    failed transaction) remain NOT TESTED. This test intentionally
+    targets the real, committed tests/golden/fixtures/real/ directory
+    (not a tmp_path) -- it is a regression guard on the fixtures'
+    continued internal consistency (hash + parser output), not a claim
+    that all required categories are covered."""
     results = validate_real_chain_fixtures()
     assert {r.category for r in results} == {
         "real_mainnet_sol_transfer_single",
         "real_mainnet_sol_transfer_received",
         "real_mainnet_sol_transfer_multi",
         "real_mainnet_usdc_transfer",
+        "real_mainnet_sol_to_token_swap",
+        "real_mainnet_token_to_sol_swap",
+        "real_mainnet_token_to_usdc_swap",
+        "real_mainnet_multi_hop_swap",
+        "real_mainnet_partial_sell",
+        "real_mainnet_ambiguous_multi_asset",
     }
     assert all(r.ok for r in results), results
