@@ -1,0 +1,465 @@
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 1 remediation round 4 — remediate the 8 audit findings in
+  orchestrator instruction argus-phase-1-remediation-004, which rejected
+  round 3's 17/18 self-scoring as overstating fixture coverage and
+  several runtime acceptance claims.
+STATUS: PARTIAL — all 8 findings remediated with real, tested code;
+  acceptance criterion 5 (real ambiguous/failed-transaction fixtures) is
+  honestly NOT TESTED/PARTIAL: no repository checked across any round
+  embeds either. Real-chain fixture coverage is corrected to the
+  genuine 6 of 9 round-1-required categories (down from round 3's
+  overstated 7 of 9 — the seventh was a confidently-resolved transaction
+  incorrectly counted toward the ambiguous category). Phase 1 remains
+  NOT orchestrator-approved.
+UTC_TIMESTAMP: 2026-08-31T14:15:52Z
+GIT_COMMIT: 9d51dcfbcf1c303da120d771cecda940ab51cf25
+TARGET_COMMIT: a589e15c29937b140ae96bdfc2d75de62a9109c2
+AUTHORIZED_PHASE: 1
+APPROVES_PHASE: NONE
+
+B. What was built
+
+Per orchestrator instruction argus-phase-1-remediation-004
+(AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_4_ONLY, APPROVES_PHASE: NONE),
+all 8 audit findings were remediated with real production code and
+tests. Commits below (each carries `ARGUS-INSTRUCTION-ID:
+argus-phase-1-remediation-004`):
+
+1. **Finding #8** (`da95bcb`) — a missing `RecentEventSource` made
+   `sweep_finalization()` return `ok=True, promoted=0`, indistinguishable
+   from a correctly-wired source finding nothing to promote. Now returns
+   `ok=False` with an explicit "misconfiguration: no RecentEventSource
+   wired" reason. New unit tests cover the manager logging this as a
+   distinct warning and recovering cleanly once a source is wired after
+   a restart.
+
+2. **Finding #7** (`66fab4a`) — `git_commit_sha()`'s
+   `GIT_COMMIT_UNAVAILABLE` sentinel was accepted by the production parse
+   path as a valid non-empty identity. New
+   `argus.config.resolve_production_git_commit()` fails closed by
+   default: rejects a dirty checkout, a missing/unreachable git checkout
+   with no override, and an invalid `ARGUS_BUILD_GIT_COMMIT` override,
+   raising `GitIdentityUnavailableError`; only an explicit
+   `allow_unverified=True` (used solely by `--test-mode`) permits the
+   sentinel. `capture_parse_identity()` and both CLI call sites
+   (`ingest run`, `ingest reparse`) wire this through, printing a clean
+   `error:` message and exiting non-zero rather than crashing or silently
+   degrading. 11 new unit tests cover clean/dirty/missing-git/valid-and-
+   invalid-override cases. Pre-round-3 sentinel rows in `parse_attempts`
+   are left untouched as immutable historical evidence.
+
+3. **Findings #5+#6** (`3e39a2b`, plus real-Postgres test coverage added
+   in `9d51dcf`) — reparse selection filtered only by `parser_version`,
+   so a rebuilt parser artifact under an unbumped version label was never
+   selected for reparse, and `swaps`' own dedup constraint was
+   `(event_id, parser_version)` alone, so a new build's derived row could
+   never append without an unbumped-version old row silently blocking it.
+   Migration 0007 adds `swaps.build_hash` (NOT NULL, non-empty CHECK,
+   backfilled with the explicit sentinel
+   `NOT_CAPTURED_PRE_R4_REMEDIATION`) and replaces the unique constraint
+   with `(event_id, parser_version, build_hash)`.
+   `events_pending_at_version()` is renamed to
+   `events_pending_for_artifact(parser_version, build_hash)`, filtering
+   by both. Separately, `argus ingest reparse --parser-version OLD`
+   queried under `OLD` but always executed the *current* parser and
+   recorded the *current* `PARSER_VERSION` — a false historical-replay
+   claim that could also loop forever re-selecting the same events.
+   `--parser-version` is removed entirely; the command is now honestly
+   current-artifact-only, selecting via
+   `events_pending_for_artifact(PARSER_VERSION, identity.build_hash)` and
+   recording that same identity. 6 new real-Postgres integration tests in
+   `tests/integration/test_reconciliation_sql.py` independently prove
+   every scenario the instruction names: same version+same build is
+   idempotent; same version+changed build is a deterministic new
+   attempt and an old SUCCESS under a different build never suppresses
+   it; a changed parser version selects a new attempt and appends a new
+   `swaps` row without touching the prior one; a FAILURE attempt remains
+   retryable; and concurrent reparse of the same artifact identity
+   creates exactly one genuine row, never two. A live
+   `argus ingest reparse` run (section C) demonstrates the same
+   convergence end-to-end through the actual CLI: one pending event is
+   attempted and succeeds on the first run, and the immediate second run
+   reports zero pending.
+
+4. **Finding #4** (`558dfdc`) — Helius contract validation was still
+   shallow in several places: `get_transaction()` accepted a non-object
+   `transaction` with no validation of nested `message`/`signatures`/
+   `meta.err`; `get_signatures_for_address()`/`get_signature_statuses()`
+   let a JSON `bool` pass an `isinstance(x, int)` slot/blockTime check
+   (bool is an `int` subclass in Python) and never validated `err`'s
+   type at all; `get_token_accounts()` returned untyped
+   `list[dict[str, Any]]` with zero per-entry validation. Added a
+   `TypeGuard`-based `_is_strict_int()` (excludes bool) and
+   `_is_valid_tx_err()` (null/string/object only) helper, applied
+   everywhere a slot/blockTime/err field is read; deepened
+   `get_transaction()`'s validation to require `transaction.message`/
+   `transaction.signatures` and a well-typed `meta.err`; added the
+   canonical `TokenAccountInfo` model (`providers/models.py`) with full
+   per-entry validation (pubkey/mint/owner/tokenAmount.amount/decimals,
+   rejecting a bool `decimals` or non-numeric `amount`) in
+   `get_token_accounts()`, changing `ChainProvider`'s protocol return
+   type. Separately, `HeliusWebSocketStream.open_subscription()` treated
+   the very next WebSocket message as the subscribe acknowledgement
+   unconditionally — an ack for an unrelated pending request, or any
+   other stray message, could be misread as the subscription becoming
+   ready, with no bound on how long connect/send/ack could hang. A new
+   `_read_matching_ack()` skips messages until one with the expected
+   request id arrives, validates `jsonrpc=="2.0"` and a non-bool integer
+   `result` (rejecting an `"error"` response), and bounds the whole skip
+   loop by one ack timeout; connect and send each get their own bounded
+   timeout, with `connector_cm.__aexit__` still guaranteed on any
+   failure once the connection is open. 30+ new adversarial tests cover
+   malformed nested objects/types, bool-as-int, null transaction,
+   mismatched JSON-RPC IDs, wrong jsonrpc version, error/unrelated acks,
+   and timeout/cancellation/cleanup.
+
+5. **Findings #1+#2+#3** (`f01f7ee`) — the largest remediation:
+   - *Finding #1*: round 3 counted `real_mainnet_ambiguous_multi_asset`
+     toward the "ambiguous multi-asset transaction" category while its
+     own documentation already disclosed the parser classifies it
+     `TRANSFER_IN` at confidence 1.000, not `UNKNOWN` — a category is
+     satisfied by the *parser* resolving as unresolved/ineligible, not
+     merely by the underlying transaction being structurally multi-asset.
+     Corrected coverage from the claimed 7 of 9 to the genuine 6 of 9;
+     the fixture is renamed to
+     `real_mainnet_dca_close_dual_asset_transfer_in` and kept only as an
+     additional data point, mapped to no required category.
+   - *Finding #2*: `import_real_chain_fixture()` computed
+     `original_sha256` from whatever bytes were handed to `--input` — but
+     every `0xjeffro/tx-parser` fixture's upstream file is a
+     single-element JSON array, and per round 3's own `SEARCH_LOG.md`,
+     the operator had been hand-unwrapping it
+     (`json.load(...)[0]`, re-serialized) *before* calling the command,
+     so the recorded hash was never the genuine upstream bytes. The
+     import pipeline now performs the array-unwrap itself, as one step
+     of a new ordered, hashed transform manifest (`unwrap_json_array` ->
+     `unwrap_json_rpc_envelope` -> `canonicalize_json_formatting`),
+     preserves the exact raw upstream bytes verbatim in a
+     content-addressed `sources/` directory keyed by git's own blob
+     SHA-1, and `validate_real_chain_fixtures()` now independently
+     rebuilds every fixture end to end from those preserved bytes,
+     failing on any divergence at any step. All 10 fixtures were
+     re-imported through this corrected pipeline using their true raw
+     upstream bytes (re-fetched from `raw.githubusercontent.com` at the
+     exact immutable commit SHAs already on record); every one
+     byte-for-byte reproduced the already-committed fixture file, so
+     zero transaction data changed — only provenance now proves it.
+   - *Finding #3*: the importer ran the parser under test and recorded
+     its own output as `expected_classification`/`expected_confidence` —
+     circular, so validation could never detect an existing
+     misclassification. `expected_classification`/`expected_confidence`
+     are now required caller-supplied arguments, checked against a
+     separately-recorded `observed_classification`/`observed_confidence`
+     (always computed by actually running the parser); a mismatch
+     refuses the import unless `allow_observed_mismatch=True` is passed
+     explicitly. All 10 re-imports asserted the same expectation round
+     2/3's own per-fixture reasoning already documented, and every one
+     matched the parser's observed output.
+   - 20+ new tests, including dedicated tamper tests for the preserved
+     source bytes, a missing source file, and a hand-edited transform
+     manifest, plus tests proving `expected`/`observed` are genuinely
+     independent fields.
+
+C. Commands actually run
+
+All commands below were run against this exact commit
+(`9d51dcfbcf1c303da120d771cecda940ab51cf25`) after all 8 findings were
+complete:
+
+- `uv run pytest tests/unit -v` — 346 passed, 0 failed, 0 skipped.
+- `uv run pytest tests/integration -v` — 41 passed, 0 failed, 0 skipped
+  (real local PostgreSQL 16 — see PG17_COMPOSE_VALIDATION disposition,
+  unchanged, in section F; includes the 6 new real-Postgres
+  artifact-identity tests for findings #5/#6).
+- `uv run pytest tests/golden -v` — 23 passed, 0 failed, 0 skipped.
+- `uv run pytest tests/replay -v` — 10 passed, 0 failed, 0 skipped
+  (unchanged from round 3).
+- `uv run pytest --cov --cov-report=term-missing` — 420 passed, 86%
+  overall coverage (2973 statements, 368 missed). Lowest-covered modules,
+  unchanged for structural reasons from round 3:
+  `src/argus/cli.py` 32%, `src/argus/ingestion/test_mode.py` 0%, and
+  `src/argus/providers/helius/websocket_connector.py` 0% (all exercised
+  only via the real CLI process/adapter tests against a fake connector,
+  never faked as "tested" in the coverage-instrumented sense).
+- `uv run ruff check .` — All checks passed.
+- `uv run ruff format --check .` — 150 files already formatted.
+- `uv run mypy` — Success: no issues found in 75 source files.
+- `uv run alembic downgrade base` then `uv run alembic upgrade head`
+  then `uv run alembic current` — clean migration-from-zero cycle
+  through 0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 -> 0007 and back;
+  `current` reports `0007 (head)`.
+  `tests/integration/test_migrations.py` (updated this round for the new
+  head) separately and repeatably re-proves the same
+  migration-from-zero/upgrade-from-0003/upgrade-from-0005/downgrade/
+  idempotency/restart-safety scenarios against a disposable scratch
+  database, 6/6 passed.
+- `uv run argus providers probe` — Helius: `CREDENTIAL_REQUIRED` (exact
+  section-108 notice, no value printed); DexScreener/GeckoTerminal/
+  Jupiter: `UNREACHABLE` (`ProxyError: 403 Forbidden`); no crash, no
+  fabricated data.
+- `uv run argus providers probe-history` — GeckoTerminal: `UNREACHABLE`
+  (same network blocker); no crash.
+- `uv run argus providers usage --provider helius` — today/MTD/projected
+  credits = 0 (honest: no real provider call has ever succeeded in this
+  environment to generate usage rows).
+- `uv run argus ingest run --test-mode --wallet
+  SomeTestWalletNotReal1111111111111111111111` — "test-mode: ran cleanly
+  for 5.0s across 1 wallet(s) -- no crash, no network, no
+  signing/execution/broadcast path exists"; exit code 0.
+- `uv run argus fixtures validate-real-chain` — all 10 imported
+  real-chain fixtures independently rebuild from their preserved raw
+  source bytes and report `ok`; exit code 0.
+- Repeated current-artifact `argus ingest reparse` demonstrating
+  convergence: with one genuine pending `chain_events` row inserted
+  directly, the first run reported "1 attempted, 1 succeeded/unknown, 0
+  still failing (of 1 pending, limit 500)"; the immediate second run
+  reported "0 attempted, 0 succeeded/unknown, 0 still failing (of 0
+  pending, limit 500)" — a bounded sweep makes forward progress and
+  converges to empty under one output identity. The demo row was
+  removed afterward via the admin connection; it is not part of the
+  committed test suite (the same property is independently and
+  repeatably proven by the new real-Postgres tests in section B item 3).
+- `git grep`-based secret scan (AWS-style keys, PEM private-key headers,
+  inline password/api-key literals) across all tracked files — clean, no
+  matches. `.env` confirmed untracked and gitignored.
+- `git grep` scan for signing/broadcast keywords
+  (`sign_transaction`/`send_transaction`/`sendRawTransaction`/
+  `private_key`/`Keypair(`/`broadcast`) across `src/argus/` — every match
+  is a docstring/comment stating the prohibition; no executable
+  signing/broadcast code exists.
+- `git diff --stat a589e15c..HEAD` (excluding `orchestration/`) — every
+  changed file is inside the existing Phase 1 module set
+  (`src/argus/{cli.py,config.py,domain,ingestion,parsing,providers,
+  golden_fixtures.py}`, `migrations/`, `tests/`); no `config/` change; no
+  new top-level trade/execution/wallet-discovery module.
+
+D. Test results
+
+- unit: 346 passed
+- integration: 41 passed (real PostgreSQL 16), including 6/6 new
+  parser-artifact-identity tests (findings #5/#6)
+- golden: 23 passed
+- replay: 10 passed
+- full suite with coverage: 420 passed, 0 failed, 86% overall coverage
+- ruff check: clean
+- ruff format --check: clean
+- mypy: clean, 75 source files
+- alembic downgrade-to-base / upgrade-to-head: clean cycle through 0007
+
+E. Acceptance criteria (20 mandatory acceptance tests from
+   argus-phase-1-remediation-004, scored individually)
+
+1. PASS — fixture coverage is reported as exactly supported, with no
+   confident classification counted as an ambiguous fixture:
+   `real_mainnet_ambiguous_multi_asset` is renamed to
+   `real_mainnet_dca_close_dual_asset_transfer_in`, excluded from the
+   ambiguous category, and every current-state-facing claim
+   (`docs/BUILD_STATE.md`, `tests/golden/fixtures/real/SEARCH_LOG.md`,
+   `PROVENANCE.md`, `test_golden_fixtures.py`) now says 6 of 9. Round
+   3's own checkpoint and phase-history row are left unmodified as
+   immutable history of what was claimed at the time (matching this
+   project's existing convention for superseded rows).
+2. PASS — every imported fixture preserves exact upstream bytes,
+   upstream Git blob, source hash, deterministic transforms, final hash,
+   and license evidence: all 10 fixtures re-imported through the
+   corrected pipeline; `provenance.json`/`PROVENANCE.md` now carry
+   `upstream_git_blob_sha1`, a 3-step `transform_manifest` (each step
+   hashed), and the raw bytes are preserved verbatim in
+   `tests/golden/fixtures/real/sources/<blob-sha1>.source.json`.
+   License/attribution (`upstream_repo`/`upstream_commit`/`upstream_path`/
+   `upstream_license`) unchanged and still recorded per fixture.
+3. PASS — all committed fixtures rebuild offline from their preserved
+   source evidence: `argus fixtures validate-real-chain` (section C)
+   independently replays the transform pipeline from the preserved
+   `sources/` bytes for all 10 fixtures and reports `ok`; 4 new tamper
+   tests (`test_validate_detects_tampered_preserved_source_bytes`,
+   `test_validate_detects_missing_preserved_source`,
+   `test_validate_detects_tampered_transform_manifest_in_provenance`,
+   `test_validate_detects_a_tampered_fixture_file`) prove the rebuild
+   genuinely fails on divergence at each layer, not just re-comparing a
+   stored hash to itself.
+4. PASS — independently reviewed expected outcomes, not parser
+   self-output, drive golden PASS/FAIL:
+   `expected_classification`/`expected_confidence` are now required
+   `import_real_chain_fixture()` arguments, checked against (never
+   defining) a separately-recorded `observed_classification`/
+   `observed_confidence`;
+   `test_import_rejects_when_observed_does_not_match_asserted_expected`
+   and `test_import_records_observed_separately_from_caller_supplied_expected`
+   prove the two are genuinely independent mechanisms.
+5. **PARTIAL/NOT TESTED** — no genuine ambiguous or failed-transaction
+   real-chain fixture was found this round (no new repository search
+   beyond re-confirming existing fixtures' true upstream bytes; see
+   `SEARCH_LOG.md`'s "Round 4 correction" section), so neither of
+   finding #3's `UNKNOWN`+ineligible assertions apply yet. Honestly
+   disclosed, not fabricated.
+6. PASS — every Helius HTTP method rejects all malformed fields used
+   downstream and records exactly one correct terminal usage outcome:
+   30+ new tests in `tests/unit/test_provider_adapters.py` cover
+   non-object `transaction`, missing `message`/`signatures`, invalid
+   `meta.err`/`err`/`slot` types (including bool-as-int), and malformed
+   token-account entries, each asserting exactly one `contract_error`
+   usage row.
+7. PASS — token-account metadata crossing the adapter boundary is
+   canonical and typed: new `TokenAccountInfo`
+   (`src/argus/providers/models.py`), `ChainProvider.get_token_accounts()`
+   protocol return type updated; full per-entry validation in the
+   adapter (`test_helius_get_token_accounts_happy_path_records_ok` and 3
+   new malformed-entry tests).
+8. PASS — WebSocket readiness requires exact matching JSON-RPC
+   acknowledgement and bounded lifecycle timeouts:
+   `_read_matching_ack()` skips non-matching ids, validates jsonrpc
+   version and a non-bool integer result; `connect_timeout_seconds`/
+   `send_timeout_seconds`/`ack_timeout_seconds` all bound their step;
+   10 new tests cover mismatched IDs, wrong jsonrpc version, bool-as-int
+   result, connect/send/ack timeout, and cancellation-triggers-cleanup.
+9. PASS — reparse selection and derived-row versioning are
+   parser-artifact-aware: `events_pending_for_artifact(parser_version,
+   build_hash)`; migration 0007's `(event_id, parser_version,
+   build_hash)` unique constraint on `swaps`; both proven against real
+   Postgres in section B item 3's 6 new tests.
+10. PASS — repeated reparse under one identity terminates with no
+    pending work: `test_events_pending_for_artifact_is_idempotent_under_same_version_and_build`
+    (real Postgres) plus the live CLI demonstration in section C (1
+    pending -> attempted+succeeded -> 0 pending on immediate re-run).
+11. PASS — historical-version CLI behavior is truthful and
+    deterministic: `--parser-version` removed from `argus ingest
+    reparse` entirely; the command is honestly current-artifact-only,
+    documented as such in its own docstring and `--help` text.
+12. PASS — production git identity is exact and fails closed when
+    unavailable/dirty: `resolve_production_git_commit()`; 11 new tests
+    cover clean/dirty/missing-git/valid-and-invalid-override; both
+    `ingest run` and `ingest reparse` catch `GitIdentityUnavailableError`
+    and exit cleanly rather than silently degrading to the sentinel.
+13. PASS — missing finalization-source wiring is a typed visible
+    failure: `sweep_finalization()` returns `ok=False` with an explicit
+    misconfiguration reason; manager/restart tests added.
+14. PASS — pagination direct-boundary proof and all round-3 regression
+    tests remain passing: the full round-3 pagination/Helius/streaming/
+    parse-identity/finalization test suites are unchanged and green
+    (section D).
+15. PASS — the disconnect/reconnect A/B scenario still canonicalizes
+    each exactly once:
+    `test_end_to_end_disconnect_reconnect_canonicalizes_a_and_b_exactly_once`,
+    unchanged and still passing.
+16. PASS — real PostgreSQL session isolation, commitment serialization,
+    migrations, and append-only grants remain passing: unchanged tests
+    in `tests/integration/test_reconciliation_sql.py`,
+    `tests/integration/test_immutability_grants.py`, and
+    `tests/integration/test_migrations.py`, all still passing
+    (section D).
+17. PASS — no signing, signer, private-key, seed-phrase, live-arm, or
+    broadcast path exists: `git grep` scan (section C) confirms every
+    match on signing/broadcast keywords across `src/argus/` is a
+    docstring/comment stating the prohibition.
+18. PASS — secret scan is clean: `git grep`-based scan across all
+    tracked files, clean (section C); `.env` untracked and gitignored.
+19. PASS — no paid-provider feature is enabled: `git diff --stat`
+    against TARGET_COMMIT confirms zero `config/` changes this round.
+20. PASS — no Phase 1.5 or later-phase code is started: `git diff --stat`
+    (section C) confirms every changed file is inside the existing
+    Phase 1 module set; no wallet-discovery/DB-backed source, no
+    trade/copy-execution code anywhere.
+
+Summary: 19 of 20 mandatory acceptance criteria PASS. 1 of 20 (#5) is
+honestly PARTIAL/NOT TESTED — no genuine ambiguous or failed-transaction
+real-chain fixture has been sourced in any round yet, exactly as the
+instruction's own explicit allowance anticipates, and is not claimed as
+full PASS.
+
+F. Environmental deferrals (unchanged from Phase 1/round 1/round 2/round
+   3, per this instruction's own "Live RPC/WebSocket checks and PG17
+   checks may remain explicit environmental deferrals" allowance)
+
+- Live Helius RPC connectivity — NOT TESTED (no `HELIUS_API_KEY`
+  configured in this sandbox; the exact section-108 `LOCAL CREDENTIAL
+  REQUIRED` notice is produced, never a mocked live claim).
+- Live Helius WebSocket connectivity — NOT TESTED (same credential
+  blocker).
+- Real PostgreSQL 17 Compose validation
+  (`PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`) — unchanged;
+  this sandbox's egress policy blocks Docker Hub's image CDN. All
+  migration/application logic this round was verified against the same
+  substitute local PostgreSQL 16 server used throughout this project,
+  explicitly never described as PostgreSQL 17 validation.
+- DexScreener/GeckoTerminal/Jupiter live reachability — UNREACHABLE
+  (confirmed via `argus providers probe`; general RPC/market-data egress
+  remains blocked, distinct from the GitHub raw-content read access
+  finding #2 relies on, which is separately confirmed working).
+
+None of these deferrals is claimed as PASS, and none authorizes live
+readiness by itself.
+
+G. Deviation from the audit instruction
+
+No deviation from the instruction's authorized scope: work was strictly
+limited to `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_4_ONLY` against
+the 8 named findings and the 20 named acceptance criteria. No phase was
+self-approved; `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not
+modified; no live trade, signing, credential disclosure, paid-provider
+upgrade, or threshold relaxation was performed or attempted. The one
+substantive deviation from a literal PASS is finding #1/criterion 5
+(genuine ambiguous/failed-transaction fixtures), disclosed above as
+NOT TESTED per the instruction's own explicit allowance for a category
+that cannot be sourced from available GitHub evidence, not silently
+worked around or claimed complete.
+
+H. Known bugs found and fixed during this round
+
+One gap was found and fixed during this round's own final-validation
+pass, before this checkpoint was written: findings #5/#6's initial
+commit (`3e39a2b`) implemented parser-artifact-aware selection/
+versioning with only in-memory (fake-repository) test coverage, not the
+real-PostgreSQL/restart tests the instruction explicitly required for
+six named scenarios. This was caught while re-reading the instruction
+text verbatim during this checkpoint's own acceptance-criteria scoring,
+and fixed in a follow-up commit (`9d51dcf`) adding all six scenarios as
+real-Postgres integration tests before this checkpoint was finalized —
+it did not reach committed evidence as an unaddressed gap.
+
+I. Security state
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` — unaffected by this round.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast
+  path exists anywhere in `src/argus/` (section C, criterion 17).
+- Credential handling for `HELIUS_API_KEY` is unchanged: missing
+  credential raises the exact section-108 `LOCAL CREDENTIAL REQUIRED`
+  notice, never a mocked fallback claiming live acceptance.
+- Secret scan clean (section C, criterion 18); `.env` confirmed
+  untracked and gitignored.
+- Production git identity now fails closed (finding #7): a dirty or
+  unverifiable checkout can no longer silently produce audit evidence
+  claiming a specific commit that isn't actually verified.
+- `swaps.build_hash` is database-enforced non-empty (CHECK constraint,
+  migration 0007) — an application-code bug that forgets to capture a
+  real build identity fails loudly, never silently records an empty
+  value.
+- No paid-provider feature enabled (criterion 19).
+- No Phase 1.5 or later-phase code started (criterion 20); Phase 1.5
+  remains explicitly forbidden and unattempted.
+
+J. Next specified phase
+
+Per orchestrator instruction argus-phase-1-remediation-004, this
+instruction approves no phase and authorizes remediation only. Phase 1.5
+and all later phases remain forbidden.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified.
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` (0) and the
+Phase 0 `approved_commit` are left unchanged, exactly as the instruction
+requires — this session does not and cannot self-approve Phase 1. The
+one open item for orchestrator review is criterion 5 (genuine ambiguous/
+failed-transaction real-chain fixtures): neither has been sourced in any
+round to date; closing this out requires either an environment with real
+RPC egress to capture one directly, or a not-yet-checked repository that
+happens to embed either — see
+`tests/golden/fixtures/real/SEARCH_LOG.md` for the full search history
+across all four rounds.
+STOP. Await orchestrator review of this checkpoint before any further
+phase work.
+
+================ END ARGUS CHECKPOINT =========================

@@ -885,3 +885,110 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   this round); see `orchestration/checkpoints/phase_1_remediation_3.md`
   section B for the complete per-finding commit list (`63742c3`,
   `6a1b081`, `4510522`, `1ba5403`, `e0753cc`, `81dd46c`).
+
+### 2026-08-31 — Phase 1 remediation round 4 (argus-phase-1-remediation-004)
+- requirement_id: MASTER_SPEC.md section 21 (golden fixture discipline),
+  section 108 (evidence accuracy / no fabricated claims), section 109
+  (this log)
+- decision: An independent orchestrator audit
+  (`argus-phase-1-remediation-004`) rejected round 3's 17/18 self-scoring,
+  citing 8 findings. All 8 were remediated: (1) corrected real-chain
+  fixture coverage from the claimed 7 of 9 to the genuine 6 of 9 --
+  `real_mainnet_ambiguous_multi_asset` (which the parser actually
+  classifies `TRANSFER_IN` at confidence 1.000, not `UNKNOWN`) is renamed
+  to `real_mainnet_dca_close_dual_asset_transfer_in` and excluded from
+  the ambiguous category; (2) rebuilt real-chain fixture provenance to
+  preserve exact upstream bytes -- a content-addressed `sources/`
+  directory keyed by git's own blob SHA-1, an ordered hashed transform
+  manifest (`unwrap_json_array` -> `unwrap_json_rpc_envelope` ->
+  `canonicalize_json_formatting`), and independent offline rebuild-and-
+  verify for all 10 fixtures, replacing a design where the recorded hash
+  was of an already-hand-unwrapped copy, never the true upstream bytes;
+  (3) decoupled golden `expected_classification`/`expected_confidence`
+  (now required, independently-asserted `import_real_chain_fixture()`
+  arguments) from the parser's own `observed_classification`/
+  `observed_confidence`, closing the circularity where the importer ran
+  the parser under test and recorded its own output as "expected"; (4)
+  deepened Helius contract validation (a `TypeGuard`-based bool-as-int
+  exclusion applied to every slot/blockTime/decimals field, a canonical
+  `TokenAccountInfo` model, non-object-transaction/missing-nested-field
+  rejection) and fixed `HeliusWebSocketStream.open_subscription()` to
+  require an exact-matching JSON-RPC acknowledgement (id, version, a
+  non-bool integer result) with bounded connect/send/ack timeouts,
+  instead of treating the very next WebSocket message as the ack
+  unconditionally; (5) made reparse selection and `swaps` derived-row
+  versioning parser-artifact-aware (`parser_version` + `build_hash`
+  together, migration 0007's 3-column unique constraint), proven against
+  real Postgres for all six scenarios the instruction named; (6) removed
+  the false `argus ingest reparse --parser-version OLD` flag (which
+  queried under `OLD` but always executed the current parser) in favor
+  of an honest current-artifact-only design; (7) made production git
+  identity fail closed on a dirty or unverifiable checkout
+  (`resolve_production_git_commit()`, `GitIdentityUnavailableError`)
+  instead of silently accepting the `GIT_COMMIT_UNAVAILABLE` sentinel as
+  valid; (8) made a missing finalization source an explicit `ok=False`
+  misconfiguration instead of a false clean `ok=True, promoted=0` sweep.
+  Acceptance criterion 5 (real ambiguous-transaction / failed-transaction
+  fixtures) remains honestly NOT TESTED/PARTIAL: no repository checked
+  across any of the four rounds embeds either, per the instruction's own
+  explicit fallback for this exact case.
+- reason: An independent audit is a stronger integrity check than
+  self-assessment. Round 4's own findings targeted exactly the kind of
+  gap self-assessment tends to miss twice over: a fixture whose own
+  round-3 documentation already disclosed the disqualifying fact (a
+  confident, non-`UNKNOWN` classification) was still counted toward a
+  category requiring the opposite outcome; and a provenance/validation
+  design that was internally consistent (recorded hash matches recorded
+  bytes) but never actually verified against anything outside itself
+  (the true upstream bytes, an independent semantic review) -- the same
+  shape of circularity MASTER_SPEC.md section 108's evidence-accuracy
+  requirement exists to prevent. Fixing the *mechanism* (byte-exact
+  offline-verifiable provenance; expected outcomes asserted independently
+  of the code under test) matters more than any single fixture's
+  correctness, since it is what makes a future misclassification
+  detectable at all.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-004` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: a589e15c29937b140ae96bdfc2d75de62a9109c2`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_4_ONLY`,
+  `AUTHORIZED_PHASE: 1`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: New `migrations/versions/0007_swaps_build_hash_versioning.py`;
+  new `src/argus/golden_fixtures.py` schema (`TransformStep`, extended
+  `RealChainFixtureRecord`) and re-imported
+  `tests/golden/fixtures/real/` (renamed `real_mainnet_
+  dca_close_dual_asset_transfer_in.json`, new `sources/` directory with
+  9 preserved raw upstream files, rewritten `provenance.json`/
+  `PROVENANCE.md`, extended `SEARCH_LOG.md`); substantially rewritten
+  `src/argus/config.py` (`resolve_production_git_commit`,
+  `GitIdentityUnavailableError`), `src/argus/providers/helius/client.py`,
+  `src/argus/providers/models.py` (`TokenAccountInfo`),
+  `src/argus/providers/__init__.py`, `src/argus/domain/swaps.py`,
+  `src/argus/ingestion/{swap_repository,parse_attempt_repository,
+  parse_ledger,reconciliation,test_mode}.py`, `src/argus/cli.py`;
+  substantially expanded `tests/unit/{test_config,test_parse_ledger,
+  test_provider_adapters,test_golden_fixtures,test_reconciliation,
+  test_ingestion_manager}.py`,
+  `tests/integration/{test_migrations,test_reconciliation_sql,
+  test_phase1_schema,test_cli}.py`, `tests/replay/test_replay.py`. 49 net
+  new tests (371 -> 420). Full suite: 420 passed, 86% coverage, ruff
+  clean, mypy clean, alembic downgrade-to-base/upgrade-to-head clean
+  through migration 0007. `orchestration/checkpoints/phase_1_remediation_4.md`
+  and `orchestration/bundles/phase_1_remediation_4.txt` record the full
+  20-item PASS/PARTIAL disposition. All prior Phase 0/Phase 1/round-1/
+  round-2/round-3 evidence files (including round 3's checkpoint and its
+  own `docs/BUILD_STATE.md` phase-history row) are preserved unmodified
+  as immutable history, despite round 3's fixture-coverage claim being
+  corrected going forward.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified;
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `0`
+  and the Phase 0 `approved_commit` is unchanged — this task did not and
+  could not self-approve Phase 1, and Phase 1.5 remains forbidden and
+  unattempted.
+- git_commit: 9d51dcfbcf1c303da120d771cecda940ab51cf25 (last commit of
+  this round); see `orchestration/checkpoints/phase_1_remediation_4.md`
+  section B for the complete per-finding commit list (`da95bcb`,
+  `66fab4a`, `3e39a2b`, `558dfdc`, `f01f7ee`, `9d51dcf`).
