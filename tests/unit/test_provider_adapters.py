@@ -57,18 +57,18 @@ def test_require_env_credential_generic() -> None:
 
 
 async def test_helius_get_transaction_via_mock_transport() -> None:
+    transaction_result = {"meta": {"fee": 5000}, "transaction": {"message": {}, "signatures": []}}
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["api-key"] == "fake-key"
         body = json.loads(request.content)
         assert body["method"] == "getTransaction"
-        return httpx.Response(
-            200, json={"jsonrpc": "2.0", "id": 1, "result": {"meta": {"fee": 5000}}}
-        )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": transaction_result})
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = HeliusRpcClient("fake-key", http_client=http_client)
     result = await client.get_transaction("some-signature")
-    assert result == {"meta": {"fee": 5000}}
+    assert result == transaction_result
     await http_client.aclose()
 
 
@@ -160,10 +160,11 @@ async def test_helius_ws_stream_yields_notifications() -> None:
             "jsonrpc": "2.0",
             "method": "logsNotification",
             "params": {
+                "subscription": 12345,
                 "result": {
                     "context": {"slot": 42},
                     "value": {"signature": "ws-sig-1", "err": None, "logs": []},
-                }
+                },
             },
         }
     )

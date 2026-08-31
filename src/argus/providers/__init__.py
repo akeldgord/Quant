@@ -36,6 +36,19 @@ class StreamNotification:
     slot: int
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class SignatureStatusInfo:
+    """One entry from a provider's "signature statuses" batch query --
+    the real code path for detecting FINALIZED commitment (Phase 1
+    remediation round 1, finding #3: a schema-only ``finalized_at`` column
+    with no writer is not real tracking)."""
+
+    signature: str
+    confirmation_status: str | None  # "processed" | "confirmed" | "finalized" | None (unknown)
+    err: Any | None
+    slot: int | None
+
+
 class ChainProvider(Protocol):
     """RPC-style chain data access (MASTER_SPEC.md section 10)."""
 
@@ -45,10 +58,33 @@ class ChainProvider(Protocol):
         ...
 
     async def get_signatures_for_address(
-        self, wallet_address: str, *, until_signature: str | None = None, limit: int = 1000
+        self,
+        wallet_address: str,
+        *,
+        until_signature: str | None = None,
+        before_signature: str | None = None,
+        limit: int = 1000,
     ) -> list[SignatureInfo]:
-        """Signatures affecting ``wallet_address``, newest first, stopping
-        at (exclusive of) ``until_signature`` when given."""
+        """Signatures affecting ``wallet_address``, newest first.
+
+        ``until_signature`` is the fixed lower boundary for an entire
+        paginated fetch (exclusive) -- results never go older than it.
+        ``before_signature`` is the per-page cursor (exclusive): the
+        caller passes the oldest signature from the previous page to
+        continue paging backward from there. A caller reconstructing a
+        gap larger than ``limit`` must call this repeatedly, holding
+        ``until_signature`` fixed and advancing ``before_signature`` each
+        time, until a page returns fewer than ``limit`` entries (or none)
+        -- mirroring real Solana ``getSignaturesForAddress`` pagination
+        semantics exactly, not hiding them behind a single truncated
+        list (Phase 1 remediation round 1, finding #2)."""
+        ...
+
+    async def get_signature_statuses(self, signatures: list[str]) -> list[SignatureStatusInfo]:
+        """Batch commitment-status lookup (maps to Solana's
+        ``getSignatureStatuses``) -- the real code path a finalization
+        sweep uses to detect a CONFIRMED event's later promotion to
+        FINALIZED."""
         ...
 
     async def get_balance(self, wallet_address: str) -> int:

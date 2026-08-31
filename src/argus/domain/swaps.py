@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,9 +30,19 @@ from argus.db.base import Base
 
 class Swap(Base):
     """One deterministically-classified swap/transfer derived from a
-    ``chain_events`` row."""
+    ``chain_events`` row.
+
+    ``(event_id, parser_version)`` is unique: re-running the *same* parser
+    version against the same event is idempotent (no duplicate row), while
+    a *new* parser version may add an additional row without disturbing or
+    overwriting a prior point-in-time result -- safe re-parsing under a new
+    parser version per MASTER_SPEC.md section 21.
+    """
 
     __tablename__ = "swaps"
+    __table_args__ = (
+        UniqueConstraint("event_id", "parser_version", name="uq_swaps_event_id_parser_version"),
+    )
 
     swap_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

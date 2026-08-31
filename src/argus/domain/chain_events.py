@@ -2,16 +2,27 @@
 
 Schema per MASTER_SPEC.md section 18 (CANONICAL EVENT LEDGER) and CORE-002
 (section 5: raw observations are immutable/append-only) and CORE-003
-(section 5: point-in-time truth — ``block_time``, ``first_seen_at``,
-``confirmed_at``, and ``finalized_at`` are always kept distinct; a WebSocket
-receipt alone is never proof of complete/confirmed observation).
+(section 5: point-in-time truth — ``block_time`` and ``first_seen_at`` are
+kept distinct from commitment progression; a WebSocket receipt alone is
+never proof of complete/confirmed observation).
+
+Commitment progression (processed/confirmed/finalized, and transaction
+execution success/failure) is deliberately NOT a column on this table --
+see ``argus.domain.commitment.CommitmentObservation`` and
+``argus.ingestion.commitment``. An earlier design tried
+``confirmed_at``/``finalized_at`` columns here, but because this table
+dedups on ``(transaction_signature, wallet_address, event_type)``, a
+truth-path promotion attempt for an already-fast-path-recorded event
+always collided with that unique constraint and was silently dropped
+(Phase 1 remediation round 1, finding #3; see
+``migrations/versions/0003_commitment_observations_and_swap_dedup.py``).
 
 Rows are never updated or deleted by application code (append-only). Derived
-data (e.g. ``swaps``) may be recomputed from raw evidence without rewriting
-this table. ``payload_hash`` lets any consumer verify ``raw_payload`` was not
-altered after ingestion, and the raw payload itself remains available for
-replay/re-parsing under a new ``parser_version`` without a second network
-fetch.
+data (e.g. ``swaps``, ``commitment_observations``) may be recomputed/appended
+from raw evidence without rewriting this table. ``payload_hash`` lets any
+consumer verify ``raw_payload`` was not altered after ingestion, and the raw
+payload itself remains available for replay/re-parsing under a new
+``parser_version`` without a second network fetch.
 """
 
 from __future__ import annotations
@@ -54,13 +65,12 @@ class ChainEvent(Base):
     slot: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     block_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Point-in-time truth (CORE-003): kept strictly distinct, never collapsed
-    # into a single "observed_at" field.
+    # Point-in-time truth (CORE-003): first observation only. Commitment
+    # progression lives in commitment_observations, not here (see module
+    # docstring).
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     provider: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     provider_received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

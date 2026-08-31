@@ -24,7 +24,7 @@ from typing import Any, Protocol
 import httpx
 
 from argus.clock import Clock
-from argus.providers import SignatureInfo, StreamNotification
+from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification
 from argus.providers.credentials import require_env_credential
 from argus.providers.retry import RetryPolicy, request_with_retry
 from argus.providers.usage import RequestUsageRecord, UsageRecorder
@@ -112,31 +112,111 @@ class HeliusRpcClient:
             "getTransaction",
             [signature, {"maxSupportedTransactionVersion": 0, "encoding": "json"}],
         )
+        if not isinstance(result, dict) or "meta" not in result or "transaction" not in result:
+            raise HeliusRpcError(
+                f"getTransaction: malformed response for {signature!r}, missing 'meta'/"
+                f"'transaction': {result!r}"
+            )
+        if not isinstance(result["meta"], dict):
+            raise HeliusRpcError(f"getTransaction: 'meta' is not an object: {result['meta']!r}")
         return result
 
     async def get_signatures_for_address(
-        self, wallet_address: str, *, until_signature: str | None = None, limit: int = 1000
+        self,
+        wallet_address: str,
+        *,
+        until_signature: str | None = None,
+        before_signature: str | None = None,
+        limit: int = 1000,
     ) -> list[SignatureInfo]:
         options: dict[str, Any] = {"limit": limit}
         if until_signature is not None:
             options["until"] = until_signature
+        if before_signature is not None:
+            options["before"] = before_signature
         result = await self._rpc("getSignaturesForAddress", [wallet_address, options])
-        return [
-            SignatureInfo(
-                signature=entry["signature"],
-                slot=entry["slot"],
-                block_time=(
-                    datetime.fromtimestamp(entry["blockTime"], tz=UTC)
-                    if entry.get("blockTime") is not None
-                    else None
-                ),
-                err=entry.get("err"),
+        if not isinstance(result, list):
+            raise HeliusRpcError(f"getSignaturesForAddress: expected a list, got {result!r}")
+        entries = []
+        for entry in result:
+            if not isinstance(entry, dict) or "signature" not in entry or "slot" not in entry:
+                raise HeliusRpcError(
+                    f"getSignaturesForAddress: malformed entry, missing 'signature'/'slot': {entry!r}"
+                )
+            if not isinstance(entry["signature"], str) or not isinstance(entry["slot"], int):
+                raise HeliusRpcError(
+                    f"getSignaturesForAddress: 'signature'/'slot' have wrong type: {entry!r}"
+                )
+            block_time_raw = entry.get("blockTime")
+            if block_time_raw is not None and not isinstance(block_time_raw, int):
+                raise HeliusRpcError(f"getSignaturesForAddress: non-integer blockTime: {entry!r}")
+            entries.append(
+                SignatureInfo(
+                    signature=entry["signature"],
+                    slot=entry["slot"],
+                    block_time=(
+                        datetime.fromtimestamp(block_time_raw, tz=UTC)
+                        if block_time_raw is not None
+                        else None
+                    ),
+                    err=entry.get("err"),
+                )
             )
-            for entry in result
-        ]
+        return entries
+
+    async def get_signature_statuses(self, signatures: list[str]) -> list[SignatureStatusInfo]:
+        result = await self._rpc(
+            "getSignatureStatuses", [signatures, {"searchTransactionHistory": True}]
+        )
+        if not isinstance(result, dict) or "value" not in result:
+            raise HeliusRpcError(
+                f"getSignatureStatuses: malformed response, missing 'value': {result!r}"
+            )
+        values = result["value"]
+        if not isinstance(values, list) or len(values) != len(signatures):
+            raise HeliusRpcError(
+                f"getSignatureStatuses: expected {len(signatures)} status entries, got {values!r}"
+            )
+        statuses = []
+        for signature, entry in zip(signatures, values, strict=True):
+            if entry is None:
+                statuses.append(
+                    SignatureStatusInfo(
+                        signature=signature, confirmation_status=None, err=None, slot=None
+                    )
+                )
+                continue
+            if not isinstance(entry, dict):
+                raise HeliusRpcError(f"getSignatureStatuses: malformed status entry: {entry!r}")
+            confirmation_status = entry.get("confirmationStatus")
+            if confirmation_status is not None and confirmation_status not in (
+                "processed",
+                "confirmed",
+                "finalized",
+            ):
+                raise HeliusRpcError(
+                    f"getSignatureStatuses: unknown confirmationStatus {confirmation_status!r}"
+                )
+            statuses.append(
+                SignatureStatusInfo(
+                    signature=signature,
+                    confirmation_status=confirmation_status,
+                    err=entry.get("err"),
+                    slot=entry.get("slot"),
+                )
+            )
+        return statuses
 
     async def get_balance(self, wallet_address: str) -> int:
         result = await self._rpc("getBalance", [wallet_address])
+        if (
+            not isinstance(result, dict)
+            or "value" not in result
+            or not isinstance(result["value"], int)
+        ):
+            raise HeliusRpcError(
+                f"getBalance: malformed response, expected {{'value': int}}: {result!r}"
+            )
         value: int = result["value"]
         return value
 
@@ -145,11 +225,21 @@ class HeliusRpcClient:
             "getTokenAccountsByOwner",
             [wallet_address, {"programId": TOKEN_PROGRAM_ID}, {"encoding": "jsonParsed"}],
         )
+        if (
+            not isinstance(result, dict)
+            or "value" not in result
+            or not isinstance(result["value"], list)
+        ):
+            raise HeliusRpcError(
+                f"getTokenAccountsByOwner: malformed response, expected {{'value': list}}: {result!r}"
+            )
         value: list[dict[str, Any]] = result["value"]
         return value
 
     async def get_slot(self) -> int:
-        result: int = await self._rpc("getSlot", [])
+        result = await self._rpc("getSlot", [])
+        if not isinstance(result, int):
+            raise HeliusRpcError(f"getSlot: expected an integer, got {result!r}")
         return result
 
 
@@ -200,20 +290,44 @@ class HeliusWebSocketStream:
             await connection.send(json.dumps(subscribe_request))
             ack_raw = await connection.recv()
             ack = json.loads(ack_raw)
-            if "result" not in ack:
+            if "result" not in ack or not isinstance(ack["result"], int):
                 raise HeliusRpcError(f"logsSubscribe failed for {wallet_address!r}: {ack}")
+            subscription_id = ack["result"]
 
             while True:
                 raw = await connection.recv()
                 message = json.loads(raw)
+                if message.get("method") != "logsNotification":
+                    # A message that isn't this subscription's notification
+                    # (e.g. an unrelated ack) is not "no new activity" --
+                    # it must not be silently swallowed as if it were.
+                    if "params" not in message and "id" in message:
+                        continue  # a benign response to a different request id
+                    raise HeliusRpcError(f"unexpected WebSocket message shape: {message!r}")
                 params = message.get("params")
-                if not params:
-                    continue
-                result = params["result"]
-                signature = result["value"]["signature"]
-                slot = result["context"]["slot"]
+                if not isinstance(params, dict) or params.get("subscription") != subscription_id:
+                    raise HeliusRpcError(
+                        f"logsNotification for the wrong subscription id: {message!r}"
+                    )
+                result = params.get("result")
+                if not isinstance(result, dict):
+                    raise HeliusRpcError(f"logsNotification missing 'result': {message!r}")
+                context = result.get("context")
+                value = result.get("value")
+                if not isinstance(context, dict) or not isinstance(context.get("slot"), int):
+                    raise HeliusRpcError(f"logsNotification missing context.slot: {message!r}")
+                if (
+                    not isinstance(value, dict)
+                    or not isinstance(value.get("signature"), str)
+                    or "err" not in value
+                ):
+                    raise HeliusRpcError(
+                        f"logsNotification missing value.signature/value.err: {message!r}"
+                    )
                 yield StreamNotification(
-                    wallet_address=wallet_address, signature=signature, slot=slot
+                    wallet_address=wallet_address,
+                    signature=value["signature"],
+                    slot=context["slot"],
                 )
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None:

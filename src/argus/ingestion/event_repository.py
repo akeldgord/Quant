@@ -11,11 +11,14 @@ observing the same transaction at nearly the same time.
 
 from __future__ import annotations
 
+import uuid
+
+from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.domain.chain_events import ChainEvent
-from argus.ingestion.reconciliation import ChainEventDraft
+from argus.ingestion.reconciliation import ChainEventDraft, RecordOutcome
 
 
 class SqlEventRecorder:
@@ -24,15 +27,13 @@ class SqlEventRecorder:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def record(self, draft: ChainEventDraft) -> bool:
+    async def record(self, draft: ChainEventDraft) -> RecordOutcome:
         row = ChainEvent(
             event_id=draft.event_id,
             chain=draft.chain,
             slot=draft.slot,
             block_time=draft.block_time,
             first_seen_at=draft.first_seen_at,
-            confirmed_at=draft.confirmed_at,
-            finalized_at=draft.finalized_at,
             provider=draft.provider,
             provider_received_at=draft.provider_received_at,
             transaction_signature=draft.transaction_signature,
@@ -55,5 +56,34 @@ class SqlEventRecorder:
                 self._session.add(row)
                 await self._session.flush()
         except IntegrityError:
-            return False
-        return True
+            # draft.event_id was never actually stored under this natural
+            # key -- look up the real, already-persisted row so callers
+            # link any further evidence (commitment observations, parsed
+            # output) to the event that genuinely exists, not to a
+            # fabricated id that would violate a foreign key.
+            existing = (
+                await self._session.execute(
+                    select(ChainEvent.event_id).where(
+                        ChainEvent.transaction_signature == draft.transaction_signature,
+                        ChainEvent.wallet_address == draft.wallet_address,
+                        ChainEvent.event_type == draft.event_type,
+                    )
+                )
+            ).scalar_one()
+            return RecordOutcome(event_id=existing, is_new=False)
+        return RecordOutcome(event_id=draft.event_id, is_new=True)
+
+    async def recent_signatures(
+        self, wallet_address: str, *, limit: int
+    ) -> list[tuple[uuid.UUID, str]]:
+        """Implements :class:`argus.ingestion.reconciliation.RecentEventSource`
+        -- the most recently first-seen events for this wallet, newest
+        first, for a finalization sweep to re-check via
+        ``getSignatureStatuses``."""
+        result = await self._session.execute(
+            select(ChainEvent.event_id, ChainEvent.transaction_signature)
+            .where(ChainEvent.wallet_address == wallet_address)
+            .order_by(desc(ChainEvent.first_seen_at))
+            .limit(limit)
+        )
+        return [(row.event_id, row.transaction_signature) for row in result.all()]

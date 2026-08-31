@@ -18,6 +18,7 @@ from argus.db.connection import connection_for_admin  # noqa: E402
 from argus.domain import (
     chain_events,  # noqa: E402,F401  (registers ORM metadata)
     clock_health,  # noqa: E402,F401  (registers ORM metadata)
+    commitment,  # noqa: E402,F401  (registers ORM metadata)
     provider_usage,  # noqa: E402,F401  (registers ORM metadata)
     swaps,  # noqa: E402,F401  (registers ORM metadata)
     wallet_stream_state,  # noqa: E402,F401  (registers ORM metadata)
