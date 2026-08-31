@@ -12,6 +12,7 @@ point-in-time result.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 from datetime import UTC, datetime
@@ -417,6 +418,163 @@ async def test_commitment_progression_replay_is_deterministic_across_repeated_qu
         assert all(s == derived_states[0] for s in derived_states)
         assert derived_states[0].commitment_level == COMMITMENT_FINALIZED
         assert derived_states[0].transaction_succeeded is True
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await engine.dispose()
+
+
+async def test_concurrent_wallet_replay_uses_independent_sessions_no_cross_contamination(
+    admin_engine,
+) -> None:
+    """Phase 1 remediation round 2, finding #2: replaying two wallets'
+    reconciliation concurrently, repeatedly, must never let one wallet's
+    unit-of-work touch another's data -- no cross-wallet attribution, no
+    duplicate rows from repeated concurrent replay. Each `reconcile()`
+    call opens its own session per item via `SqlReconciliationUnitOfWork`
+    (finding #2); this proves that holds under genuine `asyncio.gather`
+    concurrency, replayed 3 times over, not just a single-shot run."""
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    wallet_a = f"{WALLET}-a-{uuid.uuid4().hex[:8]}"
+    wallet_b = f"{WALLET}-b-{uuid.uuid4().hex[:8]}"
+
+    provider_a = _FakeChainProvider()
+    provider_a.add_transaction(
+        "replay-concurrent-a",
+        slot=1,
+        raw_payload=_valid_raw_payload(
+            signature="replay-concurrent-a", amount_in=100, wallet=wallet_a
+        ),
+    )
+    provider_b = _FakeChainProvider()
+    provider_b.add_transaction(
+        "replay-concurrent-b",
+        slot=1,
+        raw_payload=_valid_raw_payload(
+            signature="replay-concurrent-b", amount_in=200, wallet=wallet_b
+        ),
+    )
+
+    try:
+        for _ in range(3):  # "replaying" the identical concurrent scenario 3 times
+            engine_a = ReconciliationEngine(
+                chain_provider=provider_a,
+                unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+                clock=Clock(),
+                provider_name="replay-test",
+                parser_version=PARSER_VERSION,
+            )
+            engine_b = ReconciliationEngine(
+                chain_provider=provider_b,
+                unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+                clock=Clock(),
+                provider_name="replay-test",
+                parser_version=PARSER_VERSION,
+            )
+            results = await asyncio.gather(
+                engine_a.reconcile(wallet_a, ReconciliationTrigger.SCHEDULED),
+                engine_b.reconcile(wallet_b, ReconciliationTrigger.SCHEDULED),
+            )
+            assert results[0].ok is True
+            assert results[1].ok is True
+
+        async with sessionmaker() as session:
+            rows_a = (
+                (
+                    await session.execute(
+                        select(ChainEvent).where(ChainEvent.wallet_address == wallet_a)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            rows_b = (
+                (
+                    await session.execute(
+                        select(ChainEvent).where(ChainEvent.wallet_address == wallet_b)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Exactly one row each, despite 3 rounds of concurrent replay --
+            # no duplication, and each wallet only ever sees its own event.
+            assert [r.transaction_signature for r in rows_a] == ["replay-concurrent-a"]
+            assert [r.transaction_signature for r in rows_b] == ["replay-concurrent-b"]
+    finally:
+        await _cleanup(admin_engine, wallet_a)
+        await _cleanup(admin_engine, wallet_b)
+        await engine.dispose()
+
+
+async def test_pagination_replay_recovers_a_multi_page_gap_without_loss_or_duplication(
+    admin_engine,
+) -> None:
+    """Phase 1 remediation round 2, finding #10: a gap spanning several
+    pages, replayed via multiple independent reconcile() calls (a fresh
+    engine instance each time, exactly like a real process restart),
+    must be recovered exactly once per event -- no loss across the page
+    boundary, no duplication on repeated replay of the same history."""
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    wallet = f"{WALLET}-page-{uuid.uuid4().hex[:8]}"
+
+    provider = _FakeChainProvider()
+    signatures = [f"replay-page-sig-{i}" for i in range(5)]
+    for i, sig in enumerate(signatures):
+        provider.add_transaction(
+            sig, slot=i + 1, raw_payload=_valid_raw_payload(signature=sig, amount_in=10 * (i + 1))
+        )
+
+    try:
+        # page_size=2 forces the 5-signature history across 3 pages.
+        first_engine = ReconciliationEngine(
+            chain_provider=provider,
+            unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+            clock=Clock(),
+            provider_name="replay-test",
+            parser_version=PARSER_VERSION,
+            page_size=2,
+        )
+        first_result = await first_engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
+        assert first_result.ok is True
+        assert first_result.new_events == 5
+
+        # "Replay" the exact same history from scratch via 2 more fresh
+        # engine instances (independent in-process state, same real
+        # database) -- every page must be re-walked consistently and
+        # every event recognized as already-seen, never re-inserted.
+        for _ in range(2):
+            replay_engine = ReconciliationEngine(
+                chain_provider=provider,
+                unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+                clock=Clock(),
+                provider_name="replay-test",
+                parser_version=PARSER_VERSION,
+                page_size=2,
+            )
+            replay_result = await replay_engine.reconcile(
+                wallet, ReconciliationTrigger.PROCESS_RESTART
+            )
+            assert replay_result.ok is True
+            assert replay_result.new_events == 0  # nothing new -- the boundary already covers all 5
+
+        async with sessionmaker() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(ChainEvent).where(ChainEvent.wallet_address == wallet)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert sorted(r.transaction_signature for r in rows) == sorted(signatures)
+            assert len(rows) == 5  # no duplication across 3 total reconcile() calls
     finally:
         await _cleanup(admin_engine, wallet)
         await engine.dispose()
