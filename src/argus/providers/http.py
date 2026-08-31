@@ -46,22 +46,26 @@ the other:
   row.
 
 Whichever outcome is decided, if the usage recorder itself then raises
-(e.g. a DB error), that failure is swallowed -- never propagated in place
-of, or on top of, the actual provider outcome above.
+(e.g. a DB error), that failure is never propagated in place of, or on
+top of, the actual provider outcome above -- but it is not silently
+dropped either: it is logged as a ``usage_recorder_failed`` warning, a
+visible operational-health signal a human/monitor can act on.
 """
 
 from __future__ import annotations
 
-import contextlib
 import time
 from collections.abc import Awaitable, Callable
 
 import httpx
 
 from argus.clock import Clock
+from argus.logging import get_logger
 from argus.providers.contract import ProviderResponseError
 from argus.providers.retry import RetryPolicy, request_with_retry
 from argus.providers.usage import RequestUsageRecord, UsageRecorder
+
+_logger = get_logger(component="argus.providers.http")
 
 
 async def _record_best_effort(
@@ -70,9 +74,23 @@ async def _record_best_effort(
     if usage_recorder is None:
         return
     # Usage accounting must never mask the real provider outcome -- a
-    # recorder failure (e.g. a DB error) is swallowed here, not raised.
-    with contextlib.suppress(Exception):
+    # recorder failure (e.g. a DB error) is never raised to the caller.
+    # It must not disappear silently either (Phase 1 remediation round 2,
+    # finding #8): logging it here is a visible operational-health
+    # signal a human/monitor can act on, entirely separate from the
+    # provider outcome `send_with_usage` returns/raises to its caller.
+    try:
         await usage_recorder.record_request(record)
+    except Exception as exc:  # noqa: BLE001 - deliberately never re-raised
+        _logger.warning(
+            "usage_recorder_failed",
+            provider=record.provider,
+            endpoint=record.endpoint,
+            request_class=record.request_class,
+            provider_outcome_status=record.status,
+            error_class=type(exc).__name__,
+            error=str(exc),
+        )
 
 
 async def send_with_usage[T](

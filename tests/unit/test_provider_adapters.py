@@ -572,6 +572,35 @@ async def test_recorder_failure_never_masks_the_real_provider_outcome() -> None:
     await http_client2.aclose()
 
 
+async def test_recorder_failure_emits_a_visible_operational_health_signal(capsys) -> None:  # noqa: ANN001
+    """Finding #8: a usage-recorder failure must not disappear silently --
+    it must emit a visible signal a human/monitor can act on, distinct
+    from (and never instead of) the real provider outcome."""
+
+    class _FailingUsageRecorder:
+        async def record_request(self, record):  # noqa: ANN001
+            raise RuntimeError("usage DB is down")
+
+        async def record_streaming(self, record):  # noqa: ANN001
+            raise NotImplementedError
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": 7})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(ok_handler))
+    client = HeliusRpcClient(
+        "fake-key", http_client=http_client, usage_recorder=_FailingUsageRecorder()
+    )
+    result = await client.get_slot()
+    assert result == 7  # the real success is still returned
+    await http_client.aclose()
+
+    captured = capsys.readouterr()
+    assert "usage_recorder_failed" in captured.out
+    assert "usage DB is down" in captured.out
+    assert "helius" in captured.out
+
+
 # --- Finding #8: usage records exactly one outcome, decided only after ---
 # --- decode/validation, never a premature "ok" -----------------------------
 
