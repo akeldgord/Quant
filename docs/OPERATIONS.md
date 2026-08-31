@@ -68,7 +68,8 @@ rm runtime/ORCHESTRATION_PAUSED      # resume
 ### State, locking, and logs
 
 - `runtime/orchestrator_watcher_state.json` — current watcher state
-  (`IDLE` / `CLAIMED` / `RUNNING` / `COMPLETED` / `FAILED`), which
+  (`IDLE` / `CLAIMED` / `RUNNING` / `COMPLETED` / `FAILED` / `QUARANTINED`
+  — see "Terminal trust-breach quarantine" below for the last one), which
   instruction ID was last processed, and which one (if any) is in flight.
   Gitignored; written atomically (with `fsync` on the file and its parent
   directory) so a crash never leaves a half-written state file. Reading is
@@ -95,19 +96,65 @@ rm runtime/ORCHESTRATION_PAUSED      # resume
   immediately with a message on stderr. The lock releases automatically if
   the process crashes (kernel-managed, no stale-lock cleanup needed).
 - `runtime/logs/orchestrator_watcher.log` — append-only event log
-  (`WATCHER_STARTED`, `NEW_INSTRUCTION`, `DIRTY_WORKTREE`,
+  (`WATCHER_STARTED`, `NEW_INSTRUCTION`, `DIRTY_WORKTREE`, `GIT_STATUS_FAILED`,
   `GIT_PULL_FAILED`, `TARGET_COMMIT_MISMATCH`, `PHASE_AUTHORIZATION_INVALID`,
   `STATE_INVALID`, `STATE_MISSING_FAIL_CLOSED`, `STATE_REBUILT_FROM_HANDOFF`,
   `INSTRUCTIONS_INVALID`, `CLAUDE_STARTED`, `CLAUDE_EXITED`,
-  `HANDOFF_VERIFIED`, `RUN_COMPLETED`, `RUN_FAILED`, `TICK_EXCEPTION`,
-  `WATCHER_PAUSED`, `WATCHER_STOPPED`, ...).
+  `HANDOFF_VERIFIED`, `RUN_COMPLETED`, `RUN_FAILED`,
+  `INSTRUCTION_FILE_TRUST_BREACH`, `WATCHER_QUARANTINED`,
+  `WATCHER_QUARANTINE_RESET`, `TICK_EXCEPTION`, `WATCHER_PAUSED`,
+  `WATCHER_STOPPED`, ...).
   Never contains API keys, tokens, credentials, or raw environment/command
-  dumps — only short structured event lines, with any subprocess
-  stdout/stderr diagnostic bounded to a few hundred characters.
+  dumps. Only short, whitelisted, structured event lines are ever written —
+  **Claude's own subprocess stdout/stderr is never logged, full stop** (not
+  even truncated: truncation bounds length but does not redact a credential
+  that happens to appear in the first few hundred characters). A launch
+  failure logs only exit code, timeout duration, or the raised exception's
+  *class name* — never its message text, and never captured process output.
+  Every log detail is additionally sanitized (control characters and
+  newlines stripped) so nothing, including a malicious Claude subprocess,
+  can forge a fake log line.
 - A single bad tick (an unexpected exception anywhere in `tick()`) is caught
   at the `run_forever` loop level and logged as `TICK_EXCEPTION` rather than
   crashing the whole watcher process; `--once` runs let such an exception
-  propagate normally, since an operator is watching interactively.
+  propagate normally, since an operator is watching interactively. (An
+  exception specifically from the Claude launch wrapper is different: `tick()`
+  itself catches that and persists `FAILED` before returning, in both
+  `--once` and `run_forever`, so it never has to rely on this outer
+  `run_forever`-only safety net.)
+
+### Terminal trust-breach quarantine
+
+If the watcher ever detects that `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
+was modified during a run — by the implementation agent, committed or not —
+it does not mark that run an ordinary retryable `FAILED`. It persists a
+`QUARANTINED` state (logging `INSTRUCTION_FILE_TRUST_BREACH` then
+`WATCHER_QUARANTINED`) and, from then on, **every subsequent tick refuses to
+even read `ORCHESTRATOR_INSTRUCTIONS.md`, let alone launch anything** —
+regardless of what `INSTRUCTION_ID` or `TARGET_COMMIT` later appears there.
+This is deliberate: a self-authored instruction must never be able to
+recover automation merely by looking legitimate on a later tick.
+
+Recovery is manual and deliberate:
+
+1. Stop the watcher if it's running in the background.
+2. Inspect what actually happened: `git log`, the run's commits, and
+   `runtime/logs/orchestrator_watcher.log`'s `INSTRUCTION_FILE_TRUST_BREACH`
+   entry (which names the reason). Confirm
+   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` on the remote branch is in
+   the state a human orchestrator actually intends.
+3. Run:
+
+   ```bash
+   uv run python scripts/argus_orchestrator_watch.py --reset-quarantine
+   ```
+
+   This refuses to do anything (exit code 1, no state change) unless the
+   current state is actually `QUARANTINED`. On success it resets local
+   state to fresh `IDLE` and logs `WATCHER_QUARANTINE_RESET` — it does not
+   touch `ORCHESTRATOR_INSTRUCTIONS.md`, `AGENT_HANDOFF.md`, or any
+   repository content.
+4. Restart the watcher normally.
 
 ### Running in the background
 

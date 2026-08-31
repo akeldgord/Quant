@@ -12,10 +12,18 @@ the code, no Docker daemon dependency, no new external service. Just ordinary
 launch of the Claude CLI.
 
 This module is deliberately conservative and fail-closed throughout: any
-state, instruction, handoff, or evidence condition this module cannot
-positively confirm as safe is treated as unsafe. See
-``orchestration/PROTOCOL.md`` sections 4-8 for the contract this file
-mechanically enforces.
+state, instruction, handoff, evidence, or Git-command condition this module
+cannot positively confirm as safe is treated as unsafe -- a failed or
+ambiguous Git command is never treated as "clean" / "empty" / "no merges" /
+"no drift". See ``orchestration/PROTOCOL.md`` sections 4-8 for the contract
+this file mechanically enforces.
+
+This protocol is file-trust-based, not cryptographically signed: an unsigned
+Git commit does not authenticate the orchestrator. What this module *can*
+mechanically guarantee is that the implementation agent never modifies
+``orchestration/ORCHESTRATOR_INSTRUCTIONS.md`` itself without the run being
+permanently quarantined (see QUARANTINED below) -- not that every ACTIVE
+instruction's *content* was genuinely authored by a human orchestrator.
 
 Usage::
 
@@ -23,7 +31,8 @@ Usage::
 
 or ``make orchestrator-watch``. See docs/OPERATIONS.md for background-start
 options (nohup / a user-level systemd example) -- neither is installed or
-enabled automatically.
+enabled automatically -- and for the manual ``--reset-quarantine`` recovery
+procedure.
 """
 
 from __future__ import annotations
@@ -62,7 +71,11 @@ LOG_RELPATH = Path("runtime/logs/orchestrator_watcher.log")
 # TARGET_COMMIT protection). Anything else is unreviewed implementation drift.
 ALLOWED_POST_TARGET_PATHS = {"orchestration/ORCHESTRATOR_INSTRUCTIONS.md"}
 
-VALID_STATUSES = {"IDLE", "CLAIMED", "RUNNING", "COMPLETED", "FAILED"}
+# QUARANTINED is a terminal, non-retryable state: a detected
+# implementation-agent modification of ORCHESTRATOR_INSTRUCTIONS.md. It is
+# never entered or cleared automatically by any tick -- only a human running
+# `--reset-quarantine` after manual review can clear it.
+VALID_STATUSES = {"IDLE", "CLAIMED", "RUNNING", "COMPLETED", "FAILED", "QUARANTINED"}
 
 # Canonical ordered ARGUS phase sequence (MASTER_SPEC.md), including the
 # mandatory sub-phase gates. Represented as exact string tokens, compared by
@@ -109,16 +122,21 @@ orchestration/ORCHESTRATOR_INSTRUCTIONS.md, whose INSTRUCTION_ID is exactly:
 Follow all phase gates in MASTER_SPEC.md.
 
 Do NOT modify orchestration/ORCHESTRATOR_INSTRUCTIONS.md for any reason, at
-any point during this run -- not even to "fix" it. That file is
-orchestrator-owned. Any change to its bytes during this run, even if later
-committed and pushed, causes the entire run to be rejected as FAILED,
-regardless of anything else this run produces.
+any point during this run -- not even to "fix" it, not even in a final
+commit that only touches that file. That file is orchestrator-owned. Any
+change to its bytes during this run, committed or not, is treated as a
+terminal trust breach: the watcher quarantines itself and will not launch
+ANY future instruction, of any ID, until a human manually reviews and
+resets it. This is categorically different from an ordinary retryable
+failure.
 
-Every commit you create during this run MUST include this exact
-commit-message trailer (its own line, exact text, no extra wording):
+Every commit you create during this run MUST include, as a real trailing
+Git trailer (a `key: value` line in the final paragraph of the commit
+message, not merely mentioned somewhere in the body text), exactly one of:
 ARGUS-INSTRUCTION-ID: {instruction_id}
-A commit without this exact trailer, or a merge commit, anywhere in this
-run's commit range will cause the run to be rejected as FAILED.
+A commit missing this exact trailer, a commit with a duplicate or
+conflicting ARGUS-INSTRUCTION-ID trailer, or a merge commit anywhere in
+this run's commit range will cause the run to be rejected as FAILED.
 
 When authorized work is complete:
 - run required tests,
@@ -137,16 +155,22 @@ COMPLETED):
 - LAST_ORCHESTRATOR_INSTRUCTION_ID must be EXACTLY {instruction_id} -- nothing
   appended or reworded.
 - Every field in orchestration/PROTOCOL.md section 5 must be present exactly
-  once, non-empty, with no duplicates.
+  once, non-empty, with no duplicates; UTC_TIMESTAMP must be a real,
+  canonical UTC timestamp; CURRENT_PHASE must be a recognized phase token
+  matching this instruction's AUTHORIZED_PHASE; WORKING_TREE must state
+  "clean"; every required section heading must be present.
 - CHECKPOINT_PATH and BUNDLE_PATH must be newly added files (not edits to an
   existing file) inside orchestration/checkpoints/ and
   orchestration/bundles/ respectively, produced by this run's own commits --
   never overwrite an existing checkpoint or bundle, never point at a path
   that already existed before this run started.
-- The checkpoint and bundle must be complete, structurally valid ARGUS
-  documents (standard start/end markers, STATUS, GIT_COMMIT, commands run,
-  test results, acceptance criteria, deviations, known debt, security state,
-  next action/STOP statement) -- not placeholders.
+- The checkpoint must be a complete, structurally valid ARGUS document
+  (standard start/end markers, STATUS and GIT_COMMIT each occurring exactly
+  once, GIT_COMMIT a full commit SHA, commands run, test results,
+  acceptance criteria, deviations, known debt, security state, next
+  action/STOP statement) -- not a placeholder. The bundle must contain the
+  checkpoint's exact bytes verbatim, not a different or paraphrased
+  checkpoint.
 - CURRENT_COMMIT and the checkpoint's GIT_COMMIT must resolve to commits
   created during this run.
 """
@@ -196,25 +220,33 @@ class WatcherConfig:
 
 
 # --------------------------------------------------------------------------
-# Logging (never logs raw command output, env vars, or credentials -- only
-# short structured event strings, and bounded/truncated diagnostics).
+# Logging. Never logs raw subprocess stdout/stderr, env vars, or credentials
+# -- only short, whitelisted structured event strings. Every detail is
+# sanitized (control characters and newlines stripped, length bounded) so
+# that nothing -- including a malicious Claude subprocess's own output --
+# can inject fake log lines or leak arbitrary content through a log detail.
 # --------------------------------------------------------------------------
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_log_detail(text: str, limit: int = 300) -> str:
+    cleaned = (text or "").strip()
+    cleaned = cleaned.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    cleaned = _CONTROL_CHAR_RE.sub("", cleaned)
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit] + "...[truncated]"
+    return cleaned
 
 
 def log_event(config: WatcherConfig, event: str, detail: str = "") -> None:
     config.log_path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).isoformat()
-    line = f"{timestamp} {event}" + (f" {detail}" if detail else "")
+    safe_detail = _sanitize_log_detail(detail)
+    line = f"{timestamp} {event}" + (f" {safe_detail}" if safe_detail else "")
     with config.log_path.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
     print(line, file=sys.stderr)
-
-
-def _bounded_diagnostic(text: str, limit: int = 300) -> str:
-    cleaned = (text or "").strip()
-    if len(cleaned) > limit:
-        return cleaned[:limit] + "...[truncated]"
-    return cleaned
 
 
 # --------------------------------------------------------------------------
@@ -319,6 +351,27 @@ def read_state_safe(state_path: Path) -> StateLoadResult:
 
 
 # --------------------------------------------------------------------------
+# Real, canonical UTC timestamp validation -- a regex shape check accepts
+# impossible values (month 99, hour 99, Feb 30); a real datetime parser with
+# an exact round-trip requirement does not.
+# --------------------------------------------------------------------------
+
+_CANONICAL_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def parse_canonical_utc_timestamp(text: str) -> datetime | None:
+    if len(text) != 20 or text[-1] != "Z":
+        return None
+    try:
+        parsed = datetime.strptime(text, _CANONICAL_TIMESTAMP_FORMAT)
+    except ValueError:
+        return None
+    if parsed.strftime(_CANONICAL_TIMESTAMP_FORMAT) != text:
+        return None
+    return parsed.replace(tzinfo=UTC)
+
+
+# --------------------------------------------------------------------------
 # orchestration/ORCHESTRATOR_INSTRUCTIONS.md + AGENT_HANDOFF.md parsing
 #
 # Both files use plain "FIELD: value" lines near the top (see
@@ -368,7 +421,6 @@ INSTRUCTION_FIELD_NAMES = (
 
 VALID_INSTRUCTION_STATUSES = {"NO_INSTRUCTION", "ACTIVE", "SUPERSEDED"}
 
-_UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -433,11 +485,11 @@ def parse_instructions(text: str) -> InstructionParseResult:
     # status == "ACTIVE": every field must be well-formed before this
     # instruction is trusted enough to even reach the target-commit/phase
     # checks.
-    if not _UTC_TIMESTAMP_RE.match(parsed.issued_at):
+    if parse_canonical_utc_timestamp(parsed.issued_at) is None:
         return InstructionParseResult(
             ok=False,
             fields=None,
-            reason=f"ISSUED_AT {parsed.issued_at!r} is not a valid UTC timestamp",
+            reason=f"ISSUED_AT {parsed.issued_at!r} is not a real, canonical UTC timestamp",
         )
     if not _FULL_SHA_RE.match(parsed.target_commit):
         return InstructionParseResult(
@@ -485,6 +537,14 @@ HANDOFF_FIELD_NAMES = (
     "TEST_STATUS",
     "WORKING_TREE",
     "ORCHESTRATOR_REVIEW_REQUIRED",
+)
+
+HANDOFF_REQUIRED_SECTION_HEADINGS = (
+    "## Work completed",
+    "## Important findings",
+    "## Failures or limitations",
+    "## Deferred checks",
+    "## Exact next action requested from orchestrator",
 )
 
 
@@ -631,7 +691,16 @@ def verify_phase_authorization(
 
 
 # --------------------------------------------------------------------------
-# Git helpers (ordinary subprocess calls to the local `git`)
+# Git helpers (ordinary subprocess calls to the local `git`).
+#
+# Safety-critical helpers below return `None` (or a dedicated Optional list)
+# on ANY command failure -- nonzero exit, timeout, or unparseable output --
+# rather than an empty/False/"clean" default. Every caller of such a helper
+# must treat `None` as an explicit verification failure, never as "nothing
+# to report". This is what closes the "Git errors fail open" defect class:
+# a failed `git status`/`git diff`/`git log`/`git rev-list` must never look
+# like a clean worktree, an empty diff, an empty commit list, or "no
+# merges".
 # --------------------------------------------------------------------------
 
 
@@ -641,9 +710,23 @@ def _run_git(args: list[str], cwd: Path, timeout: int = 60) -> subprocess.Comple
     )
 
 
-def is_worktree_dirty(repo_root: Path) -> bool:
+def git_status_porcelain(repo_root: Path) -> str | None:
+    """Returns the raw `git status --porcelain` output, or None if the
+    command itself failed -- never an implicit empty string."""
     result = _run_git(["status", "--porcelain"], cwd=repo_root)
-    return bool(result.stdout.strip())
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def is_worktree_dirty(repo_root: Path) -> bool | None:
+    """True/False for a genuinely known clean/dirty state; None means the
+    check itself failed and the caller must fail closed (never treat a
+    failed status check as "clean")."""
+    status = git_status_porcelain(repo_root)
+    if status is None:
+        return None
+    return bool(status.strip())
 
 
 def git_fetch(repo_root: Path, branch: str) -> bool:
@@ -673,22 +756,44 @@ def git_resolve_commit(repo_root: Path, ref: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def git_parent_commit(repo_root: Path, ref: str) -> str | None:
+    result = _run_git(["rev-parse", "--verify", f"{ref}^"], cwd=repo_root)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def git_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     result = _run_git(["merge-base", "--is-ancestor", ancestor, descendant], cwd=repo_root)
     return result.returncode == 0
 
 
-def git_changed_paths(repo_root: Path, from_ref: str, to_ref: str) -> list[str]:
+def git_commit_count_between(repo_root: Path, from_ref: str, to_ref: str) -> int | None:
+    result = _run_git(["rev-list", "--count", f"{from_ref}..{to_ref}"], cwd=repo_root)
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def git_changed_paths(repo_root: Path, from_ref: str, to_ref: str) -> list[str] | None:
     result = _run_git(["diff", "--name-only", from_ref, to_ref], cwd=repo_root)
     if result.returncode != 0:
-        return []
+        return None
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def git_commits_in_range(repo_root: Path, from_ref: str, to_ref: str) -> list[str]:
+def git_commits_in_range(repo_root: Path, from_ref: str, to_ref: str) -> list[str] | None:
     result = _run_git(["rev-list", f"{from_ref}..{to_ref}"], cwd=repo_root)
     if result.returncode != 0:
-        return []
+        return None
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def git_merges_in_range(repo_root: Path, from_ref: str, to_ref: str) -> list[str] | None:
+    result = _run_git(["rev-list", "--merges", f"{from_ref}..{to_ref}"], cwd=repo_root)
+    if result.returncode != 0:
+        return None
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -723,28 +828,40 @@ def git_hash_object(repo_root: Path, relpath: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-_TRAILER_RECORD_SEP = "\x1e"
-_TRAILER_FIELD_SEP = "\x1f"
+def git_commit_message(repo_root: Path, commit_sha: str) -> str | None:
+    result = _run_git(["log", "-1", "--format=%B", commit_sha], cwd=repo_root)
+    return result.stdout if result.returncode == 0 else None
 
 
-def git_commit_bodies_in_range(
-    repo_root: Path, from_ref: str, to_ref: str
-) -> list[tuple[str, str]]:
-    result = _run_git(
-        ["log", f"--format=%H{_TRAILER_FIELD_SEP}%B{_TRAILER_RECORD_SEP}", f"{from_ref}..{to_ref}"],
+def git_trailer_values(repo_root: Path, commit_sha: str, key: str) -> list[str] | None:
+    """Returns the values of a REAL Git trailer named `key` in the given
+    commit's message, using `git interpret-trailers --parse` -- the same
+    text appearing anywhere else in ordinary body prose (not positioned as
+    a genuine trailing `key: value` paragraph) is correctly not returned.
+    None means the underlying git command(s) failed and the caller must
+    fail closed, never treat that as "zero trailers found"."""
+    message = git_commit_message(repo_root, commit_sha)
+    if message is None:
+        return None
+    result = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
         cwd=repo_root,
+        input=message,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     if result.returncode != 0:
-        return []
-    out: list[tuple[str, str]] = []
-    for record in result.stdout.split(_TRAILER_RECORD_SEP):
-        if not record.strip("\n"):
+        return None
+    values: list[str] = []
+    for line in result.stdout.splitlines():
+        if ":" not in line:
             continue
-        if _TRAILER_FIELD_SEP not in record:
-            continue
-        sha, body = record.split(_TRAILER_FIELD_SEP, 1)
-        out.append((sha.strip(), body))
-    return out
+        parsed_key, _, parsed_value = line.partition(":")
+        if parsed_key.strip() == key:
+            values.append(parsed_value.strip())
+    return values
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -756,12 +873,16 @@ class TargetCommitCheck:
 def verify_target_commit(repo_root: Path, target_commit: str) -> TargetCommitCheck:
     """TARGET_COMMIT protection (orchestration/PROTOCOL.md section 7).
 
-    The ACTIVE instruction's TARGET_COMMIT must resolve to a real commit that
-    is an ancestor of current HEAD, and every path that differs between
-    TARGET_COMMIT and HEAD must be one the orchestrator is allowed to have
-    touched on its own (currently just ORCHESTRATOR_INSTRUCTIONS.md).
-    Anything else is unreviewed implementation drift -- conservative by
-    design, per the protocol's explicit instruction to prefer that.
+    Tightened provenance requirements: an ACTIVE instruction must be
+    introduced by exactly one instruction-only commit whose parent is
+    exactly TARGET_COMMIT. TARGET_COMMIT equal to current HEAD, more than
+    one commit between TARGET_COMMIT and HEAD, a merge commit, or any
+    changed path other than the instructions file are all rejected. This
+    closes a structural loophole (see docs/DECISION_LOG.md) but does NOT by
+    itself authenticate who authored that one commit -- that would require
+    cryptographic signing, which this file-trust protocol does not have;
+    see verify_instructions_unchanged() for the mechanism that actually
+    detects and quarantines implementation-agent self-authorship.
     """
     if not target_commit:
         return TargetCommitCheck(ok=False, reason="TARGET_COMMIT is empty")
@@ -777,21 +898,63 @@ def verify_target_commit(repo_root: Path, target_commit: str) -> TargetCommitChe
         return TargetCommitCheck(ok=False, reason="could not resolve HEAD")
 
     if resolved == head:
-        return TargetCommitCheck(ok=True)
+        return TargetCommitCheck(
+            ok=False,
+            reason=(
+                "TARGET_COMMIT equals current HEAD; an ACTIVE instruction must target the "
+                "commit immediately preceding its own instruction-only commit, not HEAD itself"
+            ),
+        )
 
     if not git_is_ancestor(repo_root, resolved, head):
         return TargetCommitCheck(
             ok=False, reason=f"TARGET_COMMIT {target_commit!r} is not an ancestor of HEAD"
         )
 
+    commit_count = git_commit_count_between(repo_root, resolved, head)
+    if commit_count is None:
+        return TargetCommitCheck(
+            ok=False, reason="could not count commits between TARGET_COMMIT and HEAD (git error)"
+        )
+    if commit_count != 1:
+        return TargetCommitCheck(
+            ok=False,
+            reason=(
+                f"exactly one commit must exist between TARGET_COMMIT and HEAD, found "
+                f"{commit_count}"
+            ),
+        )
+
+    parent = git_parent_commit(repo_root, head)
+    if parent is None:
+        return TargetCommitCheck(ok=False, reason="could not resolve HEAD's parent commit")
+    if parent != resolved:
+        return TargetCommitCheck(
+            ok=False, reason="HEAD's parent is not exactly TARGET_COMMIT (non-linear history)"
+        )
+
+    merges = git_merges_in_range(repo_root, resolved, head)
+    if merges is None:
+        return TargetCommitCheck(
+            ok=False, reason="could not check for merge commits between TARGET_COMMIT and HEAD"
+        )
+    if merges:
+        return TargetCommitCheck(
+            ok=False, reason="a merge commit is present between TARGET_COMMIT and HEAD"
+        )
+
     changed = git_changed_paths(repo_root, resolved, head)
+    if changed is None:
+        return TargetCommitCheck(
+            ok=False, reason="could not determine changed paths between TARGET_COMMIT and HEAD"
+        )
     unexpected = [p for p in changed if p not in ALLOWED_POST_TARGET_PATHS]
-    if unexpected:
+    if unexpected or not changed:
         return TargetCommitCheck(
             ok=False,
             reason=(
                 "unreviewed implementation changes between TARGET_COMMIT and HEAD: "
-                + ", ".join(unexpected)
+                + (", ".join(unexpected) if unexpected else "no path changed at all")
             ),
         )
     return TargetCommitCheck(ok=True)
@@ -810,9 +973,13 @@ def verify_run_ancestry_and_attribution(
 
     Post-run HEAD must descend linearly (no rewritten ancestry, no
     non-fast-forward movement, no merge commits) from pre-launch HEAD, and
-    every commit in that range must carry the exact
-    ``ARGUS-INSTRUCTION-ID: <instruction_id>`` trailer -- a substring or
-    differently-worded trailer does not count.
+    every commit in that range must carry exactly one REAL terminal Git
+    trailer (see git_trailer_values()) named ARGUS-INSTRUCTION-ID whose
+    value exactly equals the active instruction ID -- text merely present
+    somewhere in ordinary commit-body prose, a duplicate trailer, or a
+    conflicting trailer are all rejected. Any underlying git command
+    failure fails this check closed; it is never treated as "no merges" or
+    "no commits to check".
     """
     if head_before is None:
         return AncestryCheck(ok=False, reason="could not resolve HEAD before launch")
@@ -825,19 +992,46 @@ def verify_run_ancestry_and_attribution(
             ok=False,
             reason="post-run HEAD does not descend from pre-launch HEAD (rewritten ancestry or non-fast-forward movement)",
         )
-    merges = _run_git(["rev-list", "--merges", f"{head_before}..{head_after}"], cwd=repo_root)
-    if merges.returncode == 0 and merges.stdout.strip():
+
+    merges = git_merges_in_range(repo_root, head_before, head_after)
+    if merges is None:
+        return AncestryCheck(
+            ok=False, reason="could not check for merge commits in the run's commit range"
+        )
+    if merges:
         return AncestryCheck(ok=False, reason="a merge commit is present in the run's commit range")
 
-    expected_trailer = f"ARGUS-INSTRUCTION-ID: {instruction_id}"
-    for sha, body in git_commit_bodies_in_range(repo_root, head_before, head_after):
-        trailer_lines = {line.strip() for line in body.splitlines()}
-        if expected_trailer not in trailer_lines:
+    commits = git_commits_in_range(repo_root, head_before, head_after)
+    if commits is None:
+        return AncestryCheck(
+            ok=False, reason="could not enumerate commits in the run's commit range"
+        )
+    if not commits:
+        return AncestryCheck(
+            ok=False,
+            reason="run's commit range is non-empty by HEAD comparison but rev-list found no commits",
+        )
+
+    for sha in commits:
+        values = git_trailer_values(repo_root, sha, "ARGUS-INSTRUCTION-ID")
+        if values is None:
+            return AncestryCheck(
+                ok=False, reason=f"could not parse trailers for commit {sha[:12]} (git error)"
+            )
+        if len(values) != 1:
             return AncestryCheck(
                 ok=False,
                 reason=(
-                    f"commit {sha[:12]} in the run's commit range is missing the exact trailer "
-                    f"{expected_trailer!r}"
+                    f"commit {sha[:12]} has {len(values)} ARGUS-INSTRUCTION-ID trailers "
+                    "(exactly one is required)"
+                ),
+            )
+        if values[0] != instruction_id:
+            return AncestryCheck(
+                ok=False,
+                reason=(
+                    f"commit {sha[:12]} trailer value {values[0]!r} does not exactly match "
+                    f"{instruction_id!r}"
                 ),
             )
     return AncestryCheck(ok=True)
@@ -852,12 +1046,14 @@ class InstructionsUnchangedCheck:
 def verify_instructions_unchanged(
     repo_root: Path, blob_before: str | None
 ) -> InstructionsUnchangedCheck:
-    """Section 5: mechanically prevent implementation-agent self-authorization.
+    """Mechanically prevent implementation-agent self-authorization.
 
     The bytes/blob of orchestration/ORCHESTRATOR_INSTRUCTIONS.md after the
     run must exactly equal the pre-launch version -- checked against the
     live working-tree file (via `git hash-object`), not just the last
-    commit, so an edit that was never committed is caught too.
+    commit, so an edit that was never committed is caught too. A failure
+    here is treated by the caller as a TERMINAL trust breach (QUARANTINED),
+    not an ordinary retryable FAILED -- see tick().
     """
     if blob_before is None:
         return InstructionsUnchangedCheck(
@@ -886,7 +1082,12 @@ class PushCheck:
 
 
 def verify_push_clean(repo_root: Path, branch: str) -> PushCheck:
-    if is_worktree_dirty(repo_root):
+    dirty = is_worktree_dirty(repo_root)
+    if dirty is None:
+        return PushCheck(
+            ok=False, reason="could not determine worktree cleanliness (git status failed)"
+        )
+    if dirty:
         return PushCheck(ok=False, reason="working tree is dirty after Claude run")
     if not git_fetch(repo_root, branch):
         return PushCheck(ok=False, reason="git fetch failed while verifying push")
@@ -902,7 +1103,9 @@ def verify_push_clean(repo_root: Path, branch: str) -> PushCheck:
 
 
 # --------------------------------------------------------------------------
-# Evidence (checkpoint/bundle) structural validation -- section 3.
+# Evidence (checkpoint/bundle) structural validation -- section 3, tightened
+# further per round-3 requirements (exactly-once identity fields, full-SHA
+# GIT_COMMIT, exact byte-for-byte checkpoint embedding in the bundle).
 # --------------------------------------------------------------------------
 
 CHECKPOINT_START_MARKER = "================ ARGUS ORCHESTRATOR CHECKPOINT ================"
@@ -921,6 +1124,11 @@ _CHECKPOINT_REQUIRED_CI = (
 )
 
 
+def _count_top_level_field(text: str, field_name: str) -> int:
+    pattern = re.compile(rf"^{re.escape(field_name)}:", re.MULTILINE)
+    return len(pattern.findall(text))
+
+
 def validate_checkpoint_content(text: str) -> tuple[bool, str]:
     stripped = text.strip()
     if not stripped:
@@ -933,6 +1141,21 @@ def validate_checkpoint_content(text: str) -> tuple[bool, str]:
     for required in _CHECKPOINT_REQUIRED_LITERAL:
         if required not in stripped:
             return False, f"checkpoint missing required field {required!r}"
+
+    status_count = _count_top_level_field(stripped, "STATUS")
+    if status_count != 1:
+        return False, f"checkpoint STATUS field must occur exactly once, found {status_count}"
+    git_commit_count = _count_top_level_field(stripped, "GIT_COMMIT")
+    if git_commit_count != 1:
+        return (
+            False,
+            f"checkpoint GIT_COMMIT field must occur exactly once, found {git_commit_count}",
+        )
+
+    git_commit_match = _GIT_COMMIT_FIELD_RE.search(stripped)
+    if not git_commit_match or not _FULL_SHA_RE.match(git_commit_match.group(1)):
+        return False, "checkpoint GIT_COMMIT must be a full 40-character commit SHA"
+
     lowered = stripped.lower()
     for required_ci in _CHECKPOINT_REQUIRED_CI:
         if required_ci not in lowered:
@@ -944,14 +1167,18 @@ def validate_checkpoint_content(text: str) -> tuple[bool, str]:
     return True, ""
 
 
-def validate_bundle_content(text: str) -> tuple[bool, str]:
+def validate_bundle_content(text: str, checkpoint_text: str) -> tuple[bool, str]:
+    """The bundle must contain the checkpoint's exact bytes verbatim, not a
+    different, paraphrased, or independently-valid checkpoint -- this is
+    what makes the checkpoint/bundle linkage unambiguous without needing a
+    separate cryptographic digest."""
     stripped = text.strip()
     if not stripped:
         return False, "bundle file is empty"
     if len(stripped.splitlines()) < 5:
         return False, "bundle is too short to contain the required review sections/evidence"
-    if CHECKPOINT_START_MARKER not in stripped or CHECKPOINT_END_MARKER not in stripped:
-        return False, "bundle does not contain the checkpoint"
+    if checkpoint_text.strip() not in text:
+        return False, "bundle does not contain the exact checkpoint bytes verbatim"
     lowered = stripped.lower()
     for required_ci in ("status", "git_commit", "test"):
         if required_ci not in lowered:
@@ -974,7 +1201,7 @@ def _evidence_path_error(raw: str, allowed_dir: str, allowed_suffix: str) -> str
     return ""
 
 
-def _validate_evidence_path(
+def _validate_evidence_path_shape(
     repo_root: Path,
     raw: str,
     *,
@@ -982,8 +1209,10 @@ def _validate_evidence_path(
     allowed_suffix: str,
     head_before: str,
     head_after: str,
-    content_validator: Callable[[str], tuple[bool, str]],
 ) -> tuple[bool, str]:
+    """Path normalization, symlink/traversal rejection, and newly-added-ness
+    only -- content is validated separately in verify_handoff() since the
+    bundle's content validation needs the checkpoint's content too."""
     err = _evidence_path_error(raw, allowed_dir, allowed_suffix)
     if err:
         return False, err
@@ -1005,11 +1234,6 @@ def _validate_evidence_path(
         return False, (
             f"evidence path was not newly added by this run's commits (git diff status: {status!r})"
         )
-
-    text = full.read_text(encoding="utf-8", errors="replace")
-    ok, reason = content_validator(text)
-    if not ok:
-        return False, reason
     return True, ""
 
 
@@ -1023,12 +1247,13 @@ def verify_handoff(
     repo_root: Path,
     handoff_path: Path,
     instruction_id: str,
+    authorized_phase: str,
     handoff_id_before: str | None,
     head_before: str | None,
     head_after: str | None,
 ) -> HandoffCheck:
     """Verify AGENT_HANDOFF.md and its referenced evidence are genuine,
-    current, complete, and structurally valid (section 3)."""
+    current, complete, and structurally valid (section 3, tightened)."""
     if head_before is None or head_after is None:
         return HandoffCheck(ok=False, reason="could not resolve this run's commit range")
     if not handoff_path.exists():
@@ -1044,6 +1269,12 @@ def verify_handoff(
     if missing:
         return HandoffCheck(
             ok=False, reason=f"AGENT_HANDOFF.md missing required field(s): {', '.join(missing)}"
+        )
+    missing_headings = [h for h in HANDOFF_REQUIRED_SECTION_HEADINGS if h not in text]
+    if missing_headings:
+        return HandoffCheck(
+            ok=False,
+            reason=f"AGENT_HANDOFF.md missing required section heading(s): {', '.join(missing_headings)}",
         )
 
     new_handoff_id = fields["HANDOFF_ID"]
@@ -1062,8 +1293,37 @@ def verify_handoff(
             ),
         )
 
-    commits_in_range = set(git_commits_in_range(repo_root, head_before, head_after))
-    commits_in_range.add(head_after)
+    if parse_canonical_utc_timestamp(fields["UTC_TIMESTAMP"].strip()) is None:
+        return HandoffCheck(
+            ok=False,
+            reason=f"AGENT_HANDOFF.md UTC_TIMESTAMP {fields['UTC_TIMESTAMP']!r} is not a real, canonical UTC timestamp",
+        )
+
+    current_phase = fields["CURRENT_PHASE"].strip()
+    if _phase_index(current_phase) is None:
+        return HandoffCheck(
+            ok=False,
+            reason=f"AGENT_HANDOFF.md CURRENT_PHASE {current_phase!r} is not a recognized phase token",
+        )
+    if current_phase != authorized_phase:
+        return HandoffCheck(
+            ok=False,
+            reason=(
+                f"AGENT_HANDOFF.md CURRENT_PHASE {current_phase!r} does not match this "
+                f"instruction's AUTHORIZED_PHASE {authorized_phase!r}"
+            ),
+        )
+
+    if not fields["WORKING_TREE"].strip().lower().startswith("clean"):
+        return HandoffCheck(ok=False, reason="AGENT_HANDOFF.md WORKING_TREE does not state 'clean'")
+
+    commits_in_range = git_commits_in_range(repo_root, head_before, head_after)
+    if commits_in_range is None:
+        return HandoffCheck(
+            ok=False, reason="could not enumerate commits in this run's range (git error)"
+        )
+    commit_range_set = set(commits_in_range)
+    commit_range_set.add(head_after)
 
     current_commit = git_resolve_commit(repo_root, fields["CURRENT_COMMIT"])
     if current_commit is None:
@@ -1071,38 +1331,45 @@ def verify_handoff(
             ok=False,
             reason=f"CURRENT_COMMIT {fields['CURRENT_COMMIT']!r} does not resolve to a known commit",
         )
-    if current_commit not in commits_in_range:
+    if current_commit not in commit_range_set:
         return HandoffCheck(
             ok=False, reason="CURRENT_COMMIT does not resolve to a commit created during this run"
         )
 
-    checkpoint_ok, checkpoint_reason = _validate_evidence_path(
+    checkpoint_shape_ok, checkpoint_shape_reason = _validate_evidence_path_shape(
         repo_root,
         fields["CHECKPOINT_PATH"],
         allowed_dir="orchestration/checkpoints",
         allowed_suffix=".md",
         head_before=head_before,
         head_after=head_after,
-        content_validator=validate_checkpoint_content,
     )
-    if not checkpoint_ok:
-        return HandoffCheck(ok=False, reason=f"CHECKPOINT_PATH invalid: {checkpoint_reason}")
+    if not checkpoint_shape_ok:
+        return HandoffCheck(ok=False, reason=f"CHECKPOINT_PATH invalid: {checkpoint_shape_reason}")
 
-    bundle_ok, bundle_reason = _validate_evidence_path(
+    bundle_shape_ok, bundle_shape_reason = _validate_evidence_path_shape(
         repo_root,
         fields["BUNDLE_PATH"],
         allowed_dir="orchestration/bundles",
         allowed_suffix=".txt",
         head_before=head_before,
         head_after=head_after,
-        content_validator=validate_bundle_content,
     )
-    if not bundle_ok:
-        return HandoffCheck(ok=False, reason=f"BUNDLE_PATH invalid: {bundle_reason}")
+    if not bundle_shape_ok:
+        return HandoffCheck(ok=False, reason=f"BUNDLE_PATH invalid: {bundle_shape_reason}")
 
     checkpoint_text = (repo_root / fields["CHECKPOINT_PATH"]).read_text(
         encoding="utf-8", errors="replace"
     )
+    checkpoint_ok, checkpoint_reason = validate_checkpoint_content(checkpoint_text)
+    if not checkpoint_ok:
+        return HandoffCheck(ok=False, reason=f"CHECKPOINT_PATH invalid: {checkpoint_reason}")
+
+    bundle_text = (repo_root / fields["BUNDLE_PATH"]).read_text(encoding="utf-8", errors="replace")
+    bundle_ok, bundle_reason = validate_bundle_content(bundle_text, checkpoint_text)
+    if not bundle_ok:
+        return HandoffCheck(ok=False, reason=f"BUNDLE_PATH invalid: {bundle_reason}")
+
     git_commit_match = _GIT_COMMIT_FIELD_RE.search(checkpoint_text)
     if not git_commit_match:
         return HandoffCheck(ok=False, reason="checkpoint file has no GIT_COMMIT field")
@@ -1111,7 +1378,7 @@ def verify_handoff(
         return HandoffCheck(
             ok=False, reason="checkpoint GIT_COMMIT does not resolve to a known commit"
         )
-    if checkpoint_commit not in commits_in_range:
+    if checkpoint_commit not in commit_range_set:
         return HandoffCheck(
             ok=False,
             reason="checkpoint GIT_COMMIT does not resolve to a commit created during this run",
@@ -1199,6 +1466,12 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     fresh-and-safe init, a handoff-confirmed skip, or a fail-closed block)
     still gets to run instead of being silently pre-empted by a premature
     write.
+
+    A ``QUARANTINED`` state (a detected implementation-agent modification of
+    ORCHESTRATOR_INSTRUCTIONS.md) is checked first, before anything else,
+    and is absolutely terminal: no later ACTIVE instruction of any ID or
+    target is ever evaluated, let alone launched, until a human runs
+    ``--reset-quarantine`` after manual review.
     """
     now = datetime.now(UTC).isoformat()
     load = read_state_safe(config.state_path)
@@ -1222,6 +1495,20 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
         if persist:
             write_state(config.state_path, state)
         return state
+
+    # Terminal trust-breach quarantine: absolutely nothing else runs. Not
+    # even instruction parsing, since the whole point is that NO ACTIVE
+    # instruction -- regardless of its ID or TARGET_COMMIT -- may be
+    # evaluated again automatically from this state.
+    if state.current_status == "QUARANTINED":
+        log_event(
+            config,
+            "WATCHER_QUARANTINED",
+            "watcher is in a terminal trust-breach quarantine state; no instruction will be "
+            "evaluated or launched automatically. See docs/OPERATIONS.md for the manual "
+            "--reset-quarantine recovery procedure.",
+        )
+        return _return()
 
     # A RUNNING or CLAIMED state found at rest means a previous watcher
     # process crashed mid-transition. Never blindly re-execute either state
@@ -1247,7 +1534,11 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
         log_event(config, "GIT_PULL_FAILED", "git fetch failed")
         return _return(persist=not state_was_missing)
 
-    if is_worktree_dirty(config.repo_root):
+    dirty = is_worktree_dirty(config.repo_root)
+    if dirty is None:
+        log_event(config, "GIT_STATUS_FAILED", "git status failed; not pulling")
+        return _return(persist=not state_was_missing)
+    if dirty:
         log_event(config, "DIRTY_WORKTREE", "local worktree has uncommitted changes; not pulling")
         return _return(persist=not state_was_missing)
 
@@ -1322,8 +1613,7 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     target_check = verify_target_commit(config.repo_root, instructions.target_commit)
     if not target_check.ok:
         log_event(config, "TARGET_COMMIT_MISMATCH", target_check.reason)
-        write_state(config.state_path, state)
-        return state
+        return _return()
 
     build_state = read_build_state(config.build_state_path)
     phase_check = verify_phase_authorization(
@@ -1331,8 +1621,7 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     )
     if not phase_check.ok:
         log_event(config, "PHASE_AUTHORIZATION_INVALID", phase_check.reason)
-        write_state(config.state_path, state)
-        return state
+        return _return()
 
     log_event(
         config,
@@ -1369,39 +1658,58 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     log_event(config, "CLAUDE_STARTED", f"instruction_id={instruction_id!r}")
 
     exit_code: int | None
-    diagnostic = ""
     try:
         result = launch_claude(config, instruction_id, runner=claude_runner)
         exit_code = result.returncode
-        diagnostic = _bounded_diagnostic(f"{result.stdout or ''}\n{result.stderr or ''}")
         log_event(config, "CLAUDE_EXITED", f"exit_code={exit_code}")
     except subprocess.TimeoutExpired:
         exit_code = None
-        diagnostic = f"timed out after {config.claude_timeout_seconds}s"
-        log_event(config, "CLAUDE_EXITED", diagnostic)
-    except OSError as exc:
+        log_event(config, "CLAUDE_EXITED", f"timed out after {config.claude_timeout_seconds}s")
+    except Exception as exc:  # noqa: BLE001 -- ANY launch-wrapper exception must fail closed
+        # immediately, in this same tick, whether called via --once or
+        # run_forever -- never left as a stale RUNNING state for a later
+        # tick to (possibly never) clean up. Only the exception's class
+        # name is logged -- never str(exc), which could echo attacker- or
+        # environment-controlled text.
         exit_code = None
-        diagnostic = _bounded_diagnostic(f"{exc.__class__.__name__}: {exc}")
-        log_event(config, "CLAUDE_EXITED", f"launch exception: {diagnostic}")
+        log_event(config, "CLAUDE_EXITED", f"launch exception: {exc.__class__.__name__}")
 
     state.last_exit_code = exit_code
 
     def _fail(event: str, reason: str) -> WatcherState:
         log_event(config, event, reason)
         state.current_status = "FAILED"
-        state.last_failure_reason = reason[:500]
+        state.last_failure_reason = _sanitize_log_detail(reason, limit=500)
         write_state(config.state_path, state)
         return state
 
-    # Conservative verification order (section 8):
+    def _quarantine(reason: str) -> WatcherState:
+        log_event(config, "INSTRUCTION_FILE_TRUST_BREACH", reason)
+        state.current_status = "QUARANTINED"
+        state.last_failure_reason = _sanitize_log_detail(reason, limit=500)
+        write_state(config.state_path, state)
+        return state
+
+    head_after = git_head(config.repo_root)
+
+    # Instructions-file integrity is checked FIRST and unconditionally --
+    # before the ordinary exit-code check, and regardless of whether any
+    # other check below would also have failed this run. A detected
+    # implementation-agent modification of ORCHESTRATOR_INSTRUCTIONS.md is a
+    # terminal trust breach, not an ordinary retryable failure, and must
+    # never be masked by -- or lose priority to -- any other failure this
+    # run also happens to hit (see docs/DECISION_LOG.md for the specific
+    # bypass this closes).
+    instructions_check = verify_instructions_unchanged(config.repo_root, instructions_blob_before)
+    if not instructions_check.ok:
+        return _quarantine(instructions_check.reason)
+
+    # Conservative verification order for everything else:
     # 1. process exit success.
     if exit_code != 0:
         return _fail(
-            "RUN_FAILED",
-            f"claude process did not exit successfully (exit_code={exit_code}); {diagnostic}",
+            "RUN_FAILED", f"claude process did not exit successfully (exit_code={exit_code})"
         )
-
-    head_after = git_head(config.repo_root)
 
     # 2. pre/post ancestry and commit attribution.
     ancestry_check = verify_run_ancestry_and_attribution(
@@ -1410,18 +1718,12 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
     if not ancestry_check.ok:
         return _fail("RUN_FAILED", f"ancestry/attribution check failed: {ancestry_check.reason}")
 
-    # 3. instruction file unchanged.
-    instructions_check = verify_instructions_unchanged(config.repo_root, instructions_blob_before)
-    if not instructions_check.ok:
-        return _fail(
-            "RUN_FAILED", f"instructions-file integrity check failed: {instructions_check.reason}"
-        )
-
-    # 4. complete handoff and new evidence structure.
+    # 3. complete handoff and new evidence structure.
     handoff_check = verify_handoff(
         config.repo_root,
         config.handoff_path,
         instruction_id,
+        instructions.authorized_phase,
         handoff_id_before,
         head_before,
         head_after,
@@ -1430,7 +1732,7 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
         return _fail("RUN_FAILED", f"handoff verification failed: {handoff_check.reason}")
     log_event(config, "HANDOFF_VERIFIED", f"instruction_id={instruction_id!r}")
 
-    # 5. clean worktree and exact pushed remote HEAD.
+    # 4. clean worktree and exact pushed remote HEAD.
     push_check = verify_push_clean(config.repo_root, config.branch)
     if not push_check.ok:
         return _fail("RUN_FAILED", f"push verification failed: {push_check.reason}")
@@ -1481,11 +1783,7 @@ def run_forever(config: WatcherConfig) -> int:
             try:
                 tick(config)
             except Exception as exc:  # noqa: BLE001 - one bad tick must not crash the watcher
-                log_event(
-                    config,
-                    "TICK_EXCEPTION",
-                    _bounded_diagnostic(f"{exc.__class__.__name__}: {exc}"),
-                )
+                log_event(config, "TICK_EXCEPTION", f"{exc.__class__.__name__}")
             _sleep_or_shutdown(config.interval_seconds)
     finally:
         release_lock(lock_fh)
@@ -1528,6 +1826,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--once", action="store_true", help="Run a single tick and exit (for manual testing)."
     )
+    parser.add_argument(
+        "--reset-quarantine",
+        action="store_true",
+        help="Manually clear a QUARANTINED state after operator review (see docs/OPERATIONS.md). "
+        "Does not run a tick. Refuses to do anything if the state is not currently QUARANTINED.",
+    )
     return parser
 
 
@@ -1541,6 +1845,19 @@ def main(argv: list[str] | None = None) -> int:
         claude_extra_args=tuple(args.claude_extra_args),
         claude_timeout_seconds=args.claude_timeout_seconds,
     )
+    if args.reset_quarantine:
+        load = read_state_safe(config.state_path)
+        if load.outcome != "OK" or load.state is None or load.state.current_status != "QUARANTINED":
+            print("no QUARANTINED state found; nothing to reset", file=sys.stderr)
+            return 1
+        write_state(config.state_path, WatcherState())
+        log_event(
+            config,
+            "WATCHER_QUARANTINE_RESET",
+            "operator manually reset a QUARANTINED state after review",
+        )
+        print("quarantine cleared; watcher state reset to fresh IDLE", file=sys.stderr)
+        return 0
     if args.once:
         signal.signal(signal.SIGINT, _handle_shutdown_signal)
         signal.signal(signal.SIGTERM, _handle_shutdown_signal)

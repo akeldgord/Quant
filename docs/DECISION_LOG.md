@@ -364,4 +364,127 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   against an actual `claude` process in this sandbox, and
   `PG17_COMPOSE_VALIDATION` remains `DEFERRED_ENVIRONMENTAL_CHECK`
   (unrelated to this task).
+- git_commit: 34930bfa78cd7f667527b40f7d006c923c7c9ba6
+
+### 2026-08-31 — Watcher remediation round 3: close the self-authorization bypass and fail-open Git-error gaps (argus-watcher-remediation-003)
+- requirement_id: `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-watcher-remediation-003`; `orchestration/PROTOCOL.md` sections 4,
+  5, 7; MASTER_SPEC.md section 103 (phase gating).
+- decision: The orchestrator rejected watcher remediation round 2
+  (`watcher_remediation_2.md`, commit `34930bf`), identifying six defect
+  categories with concrete reproduction steps rather than general
+  dissatisfaction. Each was independently traced against round 2's actual
+  code before being fixed, not accepted on the audit's account alone:
+  1. **A self-authored next instruction could still launch on a later
+     tick.** Round 2's blob-hash check correctly failed the *originating*
+     run, but only as an ordinary `FAILED` — and a self-authored
+     instruction whose `TARGET_COMMIT` pointed at the immediately preceding
+     (legitimate) implementation commit, with a diff touching only the
+     instructions file, would structurally pass round 2's target-commit
+     check on the *next* tick, since a new `INSTRUCTION_ID` isn't blocked
+     by the "already attempted" guard that only applies to a *previously
+     seen* id. Fixed with two independent layers: (a) a detected
+     instructions-file modification is now a terminal, non-retryable
+     `QUARANTINED` state — checked first and unconditionally in `tick()`,
+     ahead of every other verification, so it can never be pre-empted by
+     another check failing first — from which **no** future instruction of
+     any ID or target is ever evaluated again until a human runs the new
+     `--reset-quarantine` CLI flag after manual review; (b)
+     `verify_target_commit()` independently tightened to require exactly
+     one instruction-only commit whose parent is exactly `TARGET_COMMIT`,
+     rejecting `TARGET_COMMIT == HEAD`, multiple commits, and merge commits
+     between them. Neither layer claims to cryptographically authenticate
+     *who* authored a commit — this file-trust protocol cannot do that
+     without signing, which is explicitly out of scope and documented
+     honestly rather than overclaimed (see "Known bugs / debt" in
+     `orchestration/checkpoints/watcher_remediation_3.md`).
+  2. **Safety-critical Git command errors failed open.** `git_changed_paths()`,
+     `git_commits_in_range()`, the merge-enumeration check, and
+     `is_worktree_dirty()` all returned an empty/`False` default on a
+     failed subprocess call, which their callers then read as "no unexpected
+     paths" / "no commits" / "no merges" / "clean" respectively. All four
+     (and the new commit-message/trailer reads) now return `None` on any
+     command failure, and every caller treats `None` as an explicit
+     verification failure — never as an empty/clean/absent default.
+  3. **Commit-message attribution accepted the trailer text anywhere in
+     body prose.** The round-2 check matched any full line equal to
+     `ARGUS-INSTRUCTION-ID: <id>`, which a prose paragraph could satisfy
+     without forming a real trailer. Replaced with
+     `git interpret-trailers --parse`-based parsing, requiring exactly one
+     parsed terminal trailer with that exact key and value; a duplicate,
+     conflicting, or prose-embedded (non-trailer-positioned) mention is
+     now rejected.
+  4. **Launch failures and diagnostics were not fully safe.** Only
+     `subprocess.TimeoutExpired` and `OSError` were caught immediately; an
+     arbitrary `Exception` from the launch wrapper could leave state
+     `RUNNING` until a later tick (or forever, under `--once`, since
+     `main()` adds no exception handling of its own around `tick()`). The
+     except clause is now broadened to catch any ordinary exception and
+     persist `FAILED` in the same `tick()` call, unconditionally. Separately,
+     raw Claude subprocess stdout/stderr is no longer read into any log
+     detail at all (truncation bounds length but is not credential
+     redaction — a secret in the first 300 characters would still leak);
+     only whitelisted metadata (exit code, timeout duration, exception
+     *class name*) is logged, and every log detail is now sanitized
+     (control characters and newlines stripped) so process output cannot
+     forge a fake log line.
+  5. **Timestamp validation was shape-only.** A regex accepted impossible
+     values like month `99` or Feb 30. Replaced with
+     `parse_canonical_utc_timestamp()`, a real `datetime.strptime` parse
+     with an exact-round-trip requirement, applied to both instruction
+     `ISSUED_AT` and (newly) handoff `UTC_TIMESTAMP`.
+  6. **Evidence linkage was too weak.** The bundle validator only checked
+     for a few keywords, not that it contained the *actual* checkpoint
+     named by the handoff — a bundle embedding a different, independently
+     valid checkpoint would have passed. `validate_bundle_content()` now
+     requires the checkpoint's exact bytes verbatim as a substring.
+     Additionally: checkpoint `STATUS` and `GIT_COMMIT` must each occur
+     exactly once (a duplicate/contradictory value now fails); checkpoint
+     `GIT_COMMIT` must be a full 40-character SHA; handoff `CURRENT_PHASE`
+     must be a recognized phase token that matches the instruction's
+     `AUTHORIZED_PHASE` exactly; handoff `WORKING_TREE` must state `clean`
+     (cross-checked independently by the watcher's own `git status`); and
+     every required `AGENT_HANDOFF.md` section heading from
+     `orchestration/PROTOCOL.md` section 5 must literally be present.
+  Also added 26 new/updated adversarial regression tests covering every
+  category in the instruction's "Mandatory adversarial regression tests"
+  list, including direct unit-level tests against `verify_target_commit()`,
+  `verify_run_ancestry_and_attribution()`, and `verify_handoff()` with a
+  narrowly-injected failing Git command (via a monkeypatched `_run_git`)
+  around an otherwise-real temporary repository, per the instruction's own
+  guidance on testing the fail-open-Git-error category precisely.
+  `orchestration/PROTOCOL.md` sections 4, 5, and 7 and `docs/OPERATIONS.md`
+  (including a new "Terminal trust-breach quarantine" recovery procedure)
+  were updated accordingly.
+- reason: MASTER_SPEC.md section 103's phase-gate discipline requires that
+  no phase begin without explicit, verifiable orchestrator approval, and a
+  watcher that can be made to auto-launch a self-authored instruction on a
+  later tick -- or that treats a failed Git command as evidence of safety
+  rather than as "unknown, therefore unsafe" -- does not actually provide
+  that guarantee, regardless of how many individual checks it appears to
+  pass. CORE-011 ("truth outranks impressive P&L") is why the remaining
+  file-trust limitation is documented honestly rather than claimed away.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-watcher-remediation-003` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 34930bfa78cd7f667527b40f7d006c923c7c9ba6`,
+  `AUTHORIZED_PHASE: 0`, `APPROVES_PHASE: NONE` — same-phase operational
+  remediation, verified against `docs/BUILD_STATE.md` before this task
+  began: `current_phase: 0`, `last_completed_phase: 0`,
+  `awaiting_orchestrator_review: true`).
+- impact: `scripts/argus_orchestrator_watch.py` substantially rewritten
+  (new `QUARANTINED` state and `--reset-quarantine` CLI flag,
+  `parse_canonical_utc_timestamp()`, fail-closed Git helpers
+  (`git_commits_in_range`, `git_changed_paths`, `git_merges_in_range`,
+  `git_status_porcelain`/`is_worktree_dirty` all `Optional`-returning),
+  `git_trailer_values()` via `git interpret-trailers`, a tightened
+  `verify_target_commit()`, a rewritten `verify_run_ancestry_and_attribution()`,
+  tightened `validate_checkpoint_content()`/`validate_bundle_content()`, an
+  expanded `verify_handoff()`, and a restructured `tick()` that checks
+  instructions-file integrity first and unconditionally). Test suite grew
+  from 51 to 74 tests, all passing; full repository suite 111 passed / 4
+  skipped (pre-existing, unrelated Postgres-integration skips), 93%
+  coverage on `src/argus` (unchanged), ruff clean, mypy clean.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified. Phase 1
+  remains unauthorized by this task.
 - git_commit: (see the final hash-fill commit for this task's exact SHA)

@@ -121,11 +121,15 @@ Allowed `STATUS` values:
 - `SUPERSEDED` — a later instruction has replaced this one.
 
 For an `ACTIVE` instruction, the watcher additionally requires: a duplicate
-of any field is rejected outright; `ISSUED_AT` a valid UTC timestamp
-(`YYYY-MM-DDTHH:MM:SSZ`); `TARGET_COMMIT` a full 40-character commit SHA;
-`AUTHORIZED_ACTION` non-empty and not the literal `NONE`; `AUTHORIZED_PHASE`
-a recognized entry in the canonical phase sequence (`#7`); `APPROVES_PHASE`
-either the literal `NONE` or a recognized phase entry.
+of any field is rejected outright; `ISSUED_AT` a **real, canonical UTC
+timestamp** — parsed with an actual UTC datetime parser and required to
+round-trip exactly to `YYYY-MM-DDTHH:MM:SSZ`, not merely shape-matched by a
+regular expression (a regex alone would accept impossible values like month
+`99` or day `30` in February); `TARGET_COMMIT` a full 40-character commit
+SHA; `AUTHORIZED_ACTION` non-empty and not the literal `NONE`;
+`AUTHORIZED_PHASE` a recognized entry in the canonical phase sequence
+(`#7`); `APPROVES_PHASE` either the literal `NONE` or a recognized phase
+entry.
 
 The implementation agent creates the file with the initial placeholder
 (see `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` for the exact current
@@ -135,8 +139,10 @@ mechanically enforced, not just convention: the watcher records the blob
 hash of this file's on-disk content immediately before launching Claude and
 compares it again once Claude exits (via `git hash-object`, which reflects
 an uncommitted edit too, not only a committed one). Any difference — even
-one later committed and pushed by the implementation agent itself — marks
-the run `FAILED` outright, before any other evidence is even considered.
+one later committed and pushed by the implementation agent itself — is a
+**terminal trust breach**, checked first and unconditionally, ahead of every
+other verification: it moves the watcher into a permanent `QUARANTINED`
+state (see `#7`), not an ordinary retryable `FAILED`.
 
 ## 5. Agent handoff contract (`AGENT_HANDOFF.md`)
 
@@ -176,11 +182,22 @@ existing MASTER_SPEC.md contract, in `runtime/reports/`).
 `FAILED`, not `COMPLETED`):
 
 - Every field above must appear exactly once and non-empty. A duplicate or
-  missing field fails the run.
+  missing field fails the run. Every required section heading above must
+  also literally appear in the file.
 - `LAST_ORCHESTRATOR_INSTRUCTION_ID` must be **exactly** the instruction's
   `INSTRUCTION_ID` — no other text appended or reworded.
 - `HANDOFF_ID` must differ from the value recorded immediately before this
   run started — a reused id fails the run.
+- `UTC_TIMESTAMP` must be a real, canonical UTC timestamp (same rule as
+  `ISSUED_AT` in `#4` — a real datetime parse with an exact round-trip, not
+  a shape-only regex).
+- `CURRENT_PHASE` must be a recognized entry in the canonical phase sequence
+  (`#7`) and must **match this instruction's `AUTHORIZED_PHASE` exactly** —
+  a handoff claiming a different phase than what was actually authorized
+  fails the run.
+- `WORKING_TREE` must state `clean`; the watcher additionally, and
+  independently, confirms this mechanically via its own `git status`
+  check — the field is not trusted on its own.
 - `CURRENT_COMMIT`, and the `GIT_COMMIT` field inside the checkpoint file
   itself, must each resolve to a real commit created during this run (an
   implementation commit or a later documentation-only hash-fill commit in
@@ -197,11 +214,16 @@ existing MASTER_SPEC.md contract, in `runtime/reports/`).
   must never be overwritten.
 - The checkpoint file must be nonempty, start and end with the standard
   ARGUS checkpoint markers, and identify PROJECT ARGUS, the authorized
-  phase or operational scope, `STATUS`, `GIT_COMMIT`, commands actually run,
-  test results, acceptance criteria, deviations, known debt, security
-  state, and a next-action/STOP statement. The bundle file must be
-  nonempty, contain the checkpoint, and contain the required review
-  evidence. A one-line placeholder in either file fails the run.
+  phase or operational scope, commands actually run, test results,
+  acceptance criteria, deviations, known debt, and security state, plus a
+  next-action/STOP statement. `STATUS` and `GIT_COMMIT` must each occur
+  **exactly once** (a duplicate/contradictory value fails the run), and
+  `GIT_COMMIT` must be a full 40-character commit SHA.
+- The bundle file must be nonempty and must contain the checkpoint's
+  **exact bytes verbatim** — not a paraphrase, and not a different,
+  independently-valid checkpoint — plus the required review evidence. A
+  one-line placeholder, or a bundle embedding a checkpoint that doesn't
+  exactly match `CHECKPOINT_PATH`'s actual content, fails the run.
 
 ## 6. Session-start rule
 
@@ -253,6 +275,38 @@ implementation commit is clearly still the intended target and work may
 proceed. This check must be applied conservatively: when in doubt, treat it
 as a mismatch and stop.
 
+**Tightened provenance (round 3).** An `ACTIVE` instruction must be
+introduced by **exactly one** instruction-only commit whose parent is
+**exactly** `TARGET_COMMIT`. The watcher mechanically rejects:
+
+- `TARGET_COMMIT` equal to the current `HEAD` (an instruction must target
+  the commit immediately *preceding* its own instruction-only commit, never
+  `HEAD` itself);
+- more than one commit between `TARGET_COMMIT` and `HEAD`;
+- a merge commit between `TARGET_COMMIT` and `HEAD`;
+- any changed path other than the instructions file.
+
+This closes a structural loophole where a run's own final self-authored
+commit could otherwise look, on the *next* tick, indistinguishable from a
+normal one-commit orchestrator edit. It does **not** by itself authenticate
+who authored that one commit — this protocol is file-trust-based, not
+cryptographically signed, and an unsigned Git commit cannot prove
+authorship. What actually detects and blocks implementation-agent
+self-authorship is the instructions-file blob-hash check in `#4` combined
+with the `QUARANTINED` state below.
+
+**Terminal trust-breach quarantine.** If the instructions-file blob-hash
+check in `#4` fails for a run, the watcher does not mark that run an
+ordinary retryable `FAILED`. It persists a distinct `QUARANTINED` state and,
+from that point on, **every future tick refuses to evaluate or launch any
+instruction at all** — regardless of a new `INSTRUCTION_ID`, a new
+`TARGET_COMMIT`, or anything else that later appears in
+`ORCHESTRATOR_INSTRUCTIONS.md` — until a human operator runs
+`scripts/argus_orchestrator_watch.py --reset-quarantine` after manually
+reviewing what happened (see `docs/OPERATIONS.md`). This is what makes "a
+self-authored next instruction can launch on a later tick" mechanically
+impossible rather than merely discouraged.
+
 **Phase-authorization protection.** ARGUS phases form a canonical ordered
 sequence, including the mandatory sub-phase gates, represented as exact
 string tokens — never compared as floats/binary values:
@@ -295,12 +349,23 @@ after Claude exits and before accepting any evidence:
 - Post-run `HEAD` must descend **linearly** from the pre-launch `HEAD`:
   rewritten ancestry, non-fast-forward movement, and any merge commit
   anywhere in the run's commit range are all rejected.
-- Every commit in that range must carry the exact trailer
-  `ARGUS-INSTRUCTION-ID: <the ACTIVE instruction's INSTRUCTION_ID>` — a
-  differently-worded or merely-similar trailer does not count. This makes
-  concurrent, unattributed branch movement during a run visible and
-  rejected rather than silently accepted because local/remote `HEAD`
-  happened to match again by the time the run finished.
+- Every commit in that range must carry exactly one **real, terminal Git
+  trailer** (parsed with `git interpret-trailers`, i.e. an actual trailing
+  `key: value` paragraph — not merely the same text occurring somewhere in
+  ordinary commit-body prose) named `ARGUS-INSTRUCTION-ID` whose value
+  exactly equals the ACTIVE instruction's `INSTRUCTION_ID`. A duplicate or
+  conflicting trailer, extra text appended to the value, or no trailer at
+  all are all rejected. This makes concurrent, unattributed branch movement
+  during a run visible and rejected rather than silently accepted because
+  local/remote `HEAD` happened to match again by the time the run finished.
+
+**Git-command failures fail closed, never open.** Every safety-critical Git
+read the watcher performs (`git status`, `git diff`, `git log`,
+`git rev-list`, `git interpret-trailers`, …) is treated as an explicit
+verification failure — never as "clean", "no drift", "no merges", or "no
+commits to check" — if the underlying command itself fails (nonzero exit,
+timeout, or unparseable output). A transient Git error must never be able
+to make an unsafe condition look safe.
 
 ## 8. End-of-work rule
 
@@ -318,10 +383,11 @@ Whenever authorized work is finished:
 6. Update `docs/BUILD_STATE.md`.
 7. Commit. When running under the local watcher
    (`scripts/argus_orchestrator_watch.py`), every commit made during the run
-   — including any documentation/hash-fill commit — must carry the exact
-   commit-message trailer `ARGUS-INSTRUCTION-ID: <INSTRUCTION_ID>` on its
-   own line, or the watcher rejects the entire run regardless of anything
-   else it produced.
+   — including any documentation/hash-fill commit — must carry exactly one
+   real, terminal Git trailer `ARGUS-INSTRUCTION-ID: <INSTRUCTION_ID>` (a
+   trailing `key: value` paragraph, not merely that text appearing in
+   ordinary body prose), or the watcher rejects the entire run regardless of
+   anything else it produced.
 8. Push.
 9. Verify a clean working tree (`git status --porcelain` empty).
 10. **STOP.**

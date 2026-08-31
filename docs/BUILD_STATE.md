@@ -80,8 +80,30 @@ known_blockers:
     string-sequence phase gating (`0, 1, 1.5, 2, ..., 6, 6.5, ..., 11`) via
     a new `APPROVES_PHASE` field; strict instruction-field parsing; and a
     conservative, ordered post-run verification sequence. 26 new/updated
-    adversarial regression tests. This is operational tooling, not ARGUS
-    phase work — `current_phase` above is unaffected.
+    adversarial regression tests.
+  - `orchestration/checkpoints/watcher_remediation_3.md` — a third,
+    orchestrator-requested remediation pass (instruction
+    `argus-watcher-remediation-003`), rejecting round 2 as still fail-open
+    in several places and requiring: a terminal, non-retryable
+    `QUARANTINED` state (with a manual `--reset-quarantine` recovery
+    procedure) the moment the instructions file is found modified —
+    checked first and unconditionally, closing a bypass where a
+    self-authored next instruction could otherwise launch on a later tick;
+    tightened `TARGET_COMMIT` provenance (exactly one instruction-only
+    commit whose parent is exactly the target; no `TARGET_COMMIT == HEAD`;
+    no multi-commit or merge gaps); every safety-critical Git read now
+    fails closed (`None`/explicit-failure) rather than defaulting to
+    empty/clean/absent on a command error; commit attribution via a real
+    `git interpret-trailers`-parsed terminal trailer, not text anywhere in
+    body prose; broadened launch-exception handling that never leaves a
+    stale `RUNNING` state, with raw Claude subprocess output never logged
+    at all (only whitelisted metadata); real canonical-UTC timestamp
+    parsing (not shape-only regex) for both instructions and handoffs; and
+    tightened evidence linkage (exact checkpoint-bytes embedding in the
+    bundle, exactly-once/full-SHA checkpoint identity fields, handoff
+    `CURRENT_PHASE` matching `AUTHORIZED_PHASE`, required section
+    headings). 74 total watcher tests (up from 51). This is operational
+    tooling, not ARGUS phase work — `current_phase` above is unaffected.
 
 ## Rules
 
