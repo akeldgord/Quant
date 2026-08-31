@@ -56,6 +56,20 @@ again for three further findings:
   documents why a safety-ceiling breach is the one case this provider
   surface cannot distinguish from provider-side pruning -- both leave the
   watermark exactly where it was, so the next call safely retries.
+
+Phase 1 remediation round 3 (argus-phase-1-remediation-003), finding #2:
+round 2's pagination fix still *assumed* a persisted boundary was reached
+whenever a page came back short/empty, without ever directly observing
+that boundary signature -- indistinguishable from the provider's
+retained history simply ending early (pruning/retention limits/a lagging
+node). :meth:`ReconciliationEngine._fetch_all_pages` no longer passes
+``until_signature`` to the provider at all (Solana's own ``until`` is
+exclusive, so honoring it would make the boundary itself unobservable);
+it walks purely via ``before_signature`` and only reports success once
+the boundary signature is directly matched in the provider's own
+returned sequence. An empty/short page reached *without* that direct
+match is now its own distinct failure (from bootstrap's ordinary
+"reached the true start of history", which needs no boundary at all).
 """
 
 from __future__ import annotations
@@ -469,12 +483,14 @@ class ReconciliationEngine:
         exception, which the caller handles separately since nothing was
         fetched *this* page.
 
-        Finding #10 validates, beyond the original single-step
+        Finding #10 (round 2) validates, beyond the original single-step
         non-progressing-cursor check:
 
         - **ordering**: every signature's slot must be non-increasing as
           pagination walks newest-to-oldest, within a page and across
-          page boundaries;
+          page boundaries (same-slot entries are never treated as
+          ordering violations -- Solana gives no total order within one
+          slot, and this function never fabricates one);
         - **cross-page uniqueness / cursor cycles**: the same signature
           must never appear twice. This single check is deliberately what
           catches both an immediately-repeated cursor *and* a multi-step
@@ -483,38 +499,67 @@ class ReconciliationEngine:
           (mirroring real Solana pagination), so *any* cursor repeating,
           at any distance, is definitionally the same signature
           reappearing in a page's contents, which this check catches
-          immediately, per-item, the moment it happens -- there is no
-          repeated-cursor scenario a duplicate-signature check does not
-          already cover, so tracking cursor values separately would only
-          ever detect the same fault later, redundantly;
-        - **boundary reachability**: a page shorter than ``page_size`` (or
-          empty) is the provider's own signal that it walked all the way
-          back to ``boundary_signature`` -- the only way this function
-          reports success. Hitting ``max_pages`` first means that signal
-          was never received.
+          immediately, per-item, the moment it happens.
+
+        Finding #2 (round 3): a persisted boundary is no longer merely
+        *assumed* reached because a page came back short/empty -- that
+        signal alone cannot distinguish "we truly walked all the way back
+        to the boundary" from "the provider's retained history for this
+        wallet ends before the boundary" (pruning, a retention limit, an
+        incomplete/lagging RPC node). This function therefore never passes
+        ``until_signature`` to the provider: Solana's own ``until``
+        semantics are exclusive, so honoring it would mean the boundary
+        transaction itself is never returned to us, making direct
+        observation impossible. Instead it walks purely via
+        ``before_signature`` and watches every returned item for a
+        signature match against ``boundary_signature`` -- only that
+        direct, positive observation proves the gap is fully and
+        continuously covered, matching the boundary's real address
+        membership, not merely its absence from a short page. The
+        bootstrap case (``boundary_signature is None``, nothing to
+        confirm) needs no such observation and is handled by the plain
+        ``boundary_signature is None`` checks below -- an empty/short page
+        there is still the ordinary, successful "reached the true start of
+        this wallet's history" outcome, exactly as before.
 
         A safety-ceiling breach and provider-side pruning/retention limits
-        are indistinguishable from this provider surface alone (Solana RPC
-        has no explicit "this history was pruned" signal); the ceiling
-        message says so explicitly rather than claiming to know which one
-        occurred. Either way the watermark is left untouched by the
-        caller, so the next ``reconcile()`` call safely retries from the
-        same boundary once an operator has investigated/raised limits.
+        remain indistinguishable from this provider surface alone (Solana
+        RPC has no explicit "this history was pruned" signal); every
+        failure message here says so explicitly rather than claiming to
+        know which one occurred. Every failure path leaves the watermark
+        untouched (the caller never advances it past an unfetched or
+        unverified item), so the next ``reconcile()`` call safely retries
+        from the exact same boundary once an operator has investigated.
         """
         all_pages: list[SignatureInfo] = []
         seen_signatures: set[str] = set()
         before_cursor: str | None = None
         last_slot: int | None = None
 
+        def _boundary_not_observed_reason(page_number: int) -> str:
+            return (
+                f"pagination boundary not observed: address history for {wallet_address!r} "
+                f"ended (page {page_number}) before persisted boundary signature "
+                f"{boundary_signature!r} was directly observed in the provider's own "
+                "address-history sequence -- indistinguishable from this provider surface "
+                "alone from provider-side pruning/retention limits, an incomplete/lagging RPC "
+                "node, or genuine data loss; the watermark is left untouched so the next "
+                "reconcile() call safely retries, but an operator should independently confirm "
+                "whether the boundary signature is still retrievable (e.g. via "
+                "getSignatureStatuses/getTransaction against a different, more complete "
+                "provider) before manually advancing past this gap"
+            )
+
         for page_number in range(1, self._max_pages + 1):
             page = await self._chain_provider.get_signatures_for_address(
                 wallet_address,
-                until_signature=boundary_signature,
                 before_signature=before_cursor,
                 limit=self._page_size,
             )
             if not page:
-                return all_pages, ""
+                if boundary_signature is None:
+                    return all_pages, ""
+                return all_pages, _boundary_not_observed_reason(page_number)
 
             for item in page:
                 if last_slot is not None and item.slot > last_slot:
@@ -524,24 +569,43 @@ class ReconciliationEngine:
                         "provider violated newest-first ordering"
                     )
                 last_slot = item.slot
+                if item.signature == boundary_signature:
+                    # The boundary itself is deliberately excluded from the
+                    # result and never checked against seen_signatures --
+                    # it is expected old evidence from a prior fetch, not
+                    # part of this gap's own new-item set. Direct
+                    # observation is the success signal (finding #2).
+                    return all_pages, ""
                 if item.signature in seen_signatures:
                     return all_pages, (
                         f"duplicate signature {item.signature!r} observed across pages (page "
                         f"{page_number}) -- provider pagination overlap or cursor cycle detected"
                     )
                 seen_signatures.add(item.signature)
+                all_pages.append(item)
 
-            all_pages.extend(page)
             before_cursor = page[-1].signature
             if len(page) < self._page_size:
-                return all_pages, ""
+                if boundary_signature is None:
+                    return all_pages, ""
+                return all_pages, _boundary_not_observed_reason(page_number)
+
+        if boundary_signature is None:
+            return all_pages, (
+                f"safety ceiling of {self._max_pages} pages exceeded during initial bootstrap "
+                f"pagination for {wallet_address!r} without reaching the true start of this "
+                "wallet's history -- raise max_pages/page_size or investigate provider "
+                "retention, then retry (the persisted watermark is unchanged, so the next "
+                "reconcile() call safely resumes from the same point)"
+            )
         return all_pages, (
-            f"safety ceiling of {self._max_pages} pages exceeded without confirming the gap "
-            f"boundary was reached beyond signature {before_cursor!r} -- a large real backlog "
-            "and provider-side pruning/retention limits are indistinguishable from this provider "
-            "surface alone; raise max_pages/page_size or investigate provider retention, then "
-            "retry (the persisted watermark is unchanged, so the next reconcile() call safely "
-            "resumes from the same boundary)"
+            f"safety ceiling of {self._max_pages} pages exceeded without observing the "
+            f"persisted boundary signature {boundary_signature!r} in the provider's own "
+            "address-history sequence -- a large real backlog and provider-side "
+            "pruning/retention limits are indistinguishable from this provider surface alone; "
+            "raise max_pages/page_size or investigate provider retention, then retry (the "
+            "persisted watermark is unchanged, so the next reconcile() call safely resumes "
+            "from the same boundary)"
         )
 
     async def _process_one_item(

@@ -551,10 +551,14 @@ async def test_gap_larger_than_one_page_is_fully_paginated_with_no_loss() -> Non
 
 
 @pytest.mark.asyncio
-async def test_boundary_present_pagination_respects_until_across_pages() -> None:
+async def test_boundary_present_pagination_directly_observes_boundary_across_pages() -> None:
     """Two reconcile() calls, each fully paginated: the second must only
     pick up the new gap after the first call's watermark boundary, not
-    re-walk everything from the start."""
+    re-walk everything from the start. Round 3, finding #2: this is
+    proven by directly observing the boundary signature reappear in the
+    provider's own address-history sequence (no `until_signature` is
+    passed to the provider at all any more), not by trusting an
+    empty/short page as an indirect signal."""
     provider = FakeChainProvider()
     for i in range(5):
         provider.add_transaction(f"sig-{i}", slot=i, raw_payload={"tx": str(i)})
@@ -573,6 +577,10 @@ async def test_boundary_present_pagination_respects_until_across_pages() -> None
     watermark = await store.get(WALLET)
     assert watermark is not None
     assert watermark.last_reconciled_signature == "sig-6"
+    # No call ever passes until_signature -- the boundary is confirmed by
+    # direct observation in the returned sequence, not provider-side
+    # truncation (finding #2).
+    assert all(until is None for until, _before, _limit in provider.list_calls)
 
 
 @pytest.mark.asyncio
@@ -739,6 +747,160 @@ async def test_exact_full_final_page_is_not_mistaken_for_an_unresolved_gap() -> 
     watermark = await store.get(WALLET)
     assert watermark is not None
     assert watermark.last_reconciled_signature == "sig-3"
+
+
+# --- Phase 1 remediation round 3, finding #2: evidence-bearing boundary ---
+
+
+@pytest.mark.asyncio
+async def test_no_new_events_with_boundary_as_the_newest_signature() -> None:
+    """The boundary is the very first item the provider returns -- zero
+    new events, and the boundary is observed on the very first page."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-boundary", slot=0, raw_payload={"tx": "boundary"})
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore(
+        {WALLET: WalletWatermark(wallet_address=WALLET, last_reconciled_signature="sig-boundary")}
+    )
+    engine = _engine(provider, ledger, store, page_size=10)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is True
+    assert result.new_events == 0
+    assert len(provider.list_calls) == 1  # boundary found on the very first page
+
+
+@pytest.mark.asyncio
+async def test_multiple_new_pages_before_the_boundary_is_observed() -> None:
+    """The boundary sits several pages back -- every intervening page is
+    collected as new, and the boundary is directly observed (not
+    inferred) once reached."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-boundary", slot=0, raw_payload={"tx": "boundary"})
+    for i in range(1, 6):
+        provider.add_transaction(f"sig-{i}", slot=i, raw_payload={"tx": str(i)})
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore(
+        {WALLET: WalletWatermark(wallet_address=WALLET, last_reconciled_signature="sig-boundary")}
+    )
+    engine = _engine(provider, ledger, store, page_size=2)  # forces 3 pages to reach the boundary
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is True
+    assert result.new_events == 5
+    assert len(provider.list_calls) == 3
+    for i in range(1, 6):
+        assert (f"sig-{i}", WALLET, "TRANSACTION_OBSERVED") in ledger.rows
+    assert ("sig-boundary", WALLET, "TRANSACTION_OBSERVED") not in ledger.rows
+
+
+@pytest.mark.asyncio
+async def test_boundary_exactly_at_a_page_edge() -> None:
+    """The boundary is the very last item of a page (not the first item
+    of the next one) -- must still be directly observed and excluded."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-boundary", slot=0, raw_payload={"tx": "boundary"})
+    provider.add_transaction("sig-1", slot=1, raw_payload={"tx": "1"})
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore(
+        {WALLET: WalletWatermark(wallet_address=WALLET, last_reconciled_signature="sig-boundary")}
+    )
+    # page_size=2 means page 1 is exactly [sig-1, sig-boundary] -- the
+    # boundary lands on the last slot of the first page.
+    engine = _engine(provider, ledger, store, page_size=2)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is True
+    assert result.new_events == 1
+    assert len(provider.list_calls) == 1
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.last_reconciled_signature == "sig-1"
+
+
+@pytest.mark.asyncio
+async def test_empty_page_before_boundary_observed_fails_degraded_as_pruned() -> None:
+    """A watermark boundary that no longer exists anywhere in the
+    provider's retained history (simulating pruning/retention limits)
+    must fail DEGRADED with an explicit reason -- never silently succeed
+    just because the page came back empty."""
+    provider = FakeChainProvider()  # no history at all -- the boundary is gone
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore(
+        {WALLET: WalletWatermark(wallet_address=WALLET, last_reconciled_signature="sig-long-gone")}
+    )
+    engine = _engine(provider, ledger, store, page_size=10)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is False
+    assert "boundary not observed" in result.reason
+    assert "sig-long-gone" in result.reason
+    assert result.new_events == 0
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    # The watermark itself is untouched -- still points at the same
+    # boundary, so the next reconcile() call safely retries.
+    assert watermark.last_reconciled_signature == "sig-long-gone"
+    assert watermark.wallet_live_state == "DEGRADED"
+
+
+@pytest.mark.asyncio
+async def test_short_page_before_boundary_observed_fails_degraded_as_pruned() -> None:
+    """A page shorter than page_size that still never contains the
+    boundary is the same pruned-history failure as an empty page -- the
+    old code would have wrongly treated "short page" alone as success."""
+    provider = FakeChainProvider()
+    for i in range(3):  # fewer than page_size=10 -- a "short" page
+        provider.add_transaction(f"sig-{i}", slot=i, raw_payload={"tx": str(i)})
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore(
+        {WALLET: WalletWatermark(wallet_address=WALLET, last_reconciled_signature="sig-long-gone")}
+    )
+    engine = _engine(provider, ledger, store, page_size=10)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is False
+    assert "boundary not observed" in result.reason
+    assert result.new_events == 0
+    # Nothing from the short, unverified page was durably recorded --
+    # a partially-collected gap must never be treated as complete.
+    assert len(ledger.rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_safety_ceiling_with_a_pending_boundary_names_the_boundary() -> None:
+    """The ceiling-exceeded message must be distinguishable from the
+    bootstrap (no-boundary) case and must name the specific boundary
+    signature that was never confirmed."""
+    provider = FakeChainProvider()
+    for i in range(10):
+        provider.add_transaction(f"sig-{i}", slot=i, raw_payload={"tx": str(i)})
+    # "sig-never-reached" never actually appears in provider history --
+    # equivalent to a boundary the ceiling is hit before ever finding.
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore(
+        {
+            WALLET: WalletWatermark(
+                wallet_address=WALLET, last_reconciled_signature="sig-never-reached"
+            )
+        }
+    )
+    engine = _engine(provider, ledger, store, page_size=2, max_pages=2)  # only 4 of 10 fit
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is False
+    assert "safety ceiling" in result.reason
+    assert "observing" in result.reason
+    assert "sig-never-reached" in result.reason
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.last_reconciled_signature == "sig-never-reached"  # untouched
 
 
 # --- Phase 1 remediation round 2, finding #1: independent recovery dimensions

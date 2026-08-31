@@ -35,9 +35,11 @@ from argus.ingestion.reconciliation import (
     ChainEventDraft,
     ReconciliationEngine,
     ReconciliationTrigger,
+    WalletWatermark,
 )
 from argus.ingestion.swap_repository import SqlSwapRecorder
 from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
+from argus.ingestion.watermark_repository import SqlWatermarkStore
 from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
 from argus.providers import SignatureInfo, StreamNotification
 
@@ -660,6 +662,65 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
                     event_id=event_id, wallet_address=wallet, parsed=parsed_v1, created_at=now
                 )
                 assert repeat_added is False
+    finally:
+        await _cleanup(admin_engine, wallet)
+        await engine.dispose()
+
+
+async def test_replay_pruned_boundary_never_advances_watermark_or_loses_prior_state(
+    admin_engine,
+) -> None:
+    """Phase 1 remediation round 3, finding #2: a persisted boundary
+    signature that no longer exists anywhere in the provider's retained
+    history (pruning/retention limits), replayed via a fresh engine
+    instance each time (simulating two independent process restarts),
+    must consistently fail DEGRADED on every replay without ever
+    advancing the watermark or fabricating progress -- proven against a
+    real database, not just in-memory fakes."""
+    wallet = f"{WALLET}-pruned-{uuid.uuid4().hex[:8]}"
+    engine = create_async_engine(connection_for_role(load_config(), DbRole.INGEST).as_asyncpg_url())
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    provider = _FakeChainProvider()  # no history at all -- the persisted boundary is gone
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            await SqlWatermarkStore(session).save(
+                WalletWatermark(
+                    wallet_address=wallet,
+                    last_reconciled_signature="sig-pruned-boundary",
+                    updated_at=Clock().utc_now(),
+                )
+            )
+
+        for _ in range(2):  # replay twice, simulating two independent process restarts
+            recon_engine = ReconciliationEngine(
+                chain_provider=provider,
+                unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+                clock=Clock(),
+                provider_name="replay-test",
+                parser_version=PARSER_VERSION,
+            )
+            result = await recon_engine.reconcile(wallet, ReconciliationTrigger.PROCESS_RESTART)
+            assert result.ok is False
+            assert "boundary not observed" in result.reason
+            assert "sig-pruned-boundary" in result.reason
+
+        async with sessionmaker() as session:
+            watermark = await SqlWatermarkStore(session).get(wallet)
+            assert watermark is not None
+            assert watermark.last_reconciled_signature == "sig-pruned-boundary"
+            assert watermark.wallet_live_state == "DEGRADED"
+            rows = (
+                (
+                    await session.execute(
+                        select(ChainEvent).where(ChainEvent.wallet_address == wallet)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(rows) == 0  # nothing was ever fabricated as progress
     finally:
         await _cleanup(admin_engine, wallet)
         await engine.dispose()
