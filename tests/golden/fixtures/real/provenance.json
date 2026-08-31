@@ -1,20 +1,39 @@
 {
-  "real_mainnet_ambiguous_multi_asset": {
-    "category": "real_mainnet_ambiguous_multi_asset",
+  "real_mainnet_dca_close_dual_asset_transfer_in": {
+    "category": "real_mainnet_dca_close_dual_asset_transfer_in",
     "chain": "solana",
     "expected_classification": "TRANSFER_IN",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T12:02:19.449410+00:00",
-    "original_sha256": "b8a30eeab2be9b0bfabb83459e0717a2a236eaeaf321cc8c30fa6dca5aac90a4",
+    "imported_at": "2026-08-31T14:00:35.174588+00:00",
+    "observed_classification": "TRANSFER_IN",
+    "observed_confidence": "1.000",
+    "original_sha256": "22e5dea87dd24c63c69a3bbf0f97ab914a2ea010cd98eb5b6b2cebabd514c860",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "canonicalized JSON formatting only (no envelope to unwrap)",
     "sanitized_sha256": "ac0eb32ac7d4acb5beaaa2e6204e50213b9253670c4bbc9eb9c33a0501397314",
     "signature": "5EZNycMMgz8k1RNxVPxoMB2pCh97qUZ9R4PoxbgGvigsM26poK2AHSXYdHUetWKzsP7QchVfBPixqzwx2HULaSpb",
     "slot": 292574497,
     "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "unwrap_json_array",
+        "output_sha256": "ac0eb32ac7d4acb5beaaa2e6204e50213b9253670c4bbc9eb9c33a0501397314"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "ac0eb32ac7d4acb5beaaa2e6204e50213b9253670c4bbc9eb9c33a0501397314"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "ac0eb32ac7d4acb5beaaa2e6204e50213b9253670c4bbc9eb9c33a0501397314"
+      }
+    ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+    "upstream_git_blob_sha1": "4afec180d7a7ab59a637a93bf7d60283f09514ba",
     "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/jupiterDca_CloseDca_0.json (Jupiter DCA order close: signer receives two independent asset inflows -- an SOL rent refund and a released escrowed token balance -- from a program-owned account, with no counter-asset given up in this instruction; not a market swap. Single-element JSON array in upstream, unwrapped to the bare getTransaction object)",
+    "upstream_path": "solana/data/jupiterDca_CloseDca_0.json (Jupiter DCA order close: signer receives two independent asset inflows -- an SOL rent refund and a released escrowed token balance -- from a program-owned account, with no counter-asset given up in this instruction; not a market swap, and NOT claimed to satisfy the 'ambiguous multi-asset transaction' required category since the parser resolves it decisively to TRANSFER_IN, not UNKNOWN -- see round 4 finding #1. Single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
     "upstream_repo": "0xjeffro/tx-parser",
     "wallet_address": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ"
   },
@@ -23,17 +42,36 @@
     "chain": "solana",
     "expected_classification": "SWAP_COMPLEX",
     "expected_confidence": "0.700",
-    "imported_at": "2026-08-31T12:02:06.932133+00:00",
-    "original_sha256": "e06251f33548e5da2d44b78a22b61e67e42c9512bb58db4e7962f12c597f64d7",
+    "imported_at": "2026-08-31T14:00:35.169362+00:00",
+    "observed_classification": "SWAP_COMPLEX",
+    "observed_confidence": "0.700",
+    "original_sha256": "86187b5e4d46a259faed6d48927fabdccc203a59ac827d1ddcb3ac4c27faeb0e",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "canonicalized JSON formatting only (no envelope to unwrap)",
     "sanitized_sha256": "985270af240b7652dcd8995c45e8605483496f136592f847a95995f5480c6099",
     "signature": "51SfoFAgv3nxEaajLFPCcQpnYaqoLdfZh3ZBWGdNB6c4VSRLcfNzxTnK77ggbsR5HjhDzakQsy35uFZg8KtFAkSj",
     "slot": 260327797,
     "transaction_version": "0",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "unwrap_json_array",
+        "output_sha256": "985270af240b7652dcd8995c45e8605483496f136592f847a95995f5480c6099"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "985270af240b7652dcd8995c45e8605483496f136592f847a95995f5480c6099"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "985270af240b7652dcd8995c45e8605483496f136592f847a95995f5480c6099"
+      }
+    ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+    "upstream_git_blob_sha1": "b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35",
     "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json (Jupiter Aggregator V6 sharedAccountsRoute -- Jupiter's own multi-hop routing instruction, touching 4 distinct mints incl. wSOL/USDC/ORE/an intermediate token; single-element JSON array in upstream, unwrapped to the bare getTransaction object)",
+    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json (Jupiter Aggregator V6 sharedAccountsRoute -- Jupiter's own multi-hop routing instruction, touching 4 distinct mints incl. wSOL/USDC/ORE/an intermediate token; single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
     "upstream_repo": "0xjeffro/tx-parser",
     "wallet_address": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS"
   },
@@ -42,17 +80,36 @@
     "chain": "solana",
     "expected_classification": "SWAP_SIMPLE",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T12:02:07.647668+00:00",
-    "original_sha256": "1d21e0c2eff083374d6e7758c7b704af969575fac6de838d9bd737cf2e5832d4",
+    "imported_at": "2026-08-31T14:00:35.172132+00:00",
+    "observed_classification": "SWAP_SIMPLE",
+    "observed_confidence": "1.000",
+    "original_sha256": "fd5d50ac17558513a4e6880cb27326f44cc3adf8611460969a5ecd6e2aa6b662",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "canonicalized JSON formatting only (no envelope to unwrap)",
     "sanitized_sha256": "4c9cc0cea335e59930a5a18b3cf76a1f1a368877ba1a97779f6ecfdd2fa72b14",
     "signature": "2XgzfkWeDeua4oemWXrj3JzhxVsV4mGsqVZfETSbhn6hGFuLvi2fjdK2TGcmuQQnZSEjUmMmPjUnCFWDebGJcgWQ",
     "slot": 305539244,
     "transaction_version": "0",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "unwrap_json_array",
+        "output_sha256": "4c9cc0cea335e59930a5a18b3cf76a1f1a368877ba1a97779f6ecfdd2fa72b14"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "4c9cc0cea335e59930a5a18b3cf76a1f1a368877ba1a97779f6ecfdd2fa72b14"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "4c9cc0cea335e59930a5a18b3cf76a1f1a368877ba1a97779f6ecfdd2fa72b14"
+      }
+    ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+    "upstream_git_blob_sha1": "eb7e24823b36abbcfd049942b3fcf6b27763fa12",
     "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_2.json (signer sells ~1% of a large token holding for SOL, keeping the remainder; single-element JSON array in upstream, unwrapped to the bare getTransaction object)",
+    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_2.json (signer sells ~1% of a large token holding for SOL, keeping the remainder; single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
     "upstream_repo": "0xjeffro/tx-parser",
     "wallet_address": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8"
   },
@@ -61,17 +118,36 @@
     "chain": "solana",
     "expected_classification": "SWAP_SIMPLE",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T12:01:52.860798+00:00",
-    "original_sha256": "0bc97f2354d73d4ba05ea719085525978aedf5c129b5bda72d405baf2cda963c",
+    "imported_at": "2026-08-31T14:00:11.770113+00:00",
+    "observed_classification": "SWAP_SIMPLE",
+    "observed_confidence": "1.000",
+    "original_sha256": "b5428db5e9f8f15427ea8a847e34b8a16c9c51e8c33bf682607727225ad1f29a",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "canonicalized JSON formatting only (no envelope to unwrap)",
     "sanitized_sha256": "68b815568bec0c85132be502c975c34e8f7d3b2e733a6fe763f19a394aee3c44",
     "signature": "4U8kypMuCUCkR6teu2Vn8ujaEJUR3dcUU5QExZxSMMeJ5fRTvYfWs5M5AB9yNjjHKAQ4w433QVyUivc3Pp8gvG1R",
     "slot": 290506981,
     "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "unwrap_json_array",
+        "output_sha256": "68b815568bec0c85132be502c975c34e8f7d3b2e733a6fe763f19a394aee3c44"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "68b815568bec0c85132be502c975c34e8f7d3b2e733a6fe763f19a394aee3c44"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "68b815568bec0c85132be502c975c34e8f7d3b2e733a6fe763f19a394aee3c44"
+      }
+    ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+    "upstream_git_blob_sha1": "d8f98b52dda0de05f9868ddb0605a25e818beaef",
     "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/pumpfun_buy_0.json (single-element JSON array in upstream; unwrapped to the bare getTransaction object)",
+    "upstream_path": "solana/data/pumpfun_buy_0.json (single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
     "upstream_repo": "0xjeffro/tx-parser",
     "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE"
   },
@@ -80,15 +156,34 @@
     "chain": "solana",
     "expected_classification": "TRANSFER_OUT",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T09:48:13.904678+00:00",
+    "imported_at": "2026-08-31T13:59:36.167261+00:00",
+    "observed_classification": "TRANSFER_OUT",
+    "observed_confidence": "1.000",
     "original_sha256": "bc3d73b38086d48cace8811cb841129b510e1b2f23933777953f498ff127e20b",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "unwrapped JSON-RPC envelope down to `result`; canonicalized JSON formatting",
     "sanitized_sha256": "5db8a5ebf827ad131bd0e855d5f9e6f8a04ff041d71d23700a04e3dffc9f86f0",
     "signature": "2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr",
     "slot": 419246800,
     "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": false,
+        "name": "unwrap_json_array",
+        "output_sha256": "92b7e2b92c5e62e12e6c2b37df56da22efa7a278f46a6a282c2b6e5dd82a52c3"
+      },
+      {
+        "applied": true,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "5db8a5ebf827ad131bd0e855d5f9e6f8a04ff041d71d23700a04e3dffc9f86f0"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "5db8a5ebf827ad131bd0e855d5f9e6f8a04ff041d71d23700a04e3dffc9f86f0"
+      }
+    ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
+    "upstream_git_blob_sha1": "2f0b06a43a38ec1416e6b7935ed667a07ae90115",
     "upstream_license": "MIT",
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json",
     "upstream_repo": "solana-labs/explorer",
@@ -99,15 +194,34 @@
     "chain": "solana",
     "expected_classification": "TRANSFER_IN",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T09:48:34.015976+00:00",
+    "imported_at": "2026-08-31T13:59:36.165666+00:00",
+    "observed_classification": "TRANSFER_IN",
+    "observed_confidence": "1.000",
     "original_sha256": "1a6f6490fb750dcd28086eac4a6871aebc25115c483c25e623284a62099c7503",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "unwrapped JSON-RPC envelope down to `result`; canonicalized JSON formatting",
     "sanitized_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662",
     "signature": "2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn",
     "slot": 399683256,
     "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": false,
+        "name": "unwrap_json_array",
+        "output_sha256": "ec513f3afd7650e0deca763a49cf55f48899e883bb9f8f8522be0d4c40973ccd"
+      },
+      {
+        "applied": true,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662"
+      }
+    ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
+    "upstream_git_blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
     "upstream_license": "MIT",
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
     "upstream_repo": "solana-labs/explorer",
@@ -118,15 +232,34 @@
     "chain": "solana",
     "expected_classification": "TRANSFER_OUT",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T09:48:04.698040+00:00",
+    "imported_at": "2026-08-31T13:59:36.164536+00:00",
+    "observed_classification": "TRANSFER_OUT",
+    "observed_confidence": "1.000",
     "original_sha256": "1a6f6490fb750dcd28086eac4a6871aebc25115c483c25e623284a62099c7503",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "unwrapped JSON-RPC envelope down to `result`; canonicalized JSON formatting",
     "sanitized_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662",
     "signature": "2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn",
     "slot": 399683256,
     "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": false,
+        "name": "unwrap_json_array",
+        "output_sha256": "ec513f3afd7650e0deca763a49cf55f48899e883bb9f8f8522be0d4c40973ccd"
+      },
+      {
+        "applied": true,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "7010b021311ce07db065a004fb2fab38b9b9013ab9b9173aab54280a127d0662"
+      }
+    ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
+    "upstream_git_blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
     "upstream_license": "MIT",
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
     "upstream_repo": "solana-labs/explorer",
@@ -137,17 +270,36 @@
     "chain": "solana",
     "expected_classification": "SWAP_SIMPLE",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T12:01:53.498726+00:00",
-    "original_sha256": "63bf3eb47ea7f7047c3a174d6a824e7edb3eb0a3bb018573f5a0fe0bcf5b7013",
+    "imported_at": "2026-08-31T14:00:35.157699+00:00",
+    "observed_classification": "SWAP_SIMPLE",
+    "observed_confidence": "1.000",
+    "original_sha256": "37eea19a5dbe1b7416397c4d8bf0347e93fb65386df7fb8c348f98043cc9fea0",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "canonicalized JSON formatting only (no envelope to unwrap)",
     "sanitized_sha256": "7ab07b9cf3c58a08f94f13f8033f60047848f486a6c6bd5ae7d6cac444ed60e8",
     "signature": "3aQZsNRUbNXpH54GQEaxFpWZsmL554cYGGtWqqoypz8b6LUDYprbRd9AwgivXRLtFBYCU6MU6e9ANurwP8dCMV6",
     "slot": 292734971,
     "transaction_version": "0",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "unwrap_json_array",
+        "output_sha256": "7ab07b9cf3c58a08f94f13f8033f60047848f486a6c6bd5ae7d6cac444ed60e8"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "7ab07b9cf3c58a08f94f13f8033f60047848f486a6c6bd5ae7d6cac444ed60e8"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "7ab07b9cf3c58a08f94f13f8033f60047848f486a6c6bd5ae7d6cac444ed60e8"
+      }
+    ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+    "upstream_git_blob_sha1": "fa277c7d4ff997f320c38f8e15e8e02ec49983cb",
     "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_0.json (single-element JSON array in upstream; unwrapped to the bare getTransaction object)",
+    "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_0.json (single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
     "upstream_repo": "0xjeffro/tx-parser",
     "wallet_address": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5"
   },
@@ -156,17 +308,36 @@
     "chain": "solana",
     "expected_classification": "SWAP_SIMPLE",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T12:02:06.332937+00:00",
-    "original_sha256": "6defdde35211c142d673aabf68594aebb2d122c60209e7accc59a8049edf6b15",
+    "imported_at": "2026-08-31T14:00:35.164343+00:00",
+    "observed_classification": "SWAP_SIMPLE",
+    "observed_confidence": "1.000",
+    "original_sha256": "146d4462119960d14cb97637dcade67995f0ca386cf13a837933adc356ff4a45",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "canonicalized JSON formatting only (no envelope to unwrap)",
     "sanitized_sha256": "28f46f9dc24b6287478bfff963ea3fa99bf595af146130d238a57455097c0b8c",
     "signature": "rNMFZpBmbr6R8g4hStbC5qAictmWvGFQVTwQyXoCY6QDrcq9UV2QfHJ6oARNuS1VaUh3HVe799CDn44dWQReAye",
     "slot": 302096845,
     "transaction_version": "0",
+    "transform_manifest": [
+      {
+        "applied": true,
+        "name": "unwrap_json_array",
+        "output_sha256": "28f46f9dc24b6287478bfff963ea3fa99bf595af146130d238a57455097c0b8c"
+      },
+      {
+        "applied": false,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "28f46f9dc24b6287478bfff963ea3fa99bf595af146130d238a57455097c0b8c"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "28f46f9dc24b6287478bfff963ea3fa99bf595af146130d238a57455097c0b8c"
+      }
+    ],
     "upstream_commit": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+    "upstream_git_blob_sha1": "91f3b3675779c6a4fb0a994ef0ff1e91b9e79283",
     "upstream_license": "MPL-2.0",
-    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json (single-element JSON array in upstream; unwrapped to the bare getTransaction object)",
+    "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json (single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed)",
     "upstream_repo": "0xjeffro/tx-parser",
     "wallet_address": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy"
   },
@@ -175,15 +346,34 @@
     "chain": "solana",
     "expected_classification": "TRANSFER_OUT",
     "expected_confidence": "1.000",
-    "imported_at": "2026-08-31T09:48:21.775180+00:00",
+    "imported_at": "2026-08-31T14:00:11.767232+00:00",
+    "observed_classification": "TRANSFER_OUT",
+    "observed_confidence": "1.000",
     "original_sha256": "7f70d59e2e59b87544e418e425a8c48eef1b668be36d45a011d9a18461edfb8e",
     "parser_version": "generic_balance_delta_v1",
-    "sanitization_transform": "unwrapped JSON-RPC envelope down to `result`; canonicalized JSON formatting",
     "sanitized_sha256": "9ae611ab81aa422d33fd4c062613eec75f65bd5dc04d3fe3ea3312a6d677778d",
     "signature": "4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX",
     "slot": 419685246,
     "transaction_version": "legacy",
+    "transform_manifest": [
+      {
+        "applied": false,
+        "name": "unwrap_json_array",
+        "output_sha256": "34096e3e93356ebf77ed8d102892c5558b94383f494af4247e04e5039396f5d7"
+      },
+      {
+        "applied": true,
+        "name": "unwrap_json_rpc_envelope",
+        "output_sha256": "9ae611ab81aa422d33fd4c062613eec75f65bd5dc04d3fe3ea3312a6d677778d"
+      },
+      {
+        "applied": true,
+        "name": "canonicalize_json_formatting",
+        "output_sha256": "9ae611ab81aa422d33fd4c062613eec75f65bd5dc04d3fe3ea3312a6d677778d"
+      }
+    ],
     "upstream_commit": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
+    "upstream_git_blob_sha1": "cd7eeafc7fd99c4c723ebc3719737b8f127362b8",
     "upstream_license": "MIT",
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json",
     "upstream_repo": "solana-labs/explorer",

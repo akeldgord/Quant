@@ -198,3 +198,94 @@ at test-run time rather than embedding bytes) remain legitimate leads
 for a host with real RPC egress to capture and feed through
 `argus fixtures import-real-chain`, closing the two remaining gaps
 above.
+
+## Round 4 correction (argus-phase-1-remediation-004, finding #1)
+
+Round 3's own text above already disclosed, transparently, that the
+parser classifies `real_mainnet_ambiguous_multi_asset` as `TRANSFER_IN`
+at confidence 1.000, not `UNKNOWN` -- but it still counted that fixture
+toward the "ambiguous multi-asset transaction" required category ("7 of
+9 round-1-required categories now genuinely real-chain evidenced").
+Round 4's independent audit correctly rejected that count: this
+category's own acceptance bar is that the *parser* resolves the
+transaction as unresolved (`UNKNOWN`, ineligible for downstream
+confidence-gated action), not merely that the underlying transaction is
+structurally multi-asset. A parser that confidently and correctly
+resolves a genuinely multi-asset transaction to a definite classification
+is doing its job well -- it is simply not an instance of this category.
+
+**Corrected disposition: 6 of 9 required categories, not 7.** The fixture
+itself remains genuinely useful evidence (a real, license-clean, Jupiter
+DCA order-close transaction with two independent simultaneous asset
+inflows) and stays imported, but renamed from
+`real_mainnet_ambiguous_multi_asset` to
+`real_mainnet_dca_close_dual_asset_transfer_in` -- an honest name that
+does not imply it satisfies the ambiguous-transaction category -- and is
+kept strictly as an **additional** real-chain data point, mapped to no
+required category. See `docs/BUILD_STATE.md`/`docs/DECISION_LOG.md` for
+the corresponding correction to every other current-state-facing claim
+of "7 of 9"; round 3's own checkpoint
+(`orchestration/checkpoints/phase_1_remediation_3.md`) and its
+`docs/BUILD_STATE.md` phase-history row are left unmodified as immutable
+history of what was claimed at the time, per this project's existing
+convention for superseded rows.
+
+**Three categories are now genuinely open** (all previously searched for
+across rounds 2-3 without success -- see above): **ambiguous
+transaction** (the parser must actually classify `UNKNOWN` +
+ineligible), **multiple token-account/LP-style action**, and a
+**genuinely failed on-chain transaction** (non-null `meta.err`). No new
+repository search was conducted this round beyond re-confirming (via the
+same `raw.githubusercontent.com` read access already established) that
+every currently-imported fixture's true upstream bytes are exactly what
+this project's corrected provenance pipeline (round 4, finding #2)
+now preserves and can independently rebuild. Per the same explicit
+allowance every prior round has relied on: *"If a category cannot be
+sourced and independently supported from GitHub evidence, leave it NOT
+TESTED and return PARTIAL."* All three remain that, honestly, going into
+whatever round continues this search next.
+
+## Round 4 provenance rebuild (finding #2)
+
+All 10 currently-imported fixtures (the 9 already documented above, plus
+the renamed DCA-close fixture) were re-imported through a corrected
+pipeline (`argus.golden_fixtures`) that fixes a defect finding #2
+identified: `--input` had been, in practice, a copy an operator had
+already hand-unwrapped (`json.load(...)[0]`, re-serialized -- see the
+round 3 section above, which candidly documented doing exactly this)
+before handing it to the import command, so the recorded
+`original_sha256` was a hash of that already-modified copy, never the
+genuine upstream bytes, and there was no way to independently verify a
+fixture's provenance offline.
+
+The true raw upstream bytes for all 10 fixtures were re-fetched directly
+from `raw.githubusercontent.com` at the exact immutable commit SHAs
+already recorded in `provenance.json` (`0xjeffro/tx-parser@475b1ebff79a`,
+`solana-labs/explorer@f144a3103cb9`) -- confirmed byte-for-byte
+reproducing the exact sanitized fixture files already committed (zero
+fixture file content changed by this correction; only provenance
+metadata and the new `sources/` directory were added). Each fixture's
+provenance now carries its upstream git blob SHA-1, the raw bytes
+preserved verbatim in `sources/<blob-sha1>.source.json`, and a
+step-by-step transform manifest (`unwrap_json_array` ->
+`unwrap_json_rpc_envelope` -> `canonicalize_json_formatting`, each
+hashed) that `argus fixtures validate-real-chain` now independently
+replays from those preserved bytes, rather than trusting a stored hash
+against itself.
+
+## Round 4 non-circular expectations (finding #3)
+
+Every re-import above also now requires an explicit
+`--expected-classification`/`--expected-confidence` (an independently-
+reasoned claim, checked against -- never defined by -- the parser's own
+`observed_classification`/`observed_confidence`). For all 10 fixtures,
+the independently-asserted expectation was the same value round 2/3's
+per-fixture reasoning already documented above (each entry's own prose
+explaining, from the balance deltas and program instruction involved,
+what the transaction should parse to) -- and every one of them matches
+what the parser actually produces; none needed
+`--allow-observed-mismatch`. No genuine ambiguous or failed-transaction
+fixture was found this round (see the correction section above), so
+neither of finding #3's specific `UNKNOWN`+ineligible assertions apply
+yet -- they remain to be exercised once a fixture for either category is
+actually sourced.

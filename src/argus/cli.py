@@ -549,11 +549,29 @@ def fixtures_import_real_chain(
     upstream_license: str = typer.Option(
         ..., "--upstream-license", help="SPDX identifier of the upstream repository's license."
     ),
+    expected_classification: str = typer.Option(
+        ...,
+        "--expected-classification",
+        help="Independently-reasoned expected classification (e.g. 'SWAP_SIMPLE') -- checked "
+        "against, never defined by, what the parser actually produces.",
+    ),
+    expected_confidence: str = typer.Option(
+        ...,
+        "--expected-confidence",
+        help="Independently-reasoned expected confidence, e.g. '1.000'.",
+    ),
     wallet_address: str = typer.Option(
         "",
         "--wallet-address",
         help="Account to parse the transaction from the perspective of. Defaults to "
         "the transaction's fee payer (accountKeys[0]).",
+    ),
+    allow_observed_mismatch: bool = typer.Option(
+        False,
+        "--allow-observed-mismatch",
+        help="Import even though the parser's observed output does not match "
+        "--expected-classification/--expected-confidence. Only for deliberately capturing "
+        "a known-divergent case for tracking -- never to hide a bug.",
     ),
     fixtures_dir: str = typer.Option(
         "",
@@ -563,11 +581,13 @@ def fixtures_import_real_chain(
     ),
 ) -> None:
     """Offline import for one real-chain golden fixture (Phase 1
-    remediation round 2, finding #12): validates INPUT is a genuine
-    `getTransaction`-shaped payload, canonicalizes it, runs it through the
-    real parser, and records full provenance. Makes no network call of
-    its own -- INPUT must already contain a payload captured elsewhere
-    (this sandbox has GitHub read access but no general RPC egress)."""
+    remediation round 2, finding #12; round 4, findings #2/#3): validates
+    INPUT is a genuine, unmodified raw upstream capture, canonicalizes
+    it, preserves the raw bytes, runs it through the real parser, and
+    records full provenance including an independently-reasoned expected
+    outcome. Makes no network call of its own -- INPUT must already
+    contain a payload captured elsewhere, exactly as captured (this
+    sandbox has GitHub read access but no general RPC egress)."""
     from argus.golden_fixtures import (
         DEFAULT_REAL_FIXTURES_DIR,
         RealChainFixtureError,
@@ -582,7 +602,10 @@ def fixtures_import_real_chain(
             upstream_commit=upstream_commit,
             upstream_path=upstream_path,
             upstream_license=upstream_license,
+            expected_classification=expected_classification,
+            expected_confidence=expected_confidence,
             wallet_address=wallet_address or None,
+            allow_observed_mismatch=allow_observed_mismatch,
             fixtures_dir=Path(fixtures_dir) if fixtures_dir else DEFAULT_REAL_FIXTURES_DIR,
         )
     except RealChainFixtureError as exc:
@@ -592,6 +615,7 @@ def fixtures_import_real_chain(
     console.print(
         f"imported {category!r}: signature={record.signature} slot={record.slot} "
         f"expected={record.expected_classification} ({record.expected_confidence}) "
+        f"observed={record.observed_classification} ({record.observed_confidence}) "
         f"sanitized_sha256={record.sanitized_sha256}"
     )
 
