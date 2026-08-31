@@ -27,6 +27,28 @@ Every pre-existing row (recorded before this migration existed) is
 backfilled with the explicit sentinel ``'NOT_CAPTURED_PRE_R4_REMEDIATION'``
 rather than a fabricated hash -- ``swaps`` is derived, re-computable
 evidence, but still never silently rewritten with an invented value.
+
+Phase 1 remediation round 5, finding #8: ``downgrade()`` previously
+recreated the narrower pre-0007 ``(event_id, parser_version)`` unique
+constraint unconditionally. Once this revision has been live long enough
+for a second parser build to append an honest new ``swaps`` row for the
+same ``(event_id, parser_version)`` under a different ``build_hash`` --
+exactly the case this migration exists to allow -- that recreate raises
+a bare Postgres unique-violation, an opaque, undocumented failure that
+never actually proved anything about what downgrading a *populated*
+database does. The two honest options were a non-destructive downgrade
+that somehow keeps every row anyway (impossible without silently
+deleting, merging, or arbitrarily selecting one append-only row to keep
+-- forbidden), or a preflight check that fails closed with a precise,
+actionable reason before attempting the narrower constraint at all.
+``downgrade()`` now does the latter: it queries for any ``(event_id,
+parser_version)`` pair with more than one distinct ``build_hash`` and
+raises :class:`Downgrade0007IncompatibleDataError` naming exactly how
+many such pairs exist, refusing to touch the schema at all, before ever
+reaching ``DROP CONSTRAINT``/``DROP COLUMN``. When no such pair exists
+(the common case: at most one parser build has ever produced a ``swaps``
+row for each event), the downgrade proceeds exactly as before and is
+fully supported.
 """
 
 from __future__ import annotations
@@ -42,6 +64,16 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _BACKFILL_SENTINEL = "NOT_CAPTURED_PRE_R4_REMEDIATION"
+
+
+class Downgrade0007IncompatibleDataError(RuntimeError):
+    """Raised by :func:`downgrade` when the current ``swaps`` data cannot
+    be represented under the narrower pre-0007 ``(event_id,
+    parser_version)`` uniqueness: at least one pair has rows from more
+    than one distinct ``build_hash``. Downgrading anyway would require
+    silently deleting, merging, or arbitrarily selecting one of those
+    append-only rows to keep -- this project's evidence-preservation
+    discipline forbids all three, so the downgrade is refused instead."""
 
 
 def upgrade() -> None:
@@ -69,6 +101,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    conflicts = bind.execute(
+        sa.text(
+            "SELECT event_id, parser_version, COUNT(DISTINCT build_hash) AS distinct_builds "
+            "FROM swaps GROUP BY event_id, parser_version HAVING COUNT(DISTINCT build_hash) > 1"
+        )
+    ).fetchall()
+    if conflicts:
+        raise Downgrade0007IncompatibleDataError(
+            f"cannot downgrade past revision 0007: {len(conflicts)} (event_id, parser_version) "
+            "pair(s) in 'swaps' have rows from more than one distinct build_hash -- the "
+            "narrower pre-0007 (event_id, parser_version) unique constraint cannot represent "
+            "this data. Downgrading would require silently deleting, merging, or arbitrarily "
+            "selecting one of these append-only rows, which is never done. Resolve by "
+            "archiving/exporting the affected 'swaps' rows for the listed pairs before "
+            "downgrading, or do not downgrade past this revision once more than one parser "
+            "build has produced a swaps row for the same chain event."
+        )
     op.drop_constraint("uq_swaps_event_id_parser_version_build_hash", "swaps", type_="unique")
     op.create_unique_constraint(
         "uq_swaps_event_id_parser_version", "swaps", ["event_id", "parser_version"]

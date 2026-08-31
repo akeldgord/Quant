@@ -139,6 +139,19 @@ def _check_constraint_names(database: str, table: str) -> set[str]:
     return {r[0] for r in rows}
 
 
+def _unique_constraint_names(database: str, table: str) -> set[str]:
+    rows = _query(
+        database,
+        """
+        SELECT con.conname FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = :t AND con.contype = 'u'
+        """,
+        {"t": table},
+    )
+    return {r[0] for r in rows}
+
+
 def _current_revision(database: str) -> str:
     rows = _query(database, "SELECT version_num FROM alembic_version")
     assert len(rows) == 1  # exactly one row, never duplicated across upgrades
@@ -300,3 +313,134 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
     for column in _IDENTITY_COLUMNS:
         assert f"ck_parse_attempts_{column}_nonempty" in constraints
+
+
+# --- Phase 1 remediation round 5, finding #8: migration 0007's downgrade()
+# --- against a *populated* database, not an empty one -- the previous
+# --- round's claimed downgrade-to-base result never actually proved
+# --- anything about what downgrading does once real swaps rows exist.
+
+
+def _insert_chain_event(database: str, event_id: str, *, signature: str) -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _execute(
+        database,
+        """
+        INSERT INTO chain_events (
+            event_id, chain, slot, first_seen_at, provider, provider_received_at,
+            transaction_signature, event_type, wallet_address, raw_payload,
+            payload_hash, parser_version, created_at
+        ) VALUES (
+            :event_id, 'solana', 1, :now, 'r5-migration-test', :now,
+            :sig, 'TRANSACTION_OBSERVED', 'R5MigrationTestWallet11111111111111111111', '{}',
+            'deadbeef', 'v1', :now
+        )
+        """,
+        {"event_id": event_id, "now": now, "sig": signature},
+    )
+
+
+def _insert_swap(
+    database: str, *, swap_id: str, event_id: str, parser_version: str, build_hash: str
+) -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _execute(
+        database,
+        """
+        INSERT INTO swaps (
+            swap_id, event_id, wallet_address, classification, slot, first_seen_at,
+            confidence, parser_version, build_hash, created_at
+        ) VALUES (
+            :swap_id, :event_id, 'R5MigrationTestWallet11111111111111111111', 'SWAP_SIMPLE', 1,
+            :now, 1.000, :parser_version, :build_hash, :now
+        )
+        """,
+        {
+            "swap_id": swap_id,
+            "event_id": event_id,
+            "parser_version": parser_version,
+            "build_hash": build_hash,
+            "now": now,
+        },
+    )
+
+
+def test_downgrade_from_0007_succeeds_with_a_single_build_hash_per_event(
+    scratch_database: str,
+) -> None:
+    """The common, fully-supported case: at most one parser build has
+    ever produced a swaps row per (event_id, parser_version) -- proven
+    here against a genuinely populated 'swaps' table, not an empty one."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    event_id = str(uuid.uuid4())
+    _insert_chain_event(scratch_database, event_id, signature=f"r5-sig-{uuid.uuid4().hex[:8]}")
+    _insert_swap(
+        scratch_database,
+        swap_id=str(uuid.uuid4()),
+        event_id=event_id,
+        parser_version="v1",
+        build_hash="build-a",
+    )
+
+    command.downgrade(cfg, "0006")
+
+    assert _current_revision(scratch_database) == "0006"
+    assert "build_hash" not in _column_names(scratch_database, "swaps")
+    assert "uq_swaps_event_id_parser_version" in _unique_constraint_names(scratch_database, "swaps")
+    # The row itself survives the downgrade untouched -- only the schema
+    # around it changed.
+    rows = _query(
+        scratch_database, "SELECT classification FROM swaps WHERE event_id = :e", {"e": event_id}
+    )
+    assert len(rows) == 1
+    assert rows[0][0] == "SWAP_SIMPLE"
+
+
+def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
+    scratch_database: str,
+) -> None:
+    """The case migration 0007 exists specifically to allow: two
+    different parser builds, same version label, both honestly recording
+    a swaps row for the same event. Downgrading cannot represent this
+    under the narrower pre-0007 (event_id, parser_version) uniqueness --
+    it must refuse with a precise, actionable reason, and must leave the
+    schema and every row completely untouched (never partially applying
+    the downgrade, never silently deleting/merging/selecting one row)."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    event_id = str(uuid.uuid4())
+    _insert_chain_event(scratch_database, event_id, signature=f"r5-sig-{uuid.uuid4().hex[:8]}")
+    swap_id_a = str(uuid.uuid4())
+    swap_id_b = str(uuid.uuid4())
+    _insert_swap(
+        scratch_database,
+        swap_id=swap_id_a,
+        event_id=event_id,
+        parser_version="v1",
+        build_hash="build-a",
+    )
+    _insert_swap(
+        scratch_database,
+        swap_id=swap_id_b,
+        event_id=event_id,
+        parser_version="v1",
+        build_hash="build-b",
+    )
+
+    with pytest.raises(Exception, match="cannot downgrade past revision 0007"):
+        command.downgrade(cfg, "0006")
+
+    # Refused before touching anything: still at head, build_hash column
+    # and both append-only rows still present and unmodified.
+    assert _current_revision(scratch_database) == "0007"
+    assert "build_hash" in _column_names(scratch_database, "swaps")
+    rows = _query(
+        scratch_database,
+        "SELECT swap_id, build_hash FROM swaps WHERE event_id = :e ORDER BY build_hash",
+        {"e": event_id},
+    )
+    assert [(str(r[0]), r[1]) for r in rows] == [
+        (swap_id_a, "build-a"),
+        (swap_id_b, "build-b"),
+    ]
