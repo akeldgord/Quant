@@ -21,7 +21,15 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,16 +40,29 @@ class Swap(Base):
     """One deterministically-classified swap/transfer derived from a
     ``chain_events`` row.
 
-    ``(event_id, parser_version)`` is unique: re-running the *same* parser
-    version against the same event is idempotent (no duplicate row), while
-    a *new* parser version may add an additional row without disturbing or
-    overwriting a prior point-in-time result -- safe re-parsing under a new
-    parser version per MASTER_SPEC.md section 21.
+    ``(event_id, parser_version, build_hash)`` is unique (Phase 1
+    remediation round 4, finding #5): re-running the *same* parser
+    artifact -- the exact executable that produced this row, not just the
+    human-assigned ``parser_version`` label -- against the same event is
+    idempotent (no duplicate row), while a *new* artifact (a changed
+    ``build_hash`` under the same version label, or a bumped
+    ``parser_version``) may add an additional row without disturbing or
+    overwriting a prior point-in-time result. Deduplicating on
+    ``parser_version`` alone let a rebuilt parser under an unbumped
+    version label silently keep an old, potentially-incompatible derived
+    row as the only canonical result, never appending the honest new
+    attempt round 3's own parse-attempt identity work already recorded.
     """
 
     __tablename__ = "swaps"
     __table_args__ = (
-        UniqueConstraint("event_id", "parser_version", name="uq_swaps_event_id_parser_version"),
+        UniqueConstraint(
+            "event_id",
+            "parser_version",
+            "build_hash",
+            name="uq_swaps_event_id_parser_version_build_hash",
+        ),
+        CheckConstraint("length(build_hash) > 0", name="ck_swaps_build_hash_nonempty"),
     )
 
     swap_id: Mapped[uuid.UUID] = mapped_column(
@@ -72,6 +93,7 @@ class Swap(Base):
     # mechanical signal that this must never drive a live-copy decision.
     confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False)
     parser_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    build_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

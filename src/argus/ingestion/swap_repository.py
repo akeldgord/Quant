@@ -1,10 +1,14 @@
 """Real, database-backed :class:`argus.ingestion.reconciliation.SwapRecorder`.
 
 Persists to ``swaps`` (MASTER_SPEC.md section 21), deduplicated on
-``(event_id, parser_version)`` via the table's own unique constraint --
-re-running the same parser version against the same event is idempotent;
-a new parser version may add an additional row without disturbing a prior
-point-in-time result (Phase 1 remediation round 1, finding #4).
+``(event_id, parser_version, build_hash)`` via the table's own unique
+constraint -- re-running the exact same parser artifact against the same
+event is idempotent; a new artifact (a changed ``build_hash`` under the
+same version label, or a bumped ``parser_version``) may add an
+additional row without disturbing a prior point-in-time result (Phase 1
+remediation round 1, finding #4; round 4, finding #5 extended dedup from
+``parser_version`` alone to the full artifact identity -- see migration
+0007).
 
 Phase 1 remediation round 2 (argus-phase-1-remediation-002), finding #9:
 the original ``except IntegrityError: return False`` caught *every*
@@ -12,8 +16,8 @@ integrity failure -- a NOT NULL violation, a foreign-key violation, a
 schema mismatch -- and mislabeled all of them "duplicate, no-op",
 silently hiding a real bug behind an idempotency signal. ``record()`` now
 only treats it as a duplicate when the database names the exact
-``(event_id, parser_version)`` constraint as the cause, and only after
-independently confirming the expected row exists; every other
+``(event_id, parser_version, build_hash)`` constraint as the cause, and
+only after independently confirming the expected row exists; every other
 ``IntegrityError`` is re-raised.
 """
 
@@ -30,7 +34,7 @@ from argus.db.errors import constraint_name as _constraint_name
 from argus.domain.swaps import Swap
 from argus.parsing.generic_parser import ParsedTransaction
 
-_DEDUP_CONSTRAINT = "uq_swaps_event_id_parser_version"
+_DEDUP_CONSTRAINT = "uq_swaps_event_id_parser_version_build_hash"
 
 
 class SqlSwapRecorder:
@@ -45,6 +49,7 @@ class SqlSwapRecorder:
         event_id: uuid.UUID,
         wallet_address: str,
         parsed: ParsedTransaction,
+        build_hash: str,
         created_at: datetime,
     ) -> bool:
         row = Swap(
@@ -64,6 +69,7 @@ class SqlSwapRecorder:
             first_seen_at=created_at,
             confidence=parsed.confidence,
             parser_version=parsed.parser_version,
+            build_hash=build_hash,
             created_at=created_at,
         )
         try:
@@ -80,7 +86,9 @@ class SqlSwapRecorder:
             existing = (
                 await self._session.execute(
                     select(Swap.swap_id).where(
-                        Swap.event_id == event_id, Swap.parser_version == parsed.parser_version
+                        Swap.event_id == event_id,
+                        Swap.parser_version == parsed.parser_version,
+                        Swap.build_hash == build_hash,
                     )
                 )
             ).scalar_one_or_none()

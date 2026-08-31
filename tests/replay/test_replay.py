@@ -638,7 +638,11 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
             )
             swap_recorder = SqlSwapRecorder(session)
             added_v1 = await swap_recorder.record(
-                event_id=event_id, wallet_address=wallet, parsed=parsed_v1, created_at=now
+                event_id=event_id,
+                wallet_address=wallet,
+                parsed=parsed_v1,
+                build_hash="replay-build-hash",
+                created_at=now,
             )
             assert added_v1 is True
             await session.commit()
@@ -659,7 +663,11 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
             )
             swap_recorder = SqlSwapRecorder(session)
             added_v2 = await swap_recorder.record(
-                event_id=event_id, wallet_address=wallet, parsed=parsed_v2, created_at=now
+                event_id=event_id,
+                wallet_address=wallet,
+                parsed=parsed_v2,
+                build_hash="replay-build-hash",
+                created_at=now,
             )
             assert added_v2 is True
             await session.commit()
@@ -679,7 +687,11 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
             async with sessionmaker() as inner_session:
                 repeat_recorder = SqlSwapRecorder(inner_session)
                 repeat_added = await repeat_recorder.record(
-                    event_id=event_id, wallet_address=wallet, parsed=parsed_v1, created_at=now
+                    event_id=event_id,
+                    wallet_address=wallet,
+                    parsed=parsed_v1,
+                    build_hash="replay-build-hash",
+                    created_at=now,
                 )
                 assert repeat_added is False
     finally:

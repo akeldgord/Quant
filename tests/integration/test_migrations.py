@@ -148,7 +148,7 @@ def _current_revision(database: str) -> str:
 def test_migration_from_zero_to_head_creates_identity_columns(scratch_database: str) -> None:
     command.upgrade(_alembic_config(), "head")
 
-    assert _current_revision(scratch_database) == "0006"
+    assert _current_revision(scratch_database) == "0007"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -177,7 +177,7 @@ def test_upgrade_from_0003_through_head_creates_table_and_columns_together(
     assert "parse_attempts" not in existing_tables
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0006"
+    assert _current_revision(scratch_database) == "0007"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
 
@@ -280,7 +280,7 @@ def test_upgrade_head_is_idempotent_and_restart_safe(scratch_database: str) -> N
 
     command.upgrade(cfg, "head")  # simulated restart
 
-    assert _current_revision(scratch_database) == "0006"
+    assert _current_revision(scratch_database) == "0007"
     assert _column_names(scratch_database, "parse_attempts") == first_columns
 
 
@@ -294,7 +294,7 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0006"
+    assert _current_revision(scratch_database) == "0007"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")

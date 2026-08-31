@@ -133,7 +133,7 @@ class InMemoryWatermarkStore:
 
 class InMemorySwapRecorder:
     def __init__(self) -> None:
-        self.rows: dict[tuple[uuid.UUID, str], ParsedTransaction] = {}
+        self.rows: dict[tuple[uuid.UUID, str, str], ParsedTransaction] = {}
 
     async def record(
         self,
@@ -141,9 +141,10 @@ class InMemorySwapRecorder:
         event_id: uuid.UUID,
         wallet_address: str,
         parsed: ParsedTransaction,
+        build_hash: str,
         created_at: datetime,
     ) -> bool:
-        key = (event_id, parsed.parser_version)
+        key = (event_id, parsed.parser_version, build_hash)
         if key in self.rows:
             return False
         self.rows[key] = parsed

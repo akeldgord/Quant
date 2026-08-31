@@ -98,15 +98,25 @@ class ParseAttemptRecorder(Protocol):
     tests is a plain in-memory list."""
 
     async def record(self, draft: ParseAttemptDraft) -> None: ...
-    async def events_pending_at_version(
-        self, parser_version: str, *, limit: int
+    async def events_pending_for_artifact(
+        self, parser_version: str, build_hash: str, *, limit: int
     ) -> list[uuid.UUID]:
         """Every ``event_id`` that has never had a ``SUCCESS`` or
-        ``UNKNOWN`` attempt recorded at ``parser_version`` -- i.e. events
+        ``UNKNOWN`` attempt recorded under this exact parser artifact --
+        ``parser_version`` *and* ``build_hash`` together (Phase 1
+        remediation round 4, finding #5; previously ``parser_version``
+        alone, which meant a rebuilt parser under an unbumped version
+        label never selected events an old build had already
+        "succeeded" on, even though round 3's own finding #5 established
+        that a new build identity creates a new attempt). i.e. events
         ``argus ingest reparse`` should retry: never-yet-attempted events
-        and events whose only attempts at this version were failures.
-        Never includes an event that already has a non-failure attempt at
-        this exact version (idempotent: re-running the sweep is safe)."""
+        under this artifact, and events whose only attempts under this
+        artifact were failures. Never includes an event that already has
+        a non-failure attempt under this exact artifact (idempotent:
+        re-running the sweep is safe). A SUCCESS/UNKNOWN attempt recorded
+        under a *different* build_hash (even the same parser_version)
+        never suppresses selection here -- it is evidence for a different
+        artifact, not this one."""
         ...
 
 
@@ -140,13 +150,15 @@ class InMemoryParseAttemptRecorder:
     async def record(self, draft: ParseAttemptDraft) -> None:
         self.attempts.append(draft)
 
-    async def events_pending_at_version(
-        self, parser_version: str, *, limit: int
+    async def events_pending_for_artifact(
+        self, parser_version: str, build_hash: str, *, limit: int
     ) -> list[uuid.UUID]:
         succeeded_or_unknown = {
             a.event_id
             for a in self.attempts
-            if a.parser_version == parser_version and a.outcome != PARSE_OUTCOME_FAILURE
+            if a.parser_version == parser_version
+            and a.build_hash == build_hash
+            and a.outcome != PARSE_OUTCOME_FAILURE
         }
         pending: list[uuid.UUID] = []
         seen: set[uuid.UUID] = set()

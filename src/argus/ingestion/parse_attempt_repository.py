@@ -42,19 +42,27 @@ class SqlParseAttemptRecorder:
         self._session.add(row)
         await self._session.flush()
 
-    async def events_pending_at_version(
-        self, parser_version: str, *, limit: int
+    async def events_pending_for_artifact(
+        self, parser_version: str, build_hash: str, *, limit: int
     ) -> list[uuid.UUID]:
         """Every ``chain_events.event_id`` lacking a ``SUCCESS``/``UNKNOWN``
-        ``parse_attempts`` row at ``parser_version`` -- never-yet-attempted
-        events and events whose only attempts at this version were
-        failures. Ordered oldest-first (``first_seen_at``) so a bounded
-        sweep makes deterministic forward progress across repeated runs."""
+        ``parse_attempts`` row under this exact parser artifact --
+        ``parser_version`` *and* ``build_hash`` together (Phase 1
+        remediation round 4, finding #5: ``parser_version`` alone let a
+        rebuilt parser under an unbumped version label never re-select
+        events an old build had already "succeeded" on) -- never-yet-
+        attempted events under this artifact, and events whose only
+        attempts under this artifact were failures. A SUCCESS/UNKNOWN
+        attempt recorded under a *different* build_hash never suppresses
+        selection here. Ordered oldest-first (``first_seen_at``) so a
+        bounded sweep makes deterministic forward progress across
+        repeated runs."""
         non_failure_exists = (
             select(ParseAttempt.attempt_id)
             .where(
                 ParseAttempt.event_id == ChainEvent.event_id,
                 ParseAttempt.parser_version == parser_version,
+                ParseAttempt.build_hash == build_hash,
                 ParseAttempt.outcome != PARSE_OUTCOME_FAILURE,
             )
             .exists()

@@ -198,10 +198,15 @@ class RecentEventSource(Protocol):
 
 class SwapRecorder(Protocol):
     """Persists one parsed, versioned classification linked to a canonical
-    ``chain_events`` row. Deduplicated on ``(event_id, parser_version)``:
-    re-running the same parser version is idempotent; a new parser version
-    may add an additional row without touching a prior one. Returns
-    ``True`` only when this call actually created a new row."""
+    ``chain_events`` row. Deduplicated on ``(event_id, parser_version,
+    build_hash)`` (Phase 1 remediation round 4, finding #5 -- previously
+    ``parser_version`` alone, which let a rebuilt parser under an unbumped
+    version label silently keep an old derived row instead of appending
+    an honest new one): re-running the exact same parser artifact is
+    idempotent; a new artifact -- a changed ``build_hash`` under the same
+    version label, or a bumped ``parser_version`` -- may add an additional
+    row without touching a prior one. Returns ``True`` only when this call
+    actually created a new row."""
 
     async def record(
         self,
@@ -209,6 +214,7 @@ class SwapRecorder(Protocol):
         event_id: uuid.UUID,
         wallet_address: str,
         parsed: ParsedTransaction,
+        build_hash: str,
         created_at: datetime,
     ) -> bool: ...
 
@@ -712,6 +718,7 @@ class ReconciliationEngine:
                     event_id=outcome.event_id,
                     wallet_address=wallet_address,
                     parsed=parsed,
+                    build_hash=self._parse_identity.build_hash,
                     created_at=now,
                 )
             except Exception as caught:  # noqa: BLE001 - recorded, never fatal to the rest of the item

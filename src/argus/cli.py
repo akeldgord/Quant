@@ -392,25 +392,31 @@ def ingest_run(
 
 @ingest_app.command("reparse")
 def ingest_reparse(
-    parser_version: str = typer.Option(
-        "",
-        "--parser-version",
-        help="Parser version to (re)attempt. Defaults to the currently running "
-        "PARSER_VERSION -- pass an explicit value to retry a specific historical version.",
-    ),
     limit: int = typer.Option(
         500, "--limit", help="Maximum number of events to (re)attempt in this run."
     ),
 ) -> None:
     """Deterministic reparse sweep (Phase 1 remediation round 2, finding
-    #9): finds every ``chain_events`` row lacking a non-failure
-    ``parse_attempts`` row at the target parser version -- never-yet-
-    attempted events and events whose only attempts at this version were
-    failures -- and re-runs the parser against their already-immutable
-    raw evidence. Never rewrites a prior attempt or the raw payload:
-    every run only appends new ``parse_attempts``/``swaps`` rows. Requires
-    a database; performs no network I/O and no signing/execution/
-    broadcast (MASTER_SPEC.md section 108)."""
+    #9; round 4, finding #6 removed the ability to target an arbitrary
+    historical ``--parser-version`` string). This process only ever has
+    one real parser artifact loaded -- its currently running
+    ``PARSER_VERSION`` + ``PARSER_BUILD_HASH`` -- and there is no
+    artifact registry that can load and execute a *different*, historical
+    parser build from a string label. Claiming to "reparse under version
+    X" while actually running the current code would be false: it could
+    also select the same already-failing events forever if X never
+    matches what actually ran. This command is current-artifact-only: it
+    finds every ``chain_events`` row lacking a non-failure
+    ``parse_attempts`` row under the current artifact -- never-yet-
+    attempted events and events whose only attempts under this exact
+    artifact were failures -- and re-runs the current parser against
+    their already-immutable raw evidence. Never rewrites a prior attempt
+    or the raw payload: every run only appends new
+    ``parse_attempts``/``swaps`` rows. A bounded sweep makes deterministic
+    forward progress and converges to zero pending once every event has a
+    non-failure attempt under the current artifact -- repeating the
+    command is always safe. Requires a database; performs no network I/O
+    and no signing/execution/broadcast (MASTER_SPEC.md section 108)."""
     import uuid
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -427,8 +433,6 @@ def ingest_reparse(
     )
     from argus.ingestion.swap_repository import SqlSwapRecorder
     from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
-
-    target_version = parser_version or PARSER_VERSION
 
     async def _run() -> int:
         config = load_config()
@@ -453,7 +457,9 @@ def ingest_reparse(
 
         async with sessionmaker() as session:
             ledger = SqlParseAttemptRecorder(session)
-            pending = await ledger.events_pending_at_version(target_version, limit=limit)
+            pending = await ledger.events_pending_for_artifact(
+                PARSER_VERSION, identity.build_hash, limit=limit
+            )
 
         attempted = 0
         succeeded = 0
@@ -478,16 +484,13 @@ def ingest_reparse(
                         event_id=row.event_id,
                         wallet_address=row.wallet_address or "",
                         parsed=parsed,
+                        build_hash=identity.build_hash,
                         created_at=now,
                     )
                 except Exception as caught:  # noqa: BLE001 - recorded, never fatal to the sweep
                     exc = caught
 
                 outcome, retry_disposition = outcome_for(classification=classification, exc=exc)
-                # `parse_transaction()` always stamps the currently running
-                # `PARSER_VERSION`, never `target_version` -- that field only
-                # selects *which* prior version's failures to re-attempt;
-                # the ledger records the version that actually ran.
                 await SqlParseAttemptRecorder(session).record(
                     ParseAttemptDraft(
                         attempt_id=uuid.uuid4(),
@@ -513,8 +516,9 @@ def ingest_reparse(
 
         await db_engine.dispose()
         console.print(
-            f"reparse @ {target_version}: {attempted} attempted, {succeeded} succeeded/unknown, "
-            f"{still_failing} still failing (of {len(pending)} pending, limit {limit})"
+            f"reparse @ {PARSER_VERSION} ({identity.build_hash[:12]}): {attempted} attempted, "
+            f"{succeeded} succeeded/unknown, {still_failing} still failing "
+            f"(of {len(pending)} pending, limit {limit})"
         )
         return 0
 

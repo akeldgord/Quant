@@ -208,7 +208,7 @@ class FakeWatermarkStore:
 
 class FakeSwapRecorder:
     def __init__(self) -> None:
-        self.rows: dict[tuple[uuid.UUID, str], ParsedTransaction] = {}
+        self.rows: dict[tuple[uuid.UUID, str, str], ParsedTransaction] = {}
 
     async def record(
         self,
@@ -216,9 +216,10 @@ class FakeSwapRecorder:
         event_id: uuid.UUID,
         wallet_address: str,
         parsed: ParsedTransaction,
+        build_hash: str,
         created_at: datetime,
     ) -> bool:
-        key = (event_id, parsed.parser_version)
+        key = (event_id, parsed.parser_version, build_hash)
         if key in self.rows:
             return False
         self.rows[key] = parsed
@@ -1402,8 +1403,9 @@ async def test_reconciliation_persists_versioned_parser_output() -> None:
     assert result.new_events == 1
     assert result.parser_failures == 0
     event_id = ledger.rows[("sig-valid", WALLET, "TRANSACTION_OBSERVED")].event_id
-    assert (event_id, "generic_balance_delta_v1") in swap_recorder.rows
-    parsed = swap_recorder.rows[(event_id, "generic_balance_delta_v1")]
+    key = (event_id, "generic_balance_delta_v1", TEST_PARSE_IDENTITY.build_hash)
+    assert key in swap_recorder.rows
+    parsed = swap_recorder.rows[key]
     assert parsed.classification == "TRANSFER_IN"
 
 
@@ -1439,7 +1441,12 @@ async def test_reparse_under_same_parser_version_is_idempotent() -> None:
     event_id = ledger.rows[("sig-valid", WALLET, "TRANSACTION_OBSERVED")].event_id
     parsed_again = list(swap_recorder.rows.values())[0]
     added_again = await swap_recorder.record(
-        event_id=event_id, wallet_address=WALLET, parsed=parsed_again, created_at=Clock().utc_now()
+        event_id=event_id,
+        wallet_address=WALLET,
+        parsed=parsed_again,
+        build_hash=TEST_PARSE_IDENTITY.build_hash,
+        created_at=Clock().utc_now(),
     )
-    assert added_again is False  # same (event_id, parser_version) -- no duplicate
+    # same (event_id, parser_version, build_hash) -- no duplicate
+    assert added_again is False
     assert len(swap_recorder.rows) == 1

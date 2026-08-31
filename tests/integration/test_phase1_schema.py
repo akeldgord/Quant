@@ -148,6 +148,7 @@ async def test_swap_and_wallet_stream_state_roundtrip(admin_engine) -> None:
                     first_seen_at=now,
                     confidence=Decimal("1.000"),
                     parser_version="v1",
+                    build_hash="test-build-hash",
                     created_at=now,
                 )
             )
