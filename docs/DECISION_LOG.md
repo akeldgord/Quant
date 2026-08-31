@@ -487,4 +487,106 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   coverage on `src/argus` (unchanged), ruff clean, mypy clean.
   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified. Phase 1
   remains unauthorized by this task.
-- git_commit: (see the final hash-fill commit for this task's exact SHA)
+- git_commit: 141af487fcfdff41d1597c19ea062139f5427f52 (this entry's own docs
+  commit; the code commit it documents is 50e6d91b9cfeb40be14cf43a0b9f0b2c7582bd74
+  — noted here as a drive-by fix, found while adding the Phase 1 entry
+  below; this placeholder was never filled in during round 3 itself)
+
+### 2026-08-31 — Phase 1: live chain data acquisition and deterministic canonical parsing (argus-phase-1-001)
+
+- summary: Implemented Phase 1 in full per orchestrator instruction
+  `argus-phase-1-001` (`APPROVES_PHASE: 0`, `AUTHORIZED_PHASE: 1`):
+  Helius standard RPC/WebSocket adapter, DexScreener/GeckoTerminal/Jupiter
+  adapters (quote/order-construction only, no signing), fast-path/truth-
+  path reconciliation with per-wallet watermarks and `DEGRADED` gating,
+  immutable `chain_events`/`swaps`/`wallet_stream_state` ledger, a new
+  `clock_health_events` table with durable clock-anomaly detection wired
+  into reconciliation gating, a deterministic generic balance-delta swap
+  parser (all 7 classifications, 11 golden fixtures), a central P0–P6
+  priority scheduler, provider usage/cost accounting with 70/85/95%
+  warnings wired into every real adapter call, HTTP retry/backoff, and
+  provider capability/history/usage probe CLI commands. Three real
+  defects were found and fixed before or during this task, each with a
+  regression test:
+  1. **`TOKEN_CREATE` misclassification.** The original parser heuristic
+     (`set(positives) & new_accounts`) misclassified an ordinary
+     first-time "buy a token never held before" swap as `TOKEN_CREATE`,
+     because a newly-seen mint with a nonzero received amount also
+     satisfies "new account in positives". Fixed to require the new
+     account's delta be exactly zero — only a pure
+     empty-account-creation-plus-rent-payment pattern counts as
+     `TOKEN_CREATE` now; a real swap into a new mint correctly falls
+     through to `SWAP_SIMPLE`/`SWAP_COMPLEX`.
+  2. **Provider-probe throttle silently `None`.** `_throttle()` queried
+     `providers.<name>.conservative_rate_limit_per_sec`, but
+     `config/providers.yaml` is merged *flat* by
+     `argus.config.load_config` (top-level `helius:`, `dexscreener:`, ...
+     keys), not nested under a `providers:` namespace. Every probe's
+     `configured_throttle_per_sec` printed `None` as a result. Found by
+     actually running `uv run argus providers probe` and noticing the
+     field was always empty, not merely inferred from reading the code.
+     Fixed and regression-tested; confirmed live post-fix
+     (Helius=5.0/DexScreener=2.0/GeckoTerminal=1.0/Jupiter=2.0).
+  3. **Adapter contract-validation gap.** Helius's `_rpc()` indexed
+     `data["result"]` directly, which would raise an uncaught `KeyError`
+     (not a deliberate, typed rejection) on a response missing both
+     `result` and `error` — found while assessing acceptance criterion 14
+     ("adapter contract validation rejects malformed provider
+     responses") against the actual code rather than assuming it already
+     held. Fixed to raise a typed `HeliusRpcError` naming the malformed
+     response explicitly.
+  Additionally implemented, beyond what a first pass had covered, after
+  a self-assessment against the instruction's full 27-item acceptance
+  list surfaced two real gaps that were architecture-scoped (not
+  environmental) and squarely within Phase 1's own stated deliverables:
+  durable clock-health/anomaly persistence wired into reconciliation's
+  live-entry-eligibility gating (criterion 10), and HTTP retry/backoff
+  with a configurable policy (criterion 15) wired into every provider
+  adapter. Both were built, tested (unit + integration against real
+  Postgres), and confirmed live in this sandbox before being reported as
+  passing, rather than reported as gaps and left unbuilt.
+- reason: CORE-011 ("truth outranks impressive P&L") and MASTER_SPEC.md
+  section 17/19's explicit requirement that clock anomalies and transient
+  provider failures be handled deterministically, not assumed away. A
+  self-assessment against the instruction's own 27-item checklist — not
+  just against what had already been built — is what surfaced the clock-
+  anomaly and retry/backoff gaps; reporting them as `FAIL`/`NOT TESTED`
+  without attempting to close them (when nothing about them was
+  environmentally blocked) would have understated what Phase 1 actually
+  requires. Acceptance criteria 1–2 (live Solana RPC/WebSocket) remain
+  honestly `NOT TESTED` because they genuinely are blocked by this
+  sandbox's missing `HELIUS_API_KEY` and lack of general internet egress
+  (confirmed live via `argus providers probe`), exactly analogous to
+  Phase 0's `PG17_COMPOSE_VALIDATION` deferral — not a gap this task could
+  close by writing more code.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-001` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 141af487fcfdff41d1597c19ea062139f5427f52`,
+  `AUTHORIZED_PHASE: 1`, `APPROVES_PHASE: 0` — Phase 0 approval + Phase 1
+  authorization in one instruction; verified against
+  `docs/BUILD_STATE.md` before this task began per the instruction's own
+  mandatory session-start steps).
+- impact: New modules: `src/argus/domain/{chain_events,clock_health,swaps,
+  wallet_stream_state}.py`, `src/argus/ingestion/*.py`,
+  `src/argus/parsing/generic_parser.py`, `src/argus/providers/{credentials,
+  probes,retry,scheduler,usage}.py`,
+  `src/argus/providers/{dexscreener,geckoterminal,helius,jupiter}/client.py`,
+  migration `0002` (chain_events, swaps, wallet_stream_state,
+  clock_health_events + least-privilege grants). 61 new tests across
+  `tests/unit`, `tests/integration`, `tests/golden`. Full suite: 204
+  passed, 91% coverage, ruff clean, mypy clean. `orchestration/checkpoints/phase_1.md`
+  and `orchestration/bundles/phase_1.txt` record the full 27-item
+  PASS/FAIL/NOT TESTED disposition, including two honestly-disclosed,
+  unclosed gaps that are architecture-scoped rather than environmental:
+  no end-to-end stream-manager orchestration loop exists yet tying the
+  WebSocket stream, reconciliation, and scheduler into one
+  continuously-running process, and `StreamingUsageRecord`/
+  `record_streaming()` has no live invocation site as a direct
+  consequence. `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not
+  modified; `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase`
+  remains `0` — this task did not and could not self-approve Phase 1.
+- git_commit: 28a88f74d28e70542050f5d5e8d9a9d139f26bb8 (code), docs commit
+  SHA to follow (this entry is part of that docs commit and therefore
+  cannot cite its own SHA in advance — see the handoff for the exact
+  final commit).
