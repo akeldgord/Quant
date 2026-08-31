@@ -314,3 +314,119 @@ def test_resolve_production_git_commit_empty_override_env_var_is_treated_as_unse
         resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": ""})
         == head
     )
+
+
+# --- Phase 1 remediation round 6, finding #1: round 5's implementation --
+# --- returned None from _is_dirty_checkout for *every* `git status` -----
+# --- failure and treated that identically to "no checkout at all," so a --
+# --- corrupt/unreadable/permission-denied-but-*present* checkout could ---
+# --- still accept an arbitrary override SHA. GIT_ABSENT, GIT_PRESENT_ ----
+# --- CLEAN, GIT_PRESENT_DIRTY, and GIT_PRESENT_UNVERIFIABLE are now ------
+# --- always distinguished explicitly; only genuinely-absent metadata -----
+# --- (no `.git` path at all) may fall back to an override. ---------------
+
+
+def test_resolve_production_git_commit_metadata_present_but_status_fails_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.git` exists (metadata is present) but every git subprocess call
+    fails -- e.g. a corrupt or unreadable checkout. This must fail closed
+    exactly like a dirty checkout, never fall through to "no checkout"."""
+    (tmp_path / ".git").mkdir()
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated: git status failed against a broken checkout")
+
+    monkeypatch.setattr("argus.config.subprocess.run", _boom)
+    with pytest.raises(GitIdentityUnavailableError, match="could not be verified"):
+        resolve_production_git_commit(repo_root=tmp_path, env={})
+
+
+def test_resolve_production_git_commit_metadata_present_status_fails_override_still_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even a well-formed override present alongside an unverifiable-but-
+    present checkout must not be accepted -- an override only ever
+    substitutes for a genuinely *absent* checkout."""
+    (tmp_path / ".git").mkdir()
+    override = "f" * 40
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated")
+
+    monkeypatch.setattr("argus.config.subprocess.run", _boom)
+    with pytest.raises(GitIdentityUnavailableError, match="could not be verified"):
+        resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override})
+
+
+def test_resolve_production_git_commit_metadata_present_status_fails_allow_unverified_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".git").mkdir()
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated")
+
+    monkeypatch.setattr("argus.config.subprocess.run", _boom)
+    result = resolve_production_git_commit(repo_root=tmp_path, env={}, allow_unverified=True)
+    assert result == GIT_COMMIT_UNAVAILABLE
+
+
+def test_resolve_production_git_commit_status_ok_but_rev_parse_head_fails_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git status --porcelain` succeeds and reports a clean tree, but the
+    subsequent `git rev-parse HEAD` call itself fails (e.g. a repository
+    with a corrupted refs database). This is also PRESENT_UNVERIFIABLE in
+    effect and must fail closed -- never silently accept an override."""
+    (tmp_path / ".git").mkdir()
+
+    def _fake_run(
+        cmd: list[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if cmd[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[:2] == ["git", "rev-parse"]:
+            raise OSError("simulated: rev-parse HEAD failed")
+        raise AssertionError(f"unexpected git subprocess call: {cmd}")
+
+    monkeypatch.setattr("argus.config.subprocess.run", _fake_run)
+    override = "1" * 40
+    with pytest.raises(GitIdentityUnavailableError, match="rev-parse HEAD failed"):
+        resolve_production_git_commit(repo_root=tmp_path, env={"ARGUS_BUILD_GIT_COMMIT": override})
+
+
+def test_resolve_production_git_commit_status_ok_rev_parse_fails_allow_unverified_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".git").mkdir()
+
+    def _fake_run(
+        cmd: list[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if cmd[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[:2] == ["git", "rev-parse"]:
+            raise OSError("simulated")
+        raise AssertionError(f"unexpected git subprocess call: {cmd}")
+
+    monkeypatch.setattr("argus.config.subprocess.run", _fake_run)
+    result = resolve_production_git_commit(repo_root=tmp_path, env={}, allow_unverified=True)
+    assert result == GIT_COMMIT_UNAVAILABLE
+
+
+def test_resolve_production_git_commit_worktree_gitfile_present_but_unverifiable_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A linked worktree has a `.git` *file* (not directory) pointing at
+    the real gitdir elsewhere -- still git metadata being present. A
+    failing git command against it must still fail closed, simulating a
+    permission-denied/corrupt-worktree scenario."""
+    (tmp_path / ".git").write_text("gitdir: /nonexistent/elsewhere\n")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("simulated: permission denied reading worktree metadata")
+
+    monkeypatch.setattr("argus.config.subprocess.run", _boom)
+    with pytest.raises(GitIdentityUnavailableError, match="could not be verified"):
+        resolve_production_git_commit(repo_root=tmp_path, env={})

@@ -12,6 +12,7 @@ was built against. This module is the single place that:
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import os
@@ -100,11 +101,42 @@ GIT_BUILD_COMMIT_ENV_VAR = "ARGUS_BUILD_GIT_COMMIT"
 _FULL_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _is_dirty_checkout(repo_root: Path) -> bool | None:
-    """``True`` if the checkout has any uncommitted change (staged,
-    unstaged, or untracked) relative to ``HEAD``; ``False`` if clean;
-    ``None`` if this could not be determined at all (git unavailable, or
-    ``repo_root`` is not a git repository)."""
+class _GitCheckoutState(enum.Enum):
+    """Phase 1 remediation round 6, finding #1. Round 5's
+    ``_is_dirty_checkout`` returned ``None`` for *every* ``git status``
+    failure and the resolver treated that as "no git checkout" -- so a
+    corrupt, unreadable, permission-denied, or otherwise broken checkout
+    (git metadata present, but unverifiable) was indistinguishable from a
+    directory that was never a git repository at all, and a build-time
+    override was accepted in both cases. These four states are always
+    distinguished explicitly; only ``ABSENT`` may ever fall back to an
+    override."""
+
+    ABSENT = "GIT_ABSENT"
+    PRESENT_CLEAN = "GIT_PRESENT_CLEAN"
+    PRESENT_DIRTY = "GIT_PRESENT_DIRTY"
+    PRESENT_UNVERIFIABLE = "GIT_PRESENT_UNVERIFIABLE"
+
+
+def _git_metadata_present(repo_root: Path) -> bool:
+    """Whether git metadata is detectable at ``repo_root`` at all: a
+    ``.git`` directory (a normal checkout) or a ``.git`` *file* (a linked
+    worktree, which stores a ``gitdir: <path>`` pointer instead of the
+    metadata itself). This is a pure filesystem check, independent of
+    whether the ``git`` binary is installed or the repository is
+    otherwise healthy -- it is exactly the signal that decides whether a
+    later failure to run a git command means "no checkout" (an override
+    may substitute) or "unverifiable checkout" (must fail closed)."""
+    return (repo_root / ".git").exists()
+
+
+def _probe_git_checkout_state(repo_root: Path) -> _GitCheckoutState:
+    """Classifies ``repo_root`` into exactly one of the four
+    :class:`_GitCheckoutState` values. A failed git command is *never*,
+    by itself, evidence that git metadata is absent -- only a missing
+    ``.git`` path is."""
+    if not _git_metadata_present(repo_root):
+        return _GitCheckoutState.ABSENT
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -115,8 +147,9 @@ def _is_dirty_checkout(repo_root: Path) -> bool | None:
             check=True,
         )
     except (OSError, subprocess.SubprocessError):
-        return None
-    return bool(result.stdout.strip())
+        return _GitCheckoutState.PRESENT_UNVERIFIABLE
+    dirty = bool(result.stdout.strip())
+    return _GitCheckoutState.PRESENT_DIRTY if dirty else _GitCheckoutState.PRESENT_CLEAN
 
 
 def resolve_production_git_commit(
@@ -128,10 +161,12 @@ def resolve_production_git_commit(
     """The exact, reproducible point-in-time git commit identity required
     for production ingestion/reparse parse-attempt evidence (MASTER_SPEC.md
     CORE-004; Phase 1 remediation round 4, finding #7; round 5, finding
-    #7 fixed an override-precedence defect in round 4's implementation).
+    #7 fixed an override-precedence defect in round 4's implementation;
+    round 6, finding #1 fixed round 5's remaining fail-open gap for a
+    present-but-unverifiable checkout).
 
     Unlike :func:`git_commit_sha` (best-effort, never raises), this fails
-    closed by default: a dirty checkout, a missing/unreachable git
+    closed by default: a dirty or unverifiable checkout, a missing git
     checkout with no override, an override that disagrees with a real
     checkout's HEAD, or a malformed override all raise
     :class:`GitIdentityUnavailableError` rather than silently degrading to
@@ -142,33 +177,39 @@ def resolve_production_git_commit(
        raises immediately, even with ``allow_unverified=True``; a
        malformed override is a configuration bug, never silently
        downgraded.
-    2. Whether git metadata (a ``.git`` checkout) is present at
-       ``repo_root`` is checked *before* the override is ever trusted
-       (round 4's implementation checked the override first, so a dirty
-       checkout could hand back any valid-looking SHA and a clean
-       checkout's override could silently diverge from its real HEAD --
-       neither is possible now).
-    3. If **no** git metadata is present, a well-formed override is the
-       only possible source of an identity (there's a real checkout to
-       verify a live HEAD against) and is returned directly -- this is
-       the one case a build-time override (e.g. baked in at image build
-       time for a checkout with no ``.git`` directory present at
-       runtime) is actually used.
-    4. If git metadata **is** present, the checkout's clean/dirty state
-       and its real ``git rev-parse HEAD`` are always resolved first,
-       regardless of whether an override was also supplied. A dirty
-       checkout fails closed unconditionally -- an override can never
-       substitute for it. Once HEAD is resolved from a clean checkout, a
-       supplied override must exactly equal that HEAD or the call fails
-       closed; it is never used to silently override or diverge from
-       what the checkout actually contains.
+    2. ``repo_root`` is classified into exactly one of four
+       :class:`_GitCheckoutState` values *before* the override is ever
+       trusted: ``ABSENT`` (no ``.git`` metadata at all), ``PRESENT_CLEAN``,
+       ``PRESENT_DIRTY``, or ``PRESENT_UNVERIFIABLE`` (metadata is present
+       but ``git status`` could not be run or failed -- a corrupt,
+       permission-denied, or otherwise broken checkout). A failed git
+       command is *never*, by itself, evidence that git metadata is
+       absent -- round 5's implementation returned ``None`` for every
+       ``git status`` failure and treated that identically to "no
+       checkout," so a broken-but-present checkout could still be
+       represented by an arbitrary override SHA. Only a genuinely missing
+       ``.git`` path yields ``ABSENT``.
+    3. If the state is **ABSENT**, a well-formed override is the only
+       possible source of an identity (there's a real checkout to verify a
+       live HEAD against) and is returned directly -- this is the one case
+       a build-time override (e.g. baked in at image build time for a
+       checkout with no ``.git`` directory present at runtime) is actually
+       used.
+    4. If the state is **PRESENT_UNVERIFIABLE** or **PRESENT_DIRTY**, the
+       call fails closed unconditionally -- an override can never
+       substitute for either. Only when the state is **PRESENT_CLEAN** is
+       the real ``git rev-parse HEAD`` resolved; a supplied override must
+       then exactly equal that HEAD or the call fails closed. An override
+       is never used to silently override or diverge from what the
+       checkout actually contains.
 
     ``allow_unverified=True`` is the explicit non-production escape hatch
     (``--test-mode``, or a unit test that isn't itself testing this
     fail-closed behavior): every failure mode *except* a malformed
     override then returns ``GIT_COMMIT_UNAVAILABLE`` instead of raising --
-    it never turns a supplied-but-unverifiable or dirty-checkout identity
-    into a value that looks like a verified production SHA.
+    it never turns a supplied-but-unverifiable, dirty-checkout, or
+    unverifiable-checkout identity into a value that looks like a verified
+    production SHA.
     """
     environ = env if env is not None else dict(os.environ)
     override = environ.get(GIT_BUILD_COMMIT_ENV_VAR, "").strip()
@@ -178,10 +219,10 @@ def resolve_production_git_commit(
             f"lowercase hex git commit SHA: {override!r}"
         )
 
-    dirty = _is_dirty_checkout(repo_root)
+    state = _probe_git_checkout_state(repo_root)
 
-    if dirty is None:
-        # No git checkout at all: nothing exists to verify a live HEAD
+    if state is _GitCheckoutState.ABSENT:
+        # No git metadata at all: nothing exists to verify a live HEAD
         # against, so a well-formed override is the only possible source.
         if override:
             return override
@@ -193,9 +234,24 @@ def resolve_production_git_commit(
             "ingestion cannot establish a validated git identity"
         )
 
-    # Git metadata is present -- always verify clean state and resolve
-    # the real HEAD first, before an override is ever trusted.
-    if dirty:
+    # Git metadata is present -- a failed git command from here on is
+    # never treated as if metadata were absent (Phase 1 remediation round
+    # 6, finding #1). Clean state and the real HEAD are always verified
+    # before an override is ever trusted.
+    if state is _GitCheckoutState.PRESENT_UNVERIFIABLE:
+        if allow_unverified:
+            return GIT_COMMIT_UNAVAILABLE
+        raise GitIdentityUnavailableError(
+            f"git metadata is present at {repo_root} but its clean/dirty state "
+            "could not be verified -- git status failed, or the checkout is "
+            "corrupt, unreadable, or otherwise broken. Production ingestion "
+            "cannot establish a validated git identity, and "
+            f"{GIT_BUILD_COMMIT_ENV_VAR} is never accepted as a substitute for "
+            "an unverifiable checkout -- an override is only used when git "
+            "metadata is genuinely absent."
+        )
+
+    if state is _GitCheckoutState.PRESENT_DIRTY:
         if allow_unverified:
             return GIT_COMMIT_UNAVAILABLE
         raise GitIdentityUnavailableError(
