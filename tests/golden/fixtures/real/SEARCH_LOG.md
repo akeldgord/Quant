@@ -394,7 +394,7 @@ the exact license text and attribution preserved alongside it -- see the
 fixture's own `upstream_license.compatibility_decision` in
 `provenance.json` for the full reasoning.
 
-**Disposition after this round: real-chain evidence now exists for all
+**Disposition after round 5: real-chain evidence now exists for all
 9 of 9 required categories** -- 6 from rounds 2-3 (simple transfer,
 SOL-to-token/token-to-SOL/token-to-USDC swap, multi-hop swap, partial
 sell), plus the ambiguous-multi-asset and failed-transaction categories
@@ -405,3 +405,76 @@ honestly including its one caveat -- not a claim that every acceptance
 criterion elsewhere in round 5's instruction is satisfied; see
 `docs/BUILD_STATE.md` and the round 5 checkpoint for the full acceptance
 matrix scoring.
+
+## Round 6 (`argus-phase-1-remediation-006`, finding #3): the multiple-
+## token-account/LP-style fixture is replaced, not merely relabeled
+
+Independent review of round 5's `real_mainnet_orca_increase_liquidity_
+multi_asset_outflow` fixture found that, from the reviewed wallet's own
+perspective (`6jDxfurJaWDBoFyyLAuJBZi24vynka6EuEPbvS88RRuu`,
+`orca_add_liq.json`), only **one** non-SOL token account is actually
+material (`5LafQUrVco6o...`, decreasing from 66,769.88452 to 0) -- the
+transaction's only other token movement (a wrapped-SOL account) belongs
+to a *different* account
+(`ARs3pZiSyCutnm3X83MwP8zeg1BWCb5F7xeGszp4gHiz`, a program-derived
+vault, not this wallet), and the by-mint `asset_deltas` view already
+correctly showed only one non-SOL entry. The fixture's own
+round-5-documented caveat ("only one non-SOL asset is directly
+signer-owned") was, on reflection, not a caveat on an otherwise-real
+multiple-account transaction -- it was evidence the fixture never
+satisfied the *account-level* substance of the required category at
+all, from this wallet's perspective; it was, in substance, the same
+ambiguous-multi-asset-outflow shape as `real_mainnet_dca_close_dual_
+asset_transfer_in`, just with a different confidence rule.
+
+Per round 6, finding #3's instruction ("If the current Orca fixture
+cannot satisfy that exact semantic requirement from the chosen wallet
+perspective, source a better authentic fixture; do not relabel it"),
+the category is replaced with `crates/parsers/tests/orca/
+orca_remove_liq.json` from the **same upstream repository and commit**
+(`quellen-sol/ingestooor`, `74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e`)
+-- round 5's own search log had already located this file and
+dismissed it ("Also considered and not needed") without checking every
+wallet perspective it contains. Re-examining it from the transaction's
+actual fee-payer/signer wallet
+(`JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN`, accountKeys[0] -- not
+the other wallet embedded in the same file, which is itself a
+program-derived vault) shows a genuine multiple-token-account
+liquidity-removal: a Whirlpool position NFT account (accountIndex 4,
+decimals 0) closes entirely (a real account-level *closure*, 1 -> the
+account no longer appearing in `postTokenBalances` at all) while a
+separate, distinct fungible token account (accountIndex 5, mint
+`oreoN2tQ...`, decimals 9) the same wallet owns receives a real inflow.
+Two genuinely distinct, material, wallet-owned token accounts move --
+this is what round 6, finding #3's new `compute_account_level_deltas`/
+`account_deltas` oracle exists to prove, and by-mint aggregation alone
+(which still shows this case correctly, since the two accounts have
+different mints) would not by itself have been sufficient evidence that
+the *account*-level shape is genuine, not merely inferred from two
+differently-minted by-mint rows.
+
+The parser resolves this transaction to `SWAP_COMPLEX` (`negatives =
+{position-NFT: -1}`, `positives = {SOL: +43274432, oreoN2tQ:
++1687820576}` -- not a one-for-one shape), never copy-eligible, at
+confidence 0.700 -- not `LP_ACTION` (which requires two or more
+*non-SOL* assets moving in the *same* direction; here the two
+non-SOL-canonical legs move in opposite directions) and not `UNKNOWN`.
+Per the round 6 instruction's own acceptance criterion 4 ("The parser
+label may be `UNKNOWN` rather than `LP_ACTION` if the semantic category
+is independently proven and remains ineligible"), a real, independently
+proven multiple-account transaction that the parser correctly keeps
+ineligible satisfies the requirement regardless of which specific
+ineligible label it receives; `SWAP_COMPLEX` is exactly the correct,
+intentional outcome here (round 5, finding #4's fail-closed policy),
+not an unexplained divergence. Imported as
+`real_mainnet_orca_close_position_multi_account`
+(`tests/golden/fixtures/real/provenance.json`); round 5's
+`real_mainnet_orca_increase_liquidity_multi_asset_outflow` category no
+longer exists (its underlying source file, no longer referenced by any
+fixture, was removed from `sources/`).
+
+**Disposition after round 6: real-chain evidence for all 9 of 9
+required categories remains held, with the LP/multiple-token-account
+category now backed by genuine account-level evidence (`account_deltas`)
+rather than an unresolved caveat.** See `docs/BUILD_STATE.md` and the
+round 6 checkpoint for the full acceptance matrix scoring.

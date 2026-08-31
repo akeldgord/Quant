@@ -122,6 +122,35 @@ class AssetMove:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class AccountAssetDelta:
+    """One wallet-owned *account*'s net balance change, preserved before
+    :func:`compute_asset_deltas`'s by-mint aggregation collapses distinct
+    accounts of the same mint together (Phase 1 remediation round 6,
+    finding #3). By-mint aggregation is exactly right for classification
+    (a wallet's net economic position in an asset is what matters for
+    "did it trade X for Y"), but it is the wrong oracle for proving a
+    *multiple-token-account* transaction happened at all: two accounts of
+    the same mint moving in opposite directions can net to zero and
+    vanish entirely from :func:`compute_asset_deltas`'s output, even
+    though two genuinely distinct, materially-relevant token accounts
+    were involved. ``account_index`` is the account's own position in
+    ``transaction.message.accountKeys`` (the SPL Token Program's
+    ``accountIndex`` field for a token-balance entry, or the wallet's own
+    index for the native-SOL row); ``account_identifier`` is that index's
+    resolved pubkey."""
+
+    account_identifier: str
+    account_index: int
+    owner: str
+    mint: str  # "SOL" (canonical) or a mint address
+    pre_raw_amount: int
+    post_raw_amount: int
+    net_raw_delta: int
+    decimals: int
+    ui_delta: str  # exact decimal string
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class ParsedTransaction:
     classification: Classification
     confidence: Decimal
@@ -292,6 +321,105 @@ def compute_asset_deltas(raw: dict[str, Any], wallet_address: str) -> tuple[Asse
         AssetMove(asset=asset, amount_raw=deltas[asset], decimals=decimals_by_asset[asset])
         for asset in sorted(deltas)
     )
+
+
+def compute_account_level_deltas(
+    raw: dict[str, Any], wallet_address: str
+) -> tuple[AccountAssetDelta, ...]:
+    """The complete, ordered (by ``account_index``, then ``mint``) set of
+    net wallet-owned *account*-level balance changes this transaction
+    produced -- one row per materially-changed account, never aggregated
+    by mint (Phase 1 remediation round 6, finding #3). This is the
+    account-level ground truth an independent golden-fixture reviewer
+    needs to prove a genuine multiple-token-account/LP-style transaction:
+    :func:`compute_asset_deltas`'s by-mint view can make two distinct
+    accounts of the same mint moving in opposite directions net to zero
+    and vanish entirely, discarding exactly the evidence the oracle needs.
+    Returns an empty tuple for a failed transaction (``meta.err`` set),
+    matching :func:`compute_asset_deltas`."""
+    if raw["meta"].get("err") is not None:
+        return ()
+
+    keys = _account_keys(raw)
+    meta = raw["meta"]
+    rows: list[AccountAssetDelta] = []
+
+    if wallet_address in keys:
+        idx = keys.index(wallet_address)
+        pre = meta["preBalances"][idx]
+        post = meta["postBalances"][idx]
+        delta = post - pre
+        if idx == 0:
+            # Same fee-inclusion convention as _sol_deltas: the fee payer's
+            # net delta is reported before deducting the network fee, which
+            # is accounted for separately.
+            delta += meta.get("fee", 0)
+        if delta != 0:
+            rows.append(
+                AccountAssetDelta(
+                    account_identifier=wallet_address,
+                    account_index=idx,
+                    owner=wallet_address,
+                    mint=NATIVE_SOL_ASSET,
+                    pre_raw_amount=pre,
+                    post_raw_amount=post,
+                    net_raw_delta=delta,
+                    decimals=NATIVE_SOL_DECIMALS,
+                    ui_delta=str(_ui_amount(delta, NATIVE_SOL_DECIMALS)),
+                )
+            )
+
+    pre_by_key: dict[tuple[int, str], tuple[int, int]] = {}
+    for entry in meta.get("preTokenBalances", []) or []:
+        if entry.get("owner") != wallet_address:
+            continue
+        key = (entry["accountIndex"], entry["mint"])
+        pre_by_key[key] = (
+            int(entry["uiTokenAmount"]["amount"]),
+            entry["uiTokenAmount"]["decimals"],
+        )
+
+    post_by_key: dict[tuple[int, str], tuple[int, int]] = {}
+    for entry in meta.get("postTokenBalances", []) or []:
+        if entry.get("owner") != wallet_address:
+            continue
+        key = (entry["accountIndex"], entry["mint"])
+        post_by_key[key] = (
+            int(entry["uiTokenAmount"]["amount"]),
+            entry["uiTokenAmount"]["decimals"],
+        )
+
+    for account_index, mint in sorted(set(pre_by_key) | set(post_by_key)):
+        key = (account_index, mint)
+        pre_amount, pre_decimals = pre_by_key.get(key, (0, None))
+        post_amount, post_decimals = post_by_key.get(key, (0, None))
+        delta = post_amount - pre_amount
+        if delta == 0:
+            continue
+        asset = _canonical_asset(mint)
+        source_decimals = post_decimals if post_decimals is not None else pre_decimals
+        assert source_decimals is not None  # at least one side always has an entry here
+        row_decimals = NATIVE_SOL_DECIMALS if asset == NATIVE_SOL_ASSET else source_decimals
+        rows.append(
+            AccountAssetDelta(
+                account_identifier=(
+                    keys[account_index]
+                    if 0 <= account_index < len(keys)
+                    else f"index:{account_index}"
+                ),
+                account_index=account_index,
+                owner=wallet_address,
+                mint=asset,
+                pre_raw_amount=pre_amount,
+                post_raw_amount=post_amount,
+                net_raw_delta=delta,
+                decimals=row_decimals,
+                ui_delta=str(_ui_amount(delta, row_decimals)),
+            )
+        )
+
+    rows.sort(key=lambda r: (r.account_index, r.mint))
+    return tuple(rows)
 
 
 def parse_transaction(

@@ -51,6 +51,8 @@ coverage.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import dataclasses
 import hashlib
 import json
@@ -60,7 +62,12 @@ from pathlib import Path
 from typing import Any
 
 from argus.clock import Clock
-from argus.parsing.generic_parser import ParsedTransaction, compute_asset_deltas, parse_transaction
+from argus.parsing.generic_parser import (
+    ParsedTransaction,
+    compute_account_level_deltas,
+    compute_asset_deltas,
+    parse_transaction,
+)
 
 DEFAULT_REAL_FIXTURES_DIR: Path = (
     Path(__file__).resolve().parents[2] / "tests" / "golden" / "fixtures" / "real"
@@ -89,24 +96,55 @@ class TransformStep:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class GitTreeAttestation:
-    """Real ``git ls-tree`` evidence, captured once at import time (this
-    sandbox's confirmed-working ``git clone`` access), proving the
-    declared path at the declared commit resolves to the declared blob --
-    not a bare asserted string (Phase 1 remediation round 5, finding #2).
-    ``raw_ls_tree_line`` is the verbatim ``git ls-tree`` output line, the
-    primary evidence artifact; the other fields are parsed from it purely
-    for convenience. The offline validator re-parses this exact line and
-    checks it for internal self-consistency (its own blob SHA matches
-    ``upstream_git_blob_sha1``) without any network call -- it cannot
-    re-verify *today* that the upstream ref still resolves the same way;
-    that is an online-only property, reported separately, never counted
-    as an offline PASS."""
+    """An offline-verifiable Git *object chain*, captured once at import
+    time (this sandbox's confirmed-working ``git clone`` access), proving
+    -- by independently recomputing every object ID along the way, from
+    raw preserved object bytes, with no ``git`` binary or network access
+    required at validation time -- that the declared path at the declared
+    commit resolves to the declared blob (Phase 1 remediation round 6,
+    finding #2).
 
-    mode: str
-    object_type: str
-    blob_sha1: str
+    Round 5's version stored a single saved ``git ls-tree`` output line
+    and the offline validator only re-parsed that *same* line and checked
+    it against itself -- that proves the saved text is internally
+    self-consistent, never that the declared upstream commit actually
+    contains the declared path at a tree that resolves to the declared
+    blob. This version instead preserves the *raw git object content* for
+    the commit and every tree walked along ``path`` (base64-encoded, since
+    they are arbitrary bytes in a JSON record), so
+    :func:`verify_git_object_chain` can, entirely offline:
+
+    1. recompute ``commit_sha`` from ``commit_object_b64`` using git's own
+       content-addressing (``sha1("commit " + len + "\\0" + content)``)
+       and confirm it matches;
+    2. parse the commit object's first ``tree <sha>`` line to get the
+       declared root tree;
+    3. walk ``path_components`` one directory level at a time, at each
+       step recomputing that level's tree object hash from
+       ``tree_object_chain_b64[i]`` and confirming it matches the sha
+       expected from the previous level (the root tree's own hash for
+       level 0), then looking up the next path component's entry inside
+       that freshly-parsed tree to get either the next level's tree sha
+       or, at the final component, the resolved blob's sha1;
+    4. confirm the fully-resolved final blob sha1 equals ``blob_sha1``.
+
+    This proves genuine Git *object-chain integrity* -- that these
+    specific bytes, if fed to ``git hash-object``, really do chain from
+    ``commit_sha`` down to ``blob_sha1`` via exactly this path. It does
+    **not**, and cannot, prove that ``commit_sha`` was genuinely served by
+    a particular remote hostname/repository at any point in time --
+    fabricating a self-consistent, syntactically valid Git object graph
+    requires no network access at all. That property is inherently
+    online-only, reported separately (as the acquisition record: which
+    URL was cloned, when), and never counted as an offline PASS."""
+
+    commit_sha: str
+    commit_object_b64: str
     path: str
-    raw_ls_tree_line: str
+    path_components: tuple[str, ...]
+    tree_object_chain_b64: tuple[str, ...]
+    mode: str
+    blob_sha1: str
     captured_at: str
 
 
@@ -152,6 +190,30 @@ class ExpectedAssetDelta:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class ExpectedAccountAssetDelta:
+    """One wallet-owned *account*'s independently-reviewed net balance
+    change, preserved before by-mint aggregation (Phase 1 remediation
+    round 6, finding #3) -- checked against
+    :func:`argus.parsing.generic_parser.compute_account_level_deltas`,
+    which retains real account-index/owner/mint/pre/post/net/decimals
+    granularity that :class:`ExpectedAssetDelta`'s by-mint view discards.
+    This is the oracle a multiple-token-account/LP-style category is
+    actually proven against: two accounts of the same mint moving in
+    opposite directions can net to zero and disappear from the by-mint
+    view entirely, even though both were genuinely material."""
+
+    account_identifier: str
+    account_index: int
+    owner: str
+    mint: str  # "SOL" (canonical) or a mint address
+    pre_raw_amount: int
+    post_raw_amount: int
+    net_raw_delta: int
+    decimals: int
+    ui_delta: str  # exact decimal string
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class ReviewerEvidence:
     method: str
     rationale: str
@@ -162,7 +224,8 @@ class ReviewerEvidence:
 class ExpectedOutcome:
     """The typed, immutable, independently-reviewed expectation for one
     real-chain fixture's wallet perspective (Phase 1 remediation round 5,
-    finding #1). Never derived from running the parser under test --
+    finding #1; ``account_deltas`` added round 6, finding #3). Never
+    derived from running the parser under test --
     :func:`import_real_chain_fixture` computes the parser's own
     ``observed_*`` output as separate fields on
     :class:`RealChainFixtureRecord`, checked against (never promoted to)
@@ -172,6 +235,7 @@ class ExpectedOutcome:
     is_copy_eligible: bool
     wallet_perspective: WalletPerspective
     asset_deltas: tuple[ExpectedAssetDelta, ...]
+    account_deltas: tuple[ExpectedAccountAssetDelta, ...]
     expected_input_mint: str | None
     expected_input_amount_raw: int | None
     expected_output_mint: str | None
@@ -224,21 +288,11 @@ class RealChainFixtureRecord:
         data["transform_manifest"] = tuple(
             TransformStep(**step) for step in data["transform_manifest"]
         )
-        data["upstream_tree_attestation"] = GitTreeAttestation(**data["upstream_tree_attestation"])
-        license_data = dict(data["upstream_license"])
-        license_data["tree_attestation"] = GitTreeAttestation(**license_data["tree_attestation"])
-        data["upstream_license"] = LicenseEvidence(**license_data)
-        expectation_data = dict(data["expectation"])
-        expectation_data["wallet_perspective"] = WalletPerspective(
-            **expectation_data["wallet_perspective"]
+        data["upstream_tree_attestation"] = _tree_attestation_from_dict(
+            data["upstream_tree_attestation"]
         )
-        expectation_data["asset_deltas"] = tuple(
-            ExpectedAssetDelta(**d) for d in expectation_data["asset_deltas"]
-        )
-        reviewer_data = dict(expectation_data["reviewer"])
-        reviewer_data["evidence_refs"] = tuple(reviewer_data["evidence_refs"])
-        expectation_data["reviewer"] = ReviewerEvidence(**reviewer_data)
-        data["expectation"] = ExpectedOutcome(**expectation_data)
+        data["upstream_license"] = _license_evidence_from_dict(data["upstream_license"])
+        data["expectation"] = _expectation_from_dict(data["expectation"])
         return cls(**data)
 
 
@@ -254,6 +308,16 @@ def _account_keys(message: Any) -> list[str]:
     return [k["pubkey"] if isinstance(k, dict) else k for k in keys]
 
 
+def _git_object_sha1(object_type: str, content: bytes) -> str:
+    """Git's own content-addressing for any loose object type: ``sha1(<type>
+    " " <len> "\\0" <content>)``. ``_git_blob_sha1`` (round 4, finding #2)
+    is the ``object_type="blob"`` special case; round 6, finding #2 needs
+    the same identity for ``commit`` and ``tree`` objects too, to walk and
+    verify a full object chain offline."""
+    header = f"{object_type} {len(content)}\0".encode()
+    return hashlib.sha1(header + content).hexdigest()  # noqa: S324 -- git's own content-addressing
+
+
 def _git_blob_sha1(data: bytes) -> str:
     """The same content identity ``git hash-object``/``git cat-file``
     would report for these exact bytes as a blob -- an offline,
@@ -261,59 +325,218 @@ def _git_blob_sha1(data: bytes) -> str:
     commit this fixture traces to (Phase 1 remediation round 4, finding
     #2), without requiring a live clone of the upstream repository to
     verify."""
-    header = f"blob {len(data)}\0".encode()
-    return hashlib.sha1(header + data).hexdigest()  # noqa: S324 -- git's own content-addressing
+    return _git_object_sha1("blob", data)
+
+
+def _parse_git_commit_tree_sha(commit_bytes: bytes) -> str:
+    """Extracts the root tree SHA-1 from a raw git commit object's first
+    ``tree <sha>`` header line."""
+    try:
+        first_line = commit_bytes.split(b"\n", 1)[0].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RealChainFixtureError("git commit object is not valid UTF-8") from exc
+    prefix, _sep, tree_sha = first_line.partition(" ")
+    if (
+        prefix != "tree"
+        or len(tree_sha) != 40
+        or not all(c in "0123456789abcdef" for c in tree_sha)
+    ):
+        raise RealChainFixtureError(
+            f"git commit object does not begin with a valid 'tree <sha>' header line: {first_line!r}"
+        )
+    return tree_sha
+
+
+def _parse_git_tree_object(tree_bytes: bytes) -> list[tuple[str, str, str]]:
+    """Parses a raw git tree object's binary content (mode-space-name-NUL-
+    20_raw_sha1_bytes, repeated) into ``(mode, name, sha1_hex)`` entries,
+    in on-disk order. Pure Python, no ``git`` binary required -- this is
+    what lets :func:`verify_git_object_chain` run fully offline."""
+    entries: list[tuple[str, str, str]] = []
+    i, n = 0, len(tree_bytes)
+    while i < n:
+        null_idx = tree_bytes.find(b"\0", i)
+        if null_idx == -1:
+            raise RealChainFixtureError("truncated git tree object: missing NUL after entry header")
+        try:
+            header = tree_bytes[i:null_idx].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RealChainFixtureError("git tree object entry header is not valid UTF-8") from exc
+        mode, _sep, name = header.partition(" ")
+        if not _sep:
+            raise RealChainFixtureError(f"malformed git tree entry header: {header!r}")
+        sha_bytes = tree_bytes[null_idx + 1 : null_idx + 21]
+        if len(sha_bytes) != 20:
+            raise RealChainFixtureError("truncated git tree object: incomplete entry SHA-1")
+        entries.append((mode, name, sha_bytes.hex()))
+        i = null_idx + 21
+    return entries
+
+
+_REGULAR_FILE_GIT_MODES = frozenset({"100644", "100755", "120000"})
 
 
 def attest_git_tree(
     repo_clone_dir: Path, commit: str, path: str, *, clock: Clock | None = None
 ) -> GitTreeAttestation:
-    """Runs ``git ls-tree`` against an already-cloned local copy of the
-    upstream repository (a shallow, tree/commit-only clone -- e.g. ``git
-    clone --filter=blob:none --no-checkout <url>`` -- is sufficient; no
-    blob content needs to be fetched to attest a path) to independently
-    prove, using git's own content-addressing, that the declared path at
-    the declared commit resolves to the declared blob -- not a bare
-    asserted string (Phase 1 remediation round 5, finding #2). Captured
-    once, with real network access, by whoever is acquiring a fixture;
-    the resulting attestation is then preserved and re-checked only for
-    internal self-consistency (never re-fetched) by the offline
-    validator."""
-    result = subprocess.run(
-        ["git", "ls-tree", commit, "--", path],
+    """Walks an already-cloned local copy of the upstream repository (a
+    shallow, tree/commit-only clone -- e.g. ``git clone
+    --filter=blob:none --no-checkout <url>`` -- is sufficient; no blob
+    content needs to be fetched) to build a full, offline-independently-
+    verifiable Git object chain from the declared commit down to the
+    declared path's blob (Phase 1 remediation round 6, finding #2):
+    resolves the commit, reads its raw object bytes, extracts the root
+    tree, then walks ``path`` one directory component at a time, reading
+    each tree object's raw bytes along the way and self-checking every
+    object's content against its own hash *at capture time too* -- a
+    corrupt capture is refused immediately, not silently trusted until
+    validation.
+
+    Captured once, with real network access (this function itself makes
+    no network call -- ``repo_clone_dir`` must already be a local clone),
+    by whoever is acquiring a fixture; the resulting attestation is then
+    preserved and independently re-verified, entirely offline, by
+    :func:`verify_git_object_chain`."""
+
+    def _cat_file(object_type: str, object_sha: str) -> bytes:
+        result = subprocess.run(
+            ["git", "cat-file", object_type, object_sha],
+            cwd=repo_clone_dir,
+            capture_output=True,
+            timeout=30,
+            check=True,
+        )
+        return result.stdout
+
+    resolved = subprocess.run(
+        ["git", "rev-parse", f"{commit}^{{commit}}"],
         cwd=repo_clone_dir,
         capture_output=True,
         text=True,
         timeout=30,
         check=True,
     )
-    line = result.stdout.strip()
-    if not line:
+    resolved_commit = resolved.stdout.strip()
+    if not resolved_commit:
+        raise RealChainFixtureError(f"could not resolve commit {commit!r} in {repo_clone_dir}")
+
+    commit_bytes = _cat_file("commit", resolved_commit)
+    if _git_object_sha1("commit", commit_bytes) != resolved_commit:
         raise RealChainFixtureError(
-            f"git ls-tree found no entry for {path!r} at commit {commit!r} in {repo_clone_dir}"
+            f"recomputed commit object hash does not match resolved commit {resolved_commit!r} "
+            "-- capture is corrupt"
         )
-    meta, _tab, tree_path = line.partition("\t")
-    mode, object_type, blob_sha1 = meta.split()
-    if object_type != "blob":
-        raise RealChainFixtureError(f"{path!r} at {commit!r} is a {object_type!r}, not a blob")
+
+    components = tuple(c for c in path.split("/") if c)
+    if not components:
+        raise RealChainFixtureError(f"empty path: {path!r}")
+
+    tree_chain: list[bytes] = []
+    current_tree_sha = _parse_git_commit_tree_sha(commit_bytes)
+    mode = ""
+    blob_sha1 = ""
+    for i, component in enumerate(components):
+        tree_bytes = _cat_file("tree", current_tree_sha)
+        if _git_object_sha1("tree", tree_bytes) != current_tree_sha:
+            raise RealChainFixtureError(
+                f"recomputed tree object hash does not match {current_tree_sha!r} while walking "
+                f"{path!r} -- capture is corrupt"
+            )
+        tree_chain.append(tree_bytes)
+        entries = {name: (m, sha) for m, name, sha in _parse_git_tree_object(tree_bytes)}
+        if component not in entries:
+            raise RealChainFixtureError(
+                f"git tree {current_tree_sha!r} has no entry {component!r} while walking {path!r} "
+                f"at commit {resolved_commit!r}"
+            )
+        mode, next_sha = entries[component]
+        if i == len(components) - 1:
+            blob_sha1 = next_sha
+        else:
+            current_tree_sha = next_sha
+
+    if mode not in _REGULAR_FILE_GIT_MODES:
+        raise RealChainFixtureError(
+            f"{path!r} at {resolved_commit!r} resolves to git mode {mode!r}, not a regular file/"
+            "symlink blob"
+        )
+
     return GitTreeAttestation(
+        commit_sha=resolved_commit,
+        commit_object_b64=base64.b64encode(commit_bytes).decode("ascii"),
+        path=path,
+        path_components=components,
+        tree_object_chain_b64=tuple(base64.b64encode(t).decode("ascii") for t in tree_chain),
         mode=mode,
-        object_type=object_type,
         blob_sha1=blob_sha1,
-        path=tree_path,
-        raw_ls_tree_line=line,
         captured_at=(clock or Clock()).utc_now().isoformat(),
     )
 
 
-def _reparse_ls_tree_line(line: str) -> tuple[str, str, str, str]:
-    """Independently re-parses a preserved ``raw_ls_tree_line`` -- used
-    by the offline validator to prove the attestation's structured
-    fields (``mode``/``object_type``/``blob_sha1``/``path``) were not
-    hand-edited independently of the line they claim to summarize."""
-    meta, _tab, tree_path = line.partition("\t")
-    mode, object_type, blob_sha1 = meta.split()
-    return mode, object_type, blob_sha1, tree_path
+def verify_git_object_chain(attestation: GitTreeAttestation) -> str | None:
+    """Fully, independently recomputes every object ID along ``commit_sha
+    -> root tree -> ... -> blob_sha1`` from the attestation's own
+    preserved raw object bytes and confirms the declared path resolves to
+    the declared blob -- no ``git`` binary, network access, or trust in
+    any single saved summary line required (Phase 1 remediation round 6,
+    finding #2). Returns ``None`` if the chain fully verifies, else a
+    description of exactly where it diverges."""
+    try:
+        commit_bytes = base64.b64decode(attestation.commit_object_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return "commit_object_b64 is not valid base64"
+    if _git_object_sha1("commit", commit_bytes) != attestation.commit_sha:
+        return "recomputed commit object hash does not match commit_sha"
+
+    try:
+        tree_sha = _parse_git_commit_tree_sha(commit_bytes)
+    except RealChainFixtureError as exc:
+        return str(exc)
+
+    if "/".join(c for c in attestation.path.split("/") if c) != attestation.path:
+        return "path is not a normalized '/'-joined sequence of its own components"
+    if tuple(c for c in attestation.path.split("/") if c) != attestation.path_components:
+        return "path_components does not reconstruct declared path"
+    if len(attestation.tree_object_chain_b64) != len(attestation.path_components):
+        return "tree_object_chain_b64 length does not match path_components length"
+    if not attestation.path_components:
+        return "path_components is empty"
+
+    current_tree_sha = tree_sha
+    mode = ""
+    blob_sha1 = ""
+    for i, (component, tree_b64) in enumerate(
+        zip(attestation.path_components, attestation.tree_object_chain_b64, strict=True)
+    ):
+        try:
+            tree_bytes = base64.b64decode(tree_b64, validate=True)
+        except (binascii.Error, ValueError):
+            return f"tree_object_chain_b64[{i}] is not valid base64"
+        if _git_object_sha1("tree", tree_bytes) != current_tree_sha:
+            return (
+                f"recomputed tree object hash at path component {i} ({component!r}) does not "
+                f"match the expected {current_tree_sha!r}"
+            )
+        try:
+            entries = {name: (m, sha) for m, name, sha in _parse_git_tree_object(tree_bytes)}
+        except RealChainFixtureError as exc:
+            return f"tree_object_chain_b64[{i}]: {exc}"
+        if component not in entries:
+            return f"tree {current_tree_sha!r} has no entry {component!r}"
+        mode, next_sha = entries[component]
+        if i == len(attestation.path_components) - 1:
+            blob_sha1 = next_sha
+        else:
+            current_tree_sha = next_sha
+
+    if mode != attestation.mode:
+        return f"resolved git mode {mode!r} does not match declared mode {attestation.mode!r}"
+    if blob_sha1 != attestation.blob_sha1:
+        return (
+            f"final resolved blob sha1 {blob_sha1!r} does not match declared "
+            f"blob_sha1 {attestation.blob_sha1!r}"
+        )
+    return None
 
 
 _TS_CONST_EXPORT_RE = re.compile(r"=\s*(\{.*\})\s*\n\nexport default\s+\w+;\s*\n?\Z", re.DOTALL)
@@ -503,10 +726,12 @@ def _render_markdown(records: dict[str, RealChainFixtureRecord]) -> str:
         "Generated by `argus.golden_fixtures` -- do not hand-edit; "
         "re-run the import to update an entry. Every fixture here is an "
         "authentic `getTransaction` payload traceable to an immutable "
-        "upstream GitHub commit via real `git ls-tree` evidence (Phase 1 "
-        "remediation round 5, finding #2), with a typed, independently-"
-        "reviewed expectation (finding #1) checked against -- never "
-        "defined by -- the parser's own observed output. See "
+        "upstream GitHub commit via an offline-verifiable Git object chain "
+        "(commit -> tree -> ... -> blob, Phase 1 remediation round 6, "
+        "finding #2), with a typed, independently-reviewed expectation "
+        "(round 5 finding #1; account-level deltas added round 6 finding "
+        "#3) checked against -- never defined by -- the parser's own "
+        "observed output. See "
         "`SEARCH_LOG.md` (hand-maintained, never overwritten by this "
         "module) for which upstream repositories were searched and which "
         "required categories these fixtures satisfy.\n\n"
@@ -541,19 +766,30 @@ def _render_markdown(records: dict[str, RealChainFixtureRecord]) -> str:
             + (f" @ account `{d.account_context}`" if d.account_context else "")
             for d in exp.asset_deltas
         )
+        account_deltas_lines = "\n".join(
+            f"  - account `{d.account_identifier}` (index {d.account_index}) mint `{d.mint}`: "
+            f"{d.pre_raw_amount} -> {d.post_raw_amount} raw (net {d.net_raw_delta:+d}, "
+            f"{d.ui_delta} UI, {d.decimals} decimals)"
+            for d in exp.account_deltas
+        )
+        tree_att = record.upstream_tree_attestation
         lines.append(
             f"### `{category}`\n\n"
             f"- wallet perspective: `{exp.wallet_perspective.wallet_address}` "
             f"({exp.wallet_perspective.method})\n"
             f"- raw upstream source preserved at: `sources/{record.upstream_git_blob_sha1}"
             ".source.json`\n"
-            f"- upstream tree attestation: `{record.upstream_tree_attestation.raw_ls_tree_line}`\n"
+            f"- upstream git object chain: commit `{tree_att.commit_sha}` -> path "
+            f"`{tree_att.path}` -> blob `{tree_att.blob_sha1}` (mode `{tree_att.mode}`, "
+            f"{len(tree_att.tree_object_chain_b64)} tree object(s) preserved, offline-"
+            "reverifiable via argus.golden_fixtures.verify_git_object_chain)\n"
             f"- license: {record.upstream_license.spdx_id} at `{record.upstream_license.path}` "
             f"(`{record.upstream_license.bytes_sha256}`) -- "
             f"{record.upstream_license.compatibility_decision}\n"
             f"- attribution: {record.upstream_license.attribution}\n"
             f"- transform manifest:\n{transform_lines}\n"
-            f"- expected asset deltas:\n{deltas_lines}\n"
+            f"- expected asset deltas (by mint):\n{deltas_lines}\n"
+            f"- expected account-level deltas (pre-aggregation):\n{account_deltas_lines}\n"
             f"- expected confidence rule: {exp.confidence_rule} "
             f"(exact: {exp.expected_confidence})\n"
             f"- reviewer method: {exp.reviewer.method}\n"
@@ -652,6 +888,14 @@ def import_real_chain_fixture(
     preserve a known-divergent research fixture -- it is then imported
     with ``quarantined=True``, always fails golden validation, and is
     never counted as passing category coverage."""
+    if upstream_tree_attestation.commit_sha != upstream_commit:
+        raise RealChainFixtureError(
+            f"{category!r}: upstream_commit {upstream_commit!r} does not match the supplied tree "
+            f"attestation's own commit_sha {upstream_tree_attestation.commit_sha!r} -- the "
+            "attestation was captured against a different commit than declared (Phase 1 "
+            "remediation round 6, finding #3)"
+        )
+
     original_bytes = input_path.read_bytes()
     original_sha256 = hashlib.sha256(original_bytes).hexdigest()
     upstream_git_blob_sha1 = _git_blob_sha1(original_bytes)
@@ -679,6 +923,14 @@ def import_real_chain_fixture(
     transaction_version = str(payload.get("version", "legacy"))
 
     wallet_address = expectation.wallet_perspective.wallet_address
+    if not _wallet_appears_in_payload(payload, wallet_address):
+        raise RealChainFixtureError(
+            f"{category!r}: expectation.wallet_perspective.wallet_address {wallet_address!r} does "
+            "not appear anywhere in the rebuilt payload (neither transaction.message.accountKeys "
+            "nor any preTokenBalances/postTokenBalances owner) -- the reviewed wallet identity "
+            "must correspond to something real in the transaction, not an arbitrary string "
+            "(Phase 1 remediation round 6, finding #3)"
+        )
     parsed: ParsedTransaction = parse_transaction(
         payload, wallet_address=wallet_address, slot=slot, block_time=None
     )
@@ -693,12 +945,14 @@ def import_real_chain_fixture(
         )
         for d in observed_deltas
     )
+    observed_account_deltas_expected_shape = _account_deltas_expected_shape(payload, wallet_address)
 
     mismatches = _diff_expectation(
         expectation=expectation,
         parsed=parsed,
         raw_payload=payload,
         observed_deltas=observed_deltas_expected_shape,
+        observed_account_deltas=observed_account_deltas_expected_shape,
     )
     if mismatches and quarantine_reason is None:
         raise RealChainFixtureError(
@@ -776,19 +1030,61 @@ def _scaled(raw_amount: int, decimals: int) -> str:
     return str(Decimal(raw_amount).scaleb(-decimals))
 
 
+def _wallet_appears_in_payload(payload: dict[str, Any], wallet_address: str) -> bool:
+    """Whether ``wallet_address`` corresponds to something real in
+    ``payload`` -- either a top-level ``accountKeys`` entry, or the
+    ``owner`` of some pre/postTokenBalances entry -- rather than an
+    arbitrary string never referenced by the transaction at all (Phase 1
+    remediation round 6, finding #3: binds the reviewed wallet
+    perspective's *identity*, not only its claimed deltas)."""
+    if wallet_address in _account_keys(payload.get("transaction", {}).get("message", {})):
+        return True
+    meta = payload.get("meta", {})
+    for entry in (meta.get("preTokenBalances") or []) + (meta.get("postTokenBalances") or []):
+        if entry.get("owner") == wallet_address:
+            return True
+    return False
+
+
+def _account_deltas_expected_shape(
+    payload: dict[str, Any], wallet_address: str
+) -> tuple[ExpectedAccountAssetDelta, ...]:
+    """Runs :func:`argus.parsing.generic_parser.compute_account_level_deltas`
+    and reshapes its output into :class:`ExpectedAccountAssetDelta` for
+    direct comparison against an independent expectation's
+    ``account_deltas`` (Phase 1 remediation round 6, finding #3)."""
+    return tuple(
+        ExpectedAccountAssetDelta(
+            account_identifier=d.account_identifier,
+            account_index=d.account_index,
+            owner=d.owner,
+            mint=d.mint,
+            pre_raw_amount=d.pre_raw_amount,
+            post_raw_amount=d.post_raw_amount,
+            net_raw_delta=d.net_raw_delta,
+            decimals=d.decimals,
+            ui_delta=d.ui_delta,
+        )
+        for d in compute_account_level_deltas(payload, wallet_address)
+    )
+
+
 def _diff_expectation(
     *,
     expectation: ExpectedOutcome,
     parsed: ParsedTransaction,
     raw_payload: dict[str, Any],
     observed_deltas: tuple[ExpectedAssetDelta, ...],
+    observed_account_deltas: tuple[ExpectedAccountAssetDelta, ...],
 ) -> list[str]:
     """Every field :func:`import_real_chain_fixture`/
     :func:`validate_real_chain_fixtures` compare the independent
     expectation against -- returns the names of every field that
     disagrees (empty if none). Comparing every applicable canonical
     field, not only classification/confidence, is finding #1's central
-    requirement."""
+    requirement; comparing ``account_deltas`` (round 6, finding #3) is
+    what actually proves multiple-token-account/LP-style evidence, which
+    by-mint ``asset_deltas`` alone can silently erase."""
     mismatches: list[str] = []
     if parsed.classification != expectation.classification:
         mismatches.append("classification")
@@ -811,7 +1107,61 @@ def _diff_expectation(
         mismatches.append("expected_confidence")
     if observed_deltas != expectation.asset_deltas:
         mismatches.append("asset_deltas")
+    if observed_account_deltas != expectation.account_deltas:
+        mismatches.append("account_deltas")
     return mismatches
+
+
+def _check_record_identity(
+    record: RealChainFixtureRecord, rebuilt_payload: dict[str, Any], *, category: str
+) -> str | None:
+    """Binds and validates the record identity fields that can otherwise
+    silently drift from the rebuilt payload -- category, chain,
+    transaction signature, slot, transaction version, and upstream path
+    (Phase 1 remediation round 6, finding #3). Every one of these is
+    recomputed from ``rebuilt_payload`` (or, for ``upstream_path``, the
+    already offline-verified tree attestation) and checked against the
+    stored record, never merely fed back into the parser as a trusted
+    input. Returns ``None`` if every field agrees, else a description of
+    the first divergence found."""
+    if record.category != category:
+        return f"record.category {record.category!r} does not match its own provenance key {category!r}"
+    if record.chain != "solana":
+        return f"record.chain {record.chain!r} is not 'solana'"
+
+    transaction = rebuilt_payload.get("transaction")
+    if not isinstance(transaction, dict):
+        return "rebuilt_payload is missing a 'transaction' object"
+    signatures = transaction.get("signatures")
+    if not isinstance(signatures, list) or not signatures or not isinstance(signatures[0], str):
+        return "rebuilt_payload.transaction.signatures[0] is missing or not a string"
+    rebuilt_signature = signatures[0]
+    if rebuilt_signature != record.signature:
+        return (
+            f"record.signature {record.signature!r} does not match the rebuilt payload's own "
+            f"signature {rebuilt_signature!r}"
+        )
+
+    try:
+        rebuilt_slot = int(rebuilt_payload["slot"])
+    except (KeyError, TypeError, ValueError):
+        return "rebuilt_payload.slot is missing or not an integer"
+    if rebuilt_slot != record.slot:
+        return f"record.slot {record.slot} does not match the rebuilt payload's own slot {rebuilt_slot}"
+
+    rebuilt_version = str(rebuilt_payload.get("version", "legacy"))
+    if rebuilt_version != record.transaction_version:
+        return (
+            f"record.transaction_version {record.transaction_version!r} does not match the "
+            f"rebuilt payload's own version {rebuilt_version!r}"
+        )
+
+    if record.upstream_path != record.upstream_tree_attestation.path:
+        return (
+            f"record.upstream_path {record.upstream_path!r} does not match the offline-verified "
+            f"tree attestation's own path {record.upstream_tree_attestation.path!r}"
+        )
+    return None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -901,9 +1251,18 @@ def validate_real_chain_fixtures(
             )
             continue
 
-        tree_check = _check_tree_attestation(record.upstream_tree_attestation)
+        tree_check = verify_git_object_chain(record.upstream_tree_attestation)
         if tree_check is not None:
-            results.append(_fail(f"upstream tree attestation invalid: {tree_check}"))
+            results.append(_fail(f"upstream tree object chain invalid: {tree_check}"))
+            continue
+        if record.upstream_tree_attestation.commit_sha != record.upstream_commit:
+            results.append(
+                _fail(
+                    "upstream tree attestation commit_sha "
+                    f"{record.upstream_tree_attestation.commit_sha} does not match "
+                    f"upstream_commit {record.upstream_commit}"
+                )
+            )
             continue
         if record.upstream_tree_attestation.blob_sha1 != record.upstream_git_blob_sha1:
             results.append(
@@ -915,9 +1274,9 @@ def validate_real_chain_fixtures(
             )
             continue
 
-        license_check = _check_tree_attestation(record.upstream_license.tree_attestation)
+        license_check = verify_git_object_chain(record.upstream_license.tree_attestation)
         if license_check is not None:
-            results.append(_fail(f"license tree attestation invalid: {license_check}"))
+            results.append(_fail(f"license tree object chain invalid: {license_check}"))
             continue
         license_path = (
             licenses_dir / f"{record.upstream_license.tree_attestation.blob_sha1}.license"
@@ -944,6 +1303,11 @@ def validate_real_chain_fixtures(
 
         if rebuilt_manifest != record.transform_manifest:
             results.append(_fail("transform manifest diverged from a fresh rebuild"))
+            continue
+
+        identity_mismatch = _check_record_identity(record, rebuilt_payload, category=category)
+        if identity_mismatch is not None:
+            results.append(_fail(identity_mismatch))
             continue
 
         current_fixture_bytes = fixture_path.read_bytes()
@@ -1003,6 +1367,14 @@ def validate_real_chain_fixtures(
             continue
 
         wallet_address = record.expectation.wallet_perspective.wallet_address
+        if not _wallet_appears_in_payload(rebuilt_payload, wallet_address):
+            results.append(
+                _fail(
+                    f"expectation wallet_address {wallet_address!r} does not appear anywhere in "
+                    "the rebuilt payload"
+                )
+            )
+            continue
         parsed = parse_transaction(
             rebuilt_payload, wallet_address=wallet_address, slot=record.slot, block_time=None
         )
@@ -1017,11 +1389,15 @@ def validate_real_chain_fixtures(
             )
             for d in observed_deltas
         )
+        observed_account_deltas_expected_shape = _account_deltas_expected_shape(
+            rebuilt_payload, wallet_address
+        )
         mismatches = _diff_expectation(
             expectation=record.expectation,
             parsed=parsed,
             raw_payload=rebuilt_payload,
             observed_deltas=observed_deltas_expected_shape,
+            observed_account_deltas=observed_account_deltas_expected_shape,
         )
         if mismatches:
             results.append(
@@ -1035,29 +1411,10 @@ def validate_real_chain_fixtures(
     return results
 
 
-def _check_tree_attestation(attestation: GitTreeAttestation) -> str | None:
-    """Re-parses the attestation's own preserved raw line and confirms it
-    is internally self-consistent with its structured fields -- returns
-    ``None`` if consistent, else a description of the divergence."""
-    try:
-        mode, object_type, blob_sha1, path = _reparse_ls_tree_line(attestation.raw_ls_tree_line)
-    except ValueError:
-        return f"raw_ls_tree_line does not parse as a git ls-tree line: {attestation.raw_ls_tree_line!r}"
-    if (mode, object_type, blob_sha1, path) != (
-        attestation.mode,
-        attestation.object_type,
-        attestation.blob_sha1,
-        attestation.path,
-    ):
-        return (
-            f"structured fields do not match a fresh re-parse of raw_ls_tree_line: "
-            f"recorded ({attestation.mode}, {attestation.object_type}, {attestation.blob_sha1}, "
-            f"{attestation.path}), re-parsed ({mode}, {object_type}, {blob_sha1}, {path})"
-        )
-    return None
-
-
 def _tree_attestation_from_dict(data: dict[str, Any]) -> GitTreeAttestation:
+    data = dict(data)
+    data["path_components"] = tuple(data["path_components"])
+    data["tree_object_chain_b64"] = tuple(data["tree_object_chain_b64"])
     return GitTreeAttestation(**data)
 
 
@@ -1071,6 +1428,7 @@ def _expectation_from_dict(data: dict[str, Any]) -> ExpectedOutcome:
     data = dict(data)
     data["wallet_perspective"] = WalletPerspective(**data["wallet_perspective"])
     data["asset_deltas"] = tuple(ExpectedAssetDelta(**d) for d in data["asset_deltas"])
+    data["account_deltas"] = tuple(ExpectedAccountAssetDelta(**d) for d in data["account_deltas"])
     reviewer = dict(data["reviewer"])
     reviewer["evidence_refs"] = tuple(reviewer["evidence_refs"])
     data["reviewer"] = ReviewerEvidence(**reviewer)

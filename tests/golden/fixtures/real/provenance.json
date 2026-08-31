@@ -2,8 +2,32 @@
   "real_mainnet_dca_close_dual_asset_transfer_in": {
     "category": "real_mainnet_dca_close_dual_asset_transfer_in",
     "chain": "solana",
-    "evidence_chain_hash": "71a4ed3baa6508d87a9f62d701de557df4c67c6f97af8c832c18a604df375b03",
+    "evidence_chain_hash": "00d6615ed7a27c6b261ad365c28d9e9366d847b276208f68a80a6649b5652db3",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": 6980880,
+          "owner": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ",
+          "post_raw_amount": 5400992937,
+          "pre_raw_amount": 5394042772,
+          "ui_delta": "0.006980880"
+        },
+        {
+          "account_identifier": "4TQuSH6cQUHFZUxYPX4neGLXZXfR4gqWB9442aoPqDoJ",
+          "account_index": 1,
+          "decimals": 6,
+          "mint": "6T44rfi9BDUdZbEvVddZWVfsGrpC6N1sSSKYnCsLpump",
+          "net_raw_delta": 225000000000,
+          "owner": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ",
+          "post_raw_amount": 475459450285,
+          "pre_raw_amount": 250459450285,
+          "ui_delta": "225000.000000"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -34,8 +58,8 @@
           "0xjeffro/tx-parser's own jupiterDca_CloseDca_0.json naming -- a Jupiter DCA order close instruction",
           "tests/golden/fixtures/real/SEARCH_LOG.md's round 3/4/5 sections, documenting this fixture's structural analysis across three rounds"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
-        "rationale": "Two structurally unrelated assets move for this wallet in the same (inflow) direction with nothing given up: SOL increases by 6,980,880 lamports (a rent refund from the DCA order account being closed) and a separate SPL token increases by 225,000,000,000 raw units (the escrowed balance released by the order close). Neither is a counter-asset to the other -- there is no single coherent 'asset X for asset Y' story here, only two independent inflows that happen to land in the same transaction. Balance deltas alone cannot determine which (if either) represents a genuine trade signal; a naive largest-leg heuristic would misread this as a confident TRANSFER_IN of the token, silently discarding the SOL leg. Genuinely UNKNOWN and ineligible, not a confident guess."
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
+        "rationale": "Two structurally unrelated assets move for this wallet in the same (inflow) direction with nothing given up: SOL increases by 6,980,880 lamports (a rent refund from the DCA order account being closed) and a separate SPL token increases by 225,000,000,000 raw units (the escrowed balance released by the order close). Neither is a counter-asset to the other -- there is no single coherent 'asset X for asset Y' story here, only two independent inflows that happen to land in the same transaction. Genuinely UNKNOWN and ineligible, not a confident guess."
       },
       "transaction_failed": false,
       "wallet_perspective": {
@@ -43,7 +67,7 @@
         "wallet_address": "3k2pJD3FtFT8zZLoYRgHEQgays1jYs6LYCKi5MWNPLKJ"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.465264+00:00",
+    "imported_at": "2026-08-31T19:35:33.512106+00:00",
     "observed_classification": "UNKNOWN",
     "observed_confidence": "0.000",
     "observed_is_copy_eligible": false,
@@ -87,33 +111,50 @@
       "spdx_id": "MPL-2.0",
       "tree_attestation": {
         "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
-        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "captured_at": "2026-08-31T19:29:07.083384+00:00",
+        "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+        "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9"
+        ]
       }
     },
     "upstream_path": "solana/data/jupiterDca_CloseDca_0.json",
-    "upstream_path_note": "Jupiter DCA order close: signer receives two independent, simultaneous asset inflows (a native-SOL rent refund from a closed program account, and a released escrowed SPL token balance) with no counter-asset given up. Round 5, finding #4 fixed the parser to recognize this exact shape (2+ distinct assets moving the same direction with nothing offsetting them) as genuinely ambiguous UNKNOWN rather than silently picking the larger leg as TRANSFER_IN -- this fixture is now the authentic 'ambiguous multi-asset transaction' required category, not merely an additional data point (correcting round 4's own disposition, which excluded it after round 3 had incorrectly counted it while the pre-round-5 parser still confidently resolved it to TRANSFER_IN). Single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
+    "upstream_path_note": "Jupiter DCA order close: signer receives two independent, simultaneous asset inflows (a native-SOL rent refund from a closed program account, and a released escrowed SPL token balance) with no counter-asset given up. Round 5, finding #4 fixed the parser to recognize this exact shape (2+ distinct assets moving the same direction with nothing offsetting them) as genuinely ambiguous UNKNOWN rather than silently picking the larger leg as TRANSFER_IN. Single-element JSON array in upstream, unwrapped by this project's import pipeline; zero bytes of the captured transaction data changed.",
     "upstream_repo": "0xjeffro/tx-parser",
     "upstream_tree_attestation": {
       "blob_sha1": "4afec180d7a7ab59a637a93bf7d60283f09514ba",
-      "captured_at": "2026-08-31T15:31:19.069103+00:00",
+      "captured_at": "2026-08-31T19:29:07.034272+00:00",
+      "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+      "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
       "mode": "100644",
-      "object_type": "blob",
       "path": "solana/data/jupiterDca_CloseDca_0.json",
-      "raw_ls_tree_line": "100644 blob 4afec180d7a7ab59a637a93bf7d60283f09514ba\tsolana/data/jupiterDca_CloseDca_0.json"
+      "path_components": [
+        "solana",
+        "data",
+        "jupiterDca_CloseDca_0.json"
+      ],
+      "tree_object_chain_b64": [
+        "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9",
+        "NDAwMDAgZGF0YQA/NPJ24ArFxpboa/q0GB8u63emFDQwMDAwIGdsb2JhbHMAv7n1xiEN9aLPr4kyRuKS0qN1nK00MDAwMCBpZGwApOYDxw65QSx+G5iIjR78GD6SgfcxMDA2NDQgcGFyc2VyLmdvABElLLWYnSzAqMg804sFtk2FGgCxMTAwNjQ0IHBhcnNlcl90ZXN0LmdvANVSj/dTkfNvmDZiuGKWmraPtWq3NDAwMDAgcHJvZ3JhbXMAi77SzZHFCVb0IDQXmbq2KCQo6100MDAwMCByZWdpc3RyeQCUWeH2dzUWXsSWb6VU7g1cuoGEETEwMDY0NCByb3V0ZXIuZ28AUHI+0ljB0wCWkRtzyKcGdiBN1vc0MDAwMCB0eXBlcwDlgHLLnPTw49LfIdBA7Bw1ldauNQ==",
+        "MTAwNjQ0IE9LWERFWF9jb21taXNzaW9uU29sU3dhcDIuanNvbgDM0REq6AuX9ET3nt5eEU8/f6V+HzEwMDY0NCBPS1hERVhfY29tbWlzc2lvblNwbFByb3h5U3dhcC5qc29uADYo02Sw6eZhC7SDa9i+XTxE5qpqMTAwNjQ0IE9LWERFWF9zd2FwXzAuanNvbgBg3NueXa0d3pvBe6jrGOTsIJlT5TEwMDY0NCBPS1hERVhfc3dhcF8xLmpzb24A0XWz732ngfk5K+uo7hYZtjPcDCMxMDA2NDQgT0tYREVYX3N3YXBfMi5qc29uAJ416ROt8B1SvBhyrqxoFbs5n8WFMTAwNjQ0IGJyb2tlbl9kYXRhXzAuanNvbgCnSP36O+KuQc+0SzNT1j4jNgjH4TEwMDY0NCBicm9rZW5fZGF0YV8xLmpzb24AF9gNfLgHD+qSKhP0F/yzOf479OIxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8xLmpzb24A5fPwZPrDaD3IwGLXBdBT6HHVQQMxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8yLmpzb24Aadk7th7TQDXRHXIzXssIidnnv4MxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9zaGFyZWRBY2NvdW50c1JvdXRlXzEuanNvbgC5ogrFt7TmeOcLejsGJys58Mj/NTEwMDY0NCBqdXBpdGVyQWdncmVnYXRvclY2X3NoYXJlZEFjY291bnRzUm91dGVfMi5qc29uAJHzs2dXecak+wqZTvD/HpG555KDMTAwNjQ0IGp1cGl0ZXJEY2FfQ2xvc2VEY2FfMC5qc29uAEr+wYDXp6tZpjepO/fWAoPwlRS6MTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMC5qc29uAPwxo/GG0BaRtjtYgBtkOn0iIqOsMTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMS5qc29uAFES4rjpgH9k3D2vFn0N5IABKhrKMTAwNjQ0IGp1cGl0ZXJEY2Ffb3BlbkRjYVYyXzAuanNvbgAxhwrWmIYMtslhchXOpIjSw7BvIzEwMDY0NCBqdXBpdGVyRGNhX29wZW5EY2FWMl8xLmpzb24AyPAYjbPRPlx9SYCMy3d4aB8h9GIxMDA2NDQgcGhvdG9uX3B1bXBmdW5fYnV5XzAuanNvbgAywLwW/OiYF53SDjk/iM8jvklWWzEwMDY0NCBwaG90b25fcHVtcGZ1bl9idXlfMS5qc29uANbQe19d1O2OAP0COQPfaqhg5ZhrMTAwNjQ0IHBob3Rvbl9wdW1wZnVuX3NlbGwuanNvbgD4LphmERzJeGU2UyAdLVPwsLBGHzEwMDY0NCBwdW1wZnVuX2J1eV8wLmpzb24A2PmLUt2g3gX5ho3bBgWiXoGL6u8xMDA2NDQgcHVtcGZ1bl9idXlfMS5qc29uAIoDUt8ed8Yj/qouoXksDNPJe8PPMTAwNjQ0IHB1bXBmdW5fYnV5X2J1bmRsZS5qc29uABaTXjZO1nbu7q0kqXRB4wD/KBoAMTAwNjQ0IHB1bXBmdW5fY3JlYXRlXzAuanNvbgDwnGSu7q1Xs6cY25q88uHCqjYKujEwMDY0NCBwdW1wZnVuX3NlbGxfMC5qc29uAN5Vsxror39kuZzd8oTQllfeTeyEMTAwNjQ0IHJheWRpdW1MaXF1aWRpdHlQb29sVjRfc3dhcF8wLmpzb24A+id8fU/5l/Mgw4+OFejgLsSZg8sxMDA2NDQgcmF5ZGl1bUxpcXVpZGl0eVBvb2xWNF9zd2FwXzEuanNvbgC5IAiTplS0Gk2FeGLrjtUju4JmODEwMDY0NCByYXlkaXVtTGlxdWlkaXR5UG9vbFY0X3N3YXBfMi5qc29uAOt+JII7Nqu8/QSZQrP89rJ3Y/oSMTAwNjQ0IHRva2VuX3RyYW5zZmVyXzAuanNvbgAE8IDua+KdG/ojoUzwkasrLdXjoDEwMDY0NCB0cmFuc2ZlckNoZWNrZWRfMC5qc29uAGFCpRrB521YefG9VStLD3pzYrl1"
+      ]
     }
   },
   "real_mainnet_failed_nft_sale": {
     "category": "real_mainnet_failed_nft_sale",
     "chain": "solana",
-    "evidence_chain_hash": "e5de40b7e13bf536122bd066fb4a22e96423b5f91daa91c1d6fa781fccd9e2c1",
+    "evidence_chain_hash": "110543514615cdb7c3adfde8ed692b03df81912b1923d85afa8442c8a2ef9699",
     "expectation": {
+      "account_deltas": [],
       "asset_deltas": [],
       "classification": "UNKNOWN",
-      "confidence_rule": "exact: a transaction that failed on-chain (meta.err set) always parses at zero confidence, UNKNOWN, with no asset deltas reported, in v1 -- see argus.parsing.generic_parser.compute_asset_deltas, which returns an empty tuple for any transaction with a non-null meta.err rather than reporting pre/post balance noise from an aborted partial execution as if it were a completed trade",
+      "confidence_rule": "exact: a transaction that failed on-chain (meta.err set) always parses at zero confidence, UNKNOWN, with no asset or account deltas reported, in v1 -- see argus.parsing.generic_parser.compute_asset_deltas/compute_account_level_deltas, which both return an empty tuple for any transaction with a non-null meta.err rather than reporting pre/post balance noise from an aborted partial execution as if it were a completed trade",
       "expected_confidence": "0.000",
       "expected_input_amount_raw": null,
       "expected_input_mint": null,
@@ -125,8 +166,8 @@
         "evidence_refs": [
           "milktoastlab/SolanaNFTBot's own magicEdenFailedTx.ts naming and its embedded meta.err InstructionError payload -- a genuine failed Magic Eden marketplace sale instruction"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
-        "rationale": "meta.err is {'InstructionError': [0, {'Custom': 1}]} -- a genuine on-chain program error, confirming this Magic Eden sale instruction failed after only partial execution. Solana still charges the network fee (5000 lamports) to the fee payer even on failure, which is why network_fee_raw is nonzero while every asset delta is empty: no asset transfer this transaction attempted actually completed as intended, so reporting any balance movement as a real trade would be wrong regardless of what the raw preBalances/postBalances happen to show for a transaction that aborted partway through."
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
+        "rationale": "meta.err is {'InstructionError': [0, {'Custom': 1}]} -- a genuine on-chain program error, confirming this Magic Eden sale instruction failed after only partial execution. Solana still charges the network fee (5000 lamports) to the fee payer even on failure, which is why network_fee_raw is nonzero while every asset/account delta is empty: no asset transfer this transaction attempted actually completed as intended, so reporting any balance movement as a real trade would be wrong regardless of what the raw preBalances/postBalances happen to show for a transaction that aborted partway through. Independently confirmed by direct inspection of the raw preBalances/postBalances/preTokenBalances/postTokenBalances arrays: no token balance entry exists at all, and the fee payer's own net SOL delta (after adding back the fee) is exactly zero."
       },
       "transaction_failed": true,
       "wallet_perspective": {
@@ -134,7 +175,7 @@
         "wallet_address": "L9xDD9dUAcM8r5NHF6SJZRtd4FBpiDUJCbkKF2msWeL"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.473956+00:00",
+    "imported_at": "2026-08-31T19:35:33.523762+00:00",
     "observed_classification": "UNKNOWN",
     "observed_confidence": "0.000",
     "observed_is_copy_eligible": false,
@@ -178,11 +219,17 @@
       "spdx_id": "MIT",
       "tree_attestation": {
         "blob_sha1": "fc9057b3d4349193e1e7232b542e07997c84d2df",
-        "captured_at": "2026-08-31T15:53:32.451919+00:00",
+        "captured_at": "2026-08-31T19:29:07.177778+00:00",
+        "commit_object_b64": "dHJlZSBiNjIwZTVlYzE1NzQ0MzQ1ZWFkM2JlODgxMmQ3YjQ2MGU2ZWVlNGQwCnBhcmVudCBkZjc4ZGI0YmYyZjVlOGFjYmYxMWRmOWNlNDVmMmYzMjgyZWRmOTcyCnBhcmVudCA2NWQyZjY2NDgxODdhZTdkN2JjZDM1OGY4NzhlOWQ4ZjExZDlmOTlmCmF1dGhvciBKYXkgPDkwNjE3NzU5K2tyeXB0b2pAdXNlcnMubm9yZXBseS5naXRodWIuY29tPiAxNjY4NzY5Nzk4ICsxMTAwCmNvbW1pdHRlciBHaXRIdWIgPG5vcmVwbHlAZ2l0aHViLmNvbT4gMTY2ODc2OTc5OCArMTEwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogd3NCY0JBQUJDQUFRQlFKamQyZ0dDUkJLN2hqNE92M3JJd0FBd3FjSUFCUmxjMXphaXJ5RmNIci9KOUlxMWJuYQogMVJxbXRWbENKU1lyaHNlRDhHbFB0SnVDZHZwemdRRkdaZDBFd1BqdHdBR29jQmRNV2FSbjVrUWhiM0ZoL3Z4RwogaTVsT1NEVG1PNXdGMjl1RGlIajNBenNZVTRtbzZKWElQTWVOVlE0YWJvWDV2WmxtRVpoeDBrb0U5bmNtbEtNYgogV0NSUnVIbHhrbWE4cjljV2NMNERmUWJmOGt3bXRRWG45aTY5QzQweUdDWmJHaVI0RDkzalRFdzd1Z3RobnpIVwogS1o1bzZidTFmdThyN2RlYUgySnY5UTRQRHVvelBYRjJzNWZYSFNsWXZrQU8zTG5GSVJqdE1hQnRNSjZOSm54YgogR2tyU3ZTSTdwd2xuZW16WHhORDNxY3BvMjkwaVkrQU03cWNDN0lqendHdWVCalpkSWlmUDVrMFRndk1pbXJ3PQogPURPTEEKIC0tLS0tRU5EIFBHUCBTSUdOQVRVUkUtLS0tLQogCgpNZXJnZSBwdWxsIHJlcXVlc3QgIzU3IGZyb20gbWlsa3RvYXN0bGFiL2ZpeC1tYWdpYy1lZGVuLXNhbGVzLXRyYWNraW5nCgpBZGQgc3VwcG9ydCBmb3IgTWFnaWNFZGVuIFYy",
+        "commit_sha": "e77710555004db314117d435f0d2b4f1dca54a77",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob fc9057b3d4349193e1e7232b542e07997c84d2df\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "MTAwNjQ0IC5lZGl0b3Jjb25maWcATAb6DIczpjAHcng9foGGH51nEa8xMDA2NDQgLmVudgDvfnmrclCB9f5f+cIYTKlO1Y7WnzQwMDAwIC5naXRodWIAsKSpKnd9+10R6F6bGGSPoGy1WTgxMDA2NDQgLmdpdGlnbm9yZQD4V/kPggDW6KWK0/rIrO4ZTaxK8DEwMDY0NCBEb2NrZXJmaWxlAPT8Xa6KfTlxPDuXZvZEi4G/dDd9MTAwNjQ0IExJQ0VOU0UA/JBXs9Q0kZPh5yMrVC4HmXyE0t8xMDA2NDQgUkVBRE1FLm1kAOOzAl84AYbQ+XFEybnzMa1rvgSpMTAwNjQ0IGJhYmVsLmNvbmZpZy5qcwDdJC3JAuBiErdlTcQzgj02B/xmADEwMDY0NCBkb2NrZXItY29tcG9zZS55bWwAw1JdeYjoNJUHL1NkKi6jYmk7yLUxMDA2NDQgamVzdC5jb25maWcudHMAWGVC+mZ+h5Z+4/9HJc+DgbrWWHIxMDA2NDQgbm9kZW1vbi5qc29uAK6V0c48OAbGTQximCnvk0EjRgTGMTAwNjQ0IHBhY2thZ2UuanNvbgDb/lgng7/iczkzp2yklXOvzMAiRTQwMDAwIHNyYwA+kX5Jy/ulAnd2h1qAKTBfCv/rdTEwMDY0NCB0c2NvbmZpZy5qc29uAEIYqtd88Ry+PG56z9dQXNSlaRdXMTAwNjQ0IHlhcm4ubG9jawDGlBKnfbIdsytu7hax+zK3s5bCDw=="
+        ]
       }
     },
     "upstream_path": "src/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts",
@@ -190,18 +237,67 @@
     "upstream_repo": "milktoastlab/SolanaNFTBot",
     "upstream_tree_attestation": {
       "blob_sha1": "9ad03de7a5ca3e82b946603cbedd70608f21df05",
-      "captured_at": "2026-08-31T15:53:32.449116+00:00",
+      "captured_at": "2026-08-31T19:29:07.172386+00:00",
+      "commit_object_b64": "dHJlZSBiNjIwZTVlYzE1NzQ0MzQ1ZWFkM2JlODgxMmQ3YjQ2MGU2ZWVlNGQwCnBhcmVudCBkZjc4ZGI0YmYyZjVlOGFjYmYxMWRmOWNlNDVmMmYzMjgyZWRmOTcyCnBhcmVudCA2NWQyZjY2NDgxODdhZTdkN2JjZDM1OGY4NzhlOWQ4ZjExZDlmOTlmCmF1dGhvciBKYXkgPDkwNjE3NzU5K2tyeXB0b2pAdXNlcnMubm9yZXBseS5naXRodWIuY29tPiAxNjY4NzY5Nzk4ICsxMTAwCmNvbW1pdHRlciBHaXRIdWIgPG5vcmVwbHlAZ2l0aHViLmNvbT4gMTY2ODc2OTc5OCArMTEwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogd3NCY0JBQUJDQUFRQlFKamQyZ0dDUkJLN2hqNE92M3JJd0FBd3FjSUFCUmxjMXphaXJ5RmNIci9KOUlxMWJuYQogMVJxbXRWbENKU1lyaHNlRDhHbFB0SnVDZHZwemdRRkdaZDBFd1BqdHdBR29jQmRNV2FSbjVrUWhiM0ZoL3Z4RwogaTVsT1NEVG1PNXdGMjl1RGlIajNBenNZVTRtbzZKWElQTWVOVlE0YWJvWDV2WmxtRVpoeDBrb0U5bmNtbEtNYgogV0NSUnVIbHhrbWE4cjljV2NMNERmUWJmOGt3bXRRWG45aTY5QzQweUdDWmJHaVI0RDkzalRFdzd1Z3RobnpIVwogS1o1bzZidTFmdThyN2RlYUgySnY5UTRQRHVvelBYRjJzNWZYSFNsWXZrQU8zTG5GSVJqdE1hQnRNSjZOSm54YgogR2tyU3ZTSTdwd2xuZW16WHhORDNxY3BvMjkwaVkrQU03cWNDN0lqendHdWVCalpkSWlmUDVrMFRndk1pbXJ3PQogPURPTEEKIC0tLS0tRU5EIFBHUCBTSUdOQVRVUkUtLS0tLQogCgpNZXJnZSBwdWxsIHJlcXVlc3QgIzU3IGZyb20gbWlsa3RvYXN0bGFiL2ZpeC1tYWdpYy1lZGVuLXNhbGVzLXRyYWNraW5nCgpBZGQgc3VwcG9ydCBmb3IgTWFnaWNFZGVuIFYy",
+      "commit_sha": "e77710555004db314117d435f0d2b4f1dca54a77",
       "mode": "100644",
-      "object_type": "blob",
       "path": "src/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts",
-      "raw_ls_tree_line": "100644 blob 9ad03de7a5ca3e82b946603cbedd70608f21df05\tsrc/lib/marketplaces/__fixtures__/magicEdenFailedTx.ts"
+      "path_components": [
+        "src",
+        "lib",
+        "marketplaces",
+        "__fixtures__",
+        "magicEdenFailedTx.ts"
+      ],
+      "tree_object_chain_b64": [
+        "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"
+      ]
     }
   },
   "real_mainnet_multi_hop_swap": {
     "category": "real_mainnet_multi_hop_swap",
     "chain": "solana",
-    "evidence_chain_hash": "0b8429200acb07afea202307b45f1455b657fd24947c4ddd4cd33818ae6e5b49",
+    "evidence_chain_hash": "ec52351ec8f54a8b19bf6d5047b65f01e2735253a3d2786d621d8988553f70b9",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": -2039280,
+          "owner": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS",
+          "post_raw_amount": 98512360,
+          "pre_raw_amount": 100560538,
+          "ui_delta": "-0.002039280"
+        },
+        {
+          "account_identifier": "yJz5cEDq566csg71JjN2xT5YsaNBnCRrtUYSX1sUp8g",
+          "account_index": 1,
+          "decimals": 6,
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "net_raw_delta": -100000000,
+          "owner": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS",
+          "post_raw_amount": 24267084084,
+          "pre_raw_amount": 24367084084,
+          "ui_delta": "-100.000000"
+        },
+        {
+          "account_identifier": "B2XsZtiTQGiG8Tshr5gDGQSp5fE7nHXX64xtMsDAYQyo",
+          "account_index": 8,
+          "decimals": 9,
+          "mint": "oreoN2tQbHXVaZsr3pf66A48miqcBXCDJozganhEJgz",
+          "net_raw_delta": 944945170,
+          "owner": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS",
+          "post_raw_amount": 944945170,
+          "pre_raw_amount": 0,
+          "ui_delta": "0.944945170"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -238,7 +334,7 @@
         "evidence_refs": [
           "0xjeffro/tx-parser's own jupiterAggregatorV6_sharedAccountsRoute_1.json naming -- Jupiter's own multi-hop routing mechanism"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Three distinct assets move for this wallet: USDC decreases by 100,000,000 raw units (the primary input), SOL decreases by 2,039,280 lamports (an incidental rent/account-creation leg, not the primary trade), and the ORE token increases by 944,945,170 raw units (the primary output). Balance deltas alone cannot prove which of the two outflows is 'the' input leg of the real trade -- the largest-magnitude legs (USDC in, ORE out) are reported as primary, but this is a heuristic, not a proof. Never copy-eligible in v1 per the fail-closed SWAP_COMPLEX policy (round 5, finding #4): balance deltas alone cannot prove a multi-hop route is a genuine single fungible-asset trade."
       },
       "transaction_failed": false,
@@ -247,7 +343,7 @@
         "wallet_address": "AVYG9UHetNHT1FEDPLv9pN2sCCH4CLsjvkzGjVXBfEiS"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.457728+00:00",
+    "imported_at": "2026-08-31T19:35:33.502773+00:00",
     "observed_classification": "SWAP_COMPLEX",
     "observed_confidence": "0.700",
     "observed_is_copy_eligible": false,
@@ -291,11 +387,17 @@
       "spdx_id": "MPL-2.0",
       "tree_attestation": {
         "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
-        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "captured_at": "2026-08-31T19:29:07.083384+00:00",
+        "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+        "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9"
+        ]
       }
     },
     "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json",
@@ -303,92 +405,144 @@
     "upstream_repo": "0xjeffro/tx-parser",
     "upstream_tree_attestation": {
       "blob_sha1": "b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35",
-      "captured_at": "2026-08-31T15:31:19.071484+00:00",
+      "captured_at": "2026-08-31T19:29:07.043510+00:00",
+      "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+      "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
       "mode": "100644",
-      "object_type": "blob",
       "path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json",
-      "raw_ls_tree_line": "100644 blob b9a20ac5b7b4e678e70b7a3b06272b39f0c8ff35\tsolana/data/jupiterAggregatorV6_sharedAccountsRoute_1.json"
+      "path_components": [
+        "solana",
+        "data",
+        "jupiterAggregatorV6_sharedAccountsRoute_1.json"
+      ],
+      "tree_object_chain_b64": [
+        "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9",
+        "NDAwMDAgZGF0YQA/NPJ24ArFxpboa/q0GB8u63emFDQwMDAwIGdsb2JhbHMAv7n1xiEN9aLPr4kyRuKS0qN1nK00MDAwMCBpZGwApOYDxw65QSx+G5iIjR78GD6SgfcxMDA2NDQgcGFyc2VyLmdvABElLLWYnSzAqMg804sFtk2FGgCxMTAwNjQ0IHBhcnNlcl90ZXN0LmdvANVSj/dTkfNvmDZiuGKWmraPtWq3NDAwMDAgcHJvZ3JhbXMAi77SzZHFCVb0IDQXmbq2KCQo6100MDAwMCByZWdpc3RyeQCUWeH2dzUWXsSWb6VU7g1cuoGEETEwMDY0NCByb3V0ZXIuZ28AUHI+0ljB0wCWkRtzyKcGdiBN1vc0MDAwMCB0eXBlcwDlgHLLnPTw49LfIdBA7Bw1ldauNQ==",
+        "MTAwNjQ0IE9LWERFWF9jb21taXNzaW9uU29sU3dhcDIuanNvbgDM0REq6AuX9ET3nt5eEU8/f6V+HzEwMDY0NCBPS1hERVhfY29tbWlzc2lvblNwbFByb3h5U3dhcC5qc29uADYo02Sw6eZhC7SDa9i+XTxE5qpqMTAwNjQ0IE9LWERFWF9zd2FwXzAuanNvbgBg3NueXa0d3pvBe6jrGOTsIJlT5TEwMDY0NCBPS1hERVhfc3dhcF8xLmpzb24A0XWz732ngfk5K+uo7hYZtjPcDCMxMDA2NDQgT0tYREVYX3N3YXBfMi5qc29uAJ416ROt8B1SvBhyrqxoFbs5n8WFMTAwNjQ0IGJyb2tlbl9kYXRhXzAuanNvbgCnSP36O+KuQc+0SzNT1j4jNgjH4TEwMDY0NCBicm9rZW5fZGF0YV8xLmpzb24AF9gNfLgHD+qSKhP0F/yzOf479OIxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8xLmpzb24A5fPwZPrDaD3IwGLXBdBT6HHVQQMxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8yLmpzb24Aadk7th7TQDXRHXIzXssIidnnv4MxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9zaGFyZWRBY2NvdW50c1JvdXRlXzEuanNvbgC5ogrFt7TmeOcLejsGJys58Mj/NTEwMDY0NCBqdXBpdGVyQWdncmVnYXRvclY2X3NoYXJlZEFjY291bnRzUm91dGVfMi5qc29uAJHzs2dXecak+wqZTvD/HpG555KDMTAwNjQ0IGp1cGl0ZXJEY2FfQ2xvc2VEY2FfMC5qc29uAEr+wYDXp6tZpjepO/fWAoPwlRS6MTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMC5qc29uAPwxo/GG0BaRtjtYgBtkOn0iIqOsMTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMS5qc29uAFES4rjpgH9k3D2vFn0N5IABKhrKMTAwNjQ0IGp1cGl0ZXJEY2Ffb3BlbkRjYVYyXzAuanNvbgAxhwrWmIYMtslhchXOpIjSw7BvIzEwMDY0NCBqdXBpdGVyRGNhX29wZW5EY2FWMl8xLmpzb24AyPAYjbPRPlx9SYCMy3d4aB8h9GIxMDA2NDQgcGhvdG9uX3B1bXBmdW5fYnV5XzAuanNvbgAywLwW/OiYF53SDjk/iM8jvklWWzEwMDY0NCBwaG90b25fcHVtcGZ1bl9idXlfMS5qc29uANbQe19d1O2OAP0COQPfaqhg5ZhrMTAwNjQ0IHBob3Rvbl9wdW1wZnVuX3NlbGwuanNvbgD4LphmERzJeGU2UyAdLVPwsLBGHzEwMDY0NCBwdW1wZnVuX2J1eV8wLmpzb24A2PmLUt2g3gX5ho3bBgWiXoGL6u8xMDA2NDQgcHVtcGZ1bl9idXlfMS5qc29uAIoDUt8ed8Yj/qouoXksDNPJe8PPMTAwNjQ0IHB1bXBmdW5fYnV5X2J1bmRsZS5qc29uABaTXjZO1nbu7q0kqXRB4wD/KBoAMTAwNjQ0IHB1bXBmdW5fY3JlYXRlXzAuanNvbgDwnGSu7q1Xs6cY25q88uHCqjYKujEwMDY0NCBwdW1wZnVuX3NlbGxfMC5qc29uAN5Vsxror39kuZzd8oTQllfeTeyEMTAwNjQ0IHJheWRpdW1MaXF1aWRpdHlQb29sVjRfc3dhcF8wLmpzb24A+id8fU/5l/Mgw4+OFejgLsSZg8sxMDA2NDQgcmF5ZGl1bUxpcXVpZGl0eVBvb2xWNF9zd2FwXzEuanNvbgC5IAiTplS0Gk2FeGLrjtUju4JmODEwMDY0NCByYXlkaXVtTGlxdWlkaXR5UG9vbFY0X3N3YXBfMi5qc29uAOt+JII7Nqu8/QSZQrP89rJ3Y/oSMTAwNjQ0IHRva2VuX3RyYW5zZmVyXzAuanNvbgAE8IDua+KdG/ojoUzwkasrLdXjoDEwMDY0NCB0cmFuc2ZlckNoZWNrZWRfMC5qc29uAGFCpRrB521YefG9VStLD3pzYrl1"
+      ]
     }
   },
-  "real_mainnet_orca_increase_liquidity_multi_asset_outflow": {
-    "category": "real_mainnet_orca_increase_liquidity_multi_asset_outflow",
+  "real_mainnet_orca_close_position_multi_account": {
+    "category": "real_mainnet_orca_close_position_multi_account",
     "chain": "solana",
-    "evidence_chain_hash": "fb40b1f249b2815474e7e24852fb8fa4a4c39a273146b411d107073609e59ae8",
+    "evidence_chain_hash": "adb6a6f3b310dc6d992a7ddc7dddec66817d812c940bae011f86d1a9db352d51",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": 43274432,
+          "owner": "JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN",
+          "post_raw_amount": 334028807,
+          "pre_raw_amount": 290914375,
+          "ui_delta": "0.043274432"
+        },
+        {
+          "account_identifier": "7Fud8XbJkFCUs5s4izioXywxKEyXMZN8pCASn3o6QERz",
+          "account_index": 4,
+          "decimals": 0,
+          "mint": "GtbNSVUmCpqdUpSo2hQ4AyupV1ZQuXxGwQjsRxvF1hC3",
+          "net_raw_delta": -1,
+          "owner": "JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN",
+          "post_raw_amount": 0,
+          "pre_raw_amount": 1,
+          "ui_delta": "-1"
+        },
+        {
+          "account_identifier": "CYb6Q2pf6xyNG5su5mNN3yqQ2WpPAdRvfCjXFfRcMSfK",
+          "account_index": 5,
+          "decimals": 9,
+          "mint": "oreoN2tQbHXVaZsr3pf66A48miqcBXCDJozganhEJgz",
+          "net_raw_delta": 1687820576,
+          "owner": "JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN",
+          "post_raw_amount": 1688235519,
+          "pre_raw_amount": 414943,
+          "ui_delta": "1.687820576"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
-          "decimals": 6,
-          "mint": "5LafQUrVco6o7KMz42eqVEJ9LW31StPyGjeeu5sKoMtA",
-          "raw_amount": -66769884520,
-          "ui_amount": "-66769.884520"
+          "decimals": 0,
+          "mint": "GtbNSVUmCpqdUpSo2hQ4AyupV1ZQuXxGwQjsRxvF1hC3",
+          "raw_amount": -1,
+          "ui_amount": "-1"
         },
         {
           "account_context": null,
           "decimals": 9,
           "mint": "SOL",
-          "raw_amount": -12056133,
-          "ui_amount": "-0.012056133"
+          "raw_amount": 43274432,
+          "ui_amount": "0.043274432"
+        },
+        {
+          "account_context": null,
+          "decimals": 9,
+          "mint": "oreoN2tQbHXVaZsr3pf66A48miqcBXCDJozganhEJgz",
+          "raw_amount": 1687820576,
+          "ui_amount": "1.687820576"
         }
       ],
-      "classification": "UNKNOWN",
-      "confidence_rule": "exact: two or more distinct assets given up together with no offsetting inflow always parses at zero confidence, UNKNOWN, in v1 -- see round 5, finding #4's ambiguous-multi-asset-outflow branch",
-      "expected_confidence": "0.000",
-      "expected_input_amount_raw": null,
-      "expected_input_mint": null,
-      "expected_output_amount_raw": null,
-      "expected_output_mint": null,
+      "classification": "SWAP_COMPLEX",
+      "confidence_rule": "bounded: negatives and positives both nonempty but not a clean one-for-one match (positives has 2 members: SOL and the ORE token) parses at 0.700 in v1, matching the SWAP_COMPLEX multi-leg rule",
+      "expected_confidence": "0.700",
+      "expected_input_amount_raw": 1,
+      "expected_input_mint": "GtbNSVUmCpqdUpSo2hQ4AyupV1ZQuXxGwQjsRxvF1hC3",
+      "expected_output_amount_raw": 1687820576,
+      "expected_output_mint": "oreoN2tQbHXVaZsr3pf66A48miqcBXCDJozganhEJgz",
       "is_copy_eligible": false,
-      "network_fee_raw": 10015,
+      "network_fee_raw": 160000,
       "reviewer": {
         "evidence_refs": [
-          "quellen-sol/ingestooor's own crates/parsers/tests/orca/orca_add_liq.json naming and its embedded instruction data (program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc, a genuine Orca Whirlpool increaseLiquidity call)"
+          "quellen-sol/ingestooor's own crates/parsers/tests/orca/orca_remove_liq.json naming and its embedded instruction data (program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc, a genuine Orca Whirlpool liquidity-removal call)"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
-        "rationale": "Two distinct assets move for this wallet, both outflows, with nothing received back into any account it owns: SOL decreases by 12,056,133 lamports net of the 10,015-lamport fee it paid as fee payer (the temp wSOL account is funded then closed back to the wallet within the same transaction, so only the net SOL cost of the deposit remains as a wallet-level delta), and a single SPL token (5LafQUrVco6o..., 6 decimals) decreases from 66,769.88452 to 0 -- a full deposit of that token into the pool. The LP token / position NFT this deposit produces is held by a program-derived vault account (ARs3pZiSyCutnm3X83MwP8zeg1BWCb5F7xeGszp4gHiz), not by this wallet directly, so no offsetting inflow is ever visible from this wallet's own perspective. Only one non-SOL asset is directly wallet-owned here (the LP_ACTION heuristic needs two or more non-SOL assets in the same direction to fire), so this falls to the ambiguous-multi-asset-outflow branch instead of the LP_ACTION label -- the emitted classification is UNKNOWN, not LP_ACTION, but the substantive requirement (a real multi-token-account liquidity-provision transaction, correctly never treated as a confident single-asset trade) is satisfied either way: balance deltas alone cannot prove this wallet's true net economic position without instruction-level evidence of the SOL leg's role, so confident single-asset resolution would be wrong here too."
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
+        "rationale": "Three distinct wallet-owned accounts change for this wallet: its Whirlpool position NFT account (accountIndex 4, mint GtbNSVUm..., decimals 0) closes entirely, going from a balance of 1 to the account no longer appearing in postTokenBalances at all (net -1, an NFT-shaped closure, not a fungible outflow); a separate token account (accountIndex 5, mint oreoN2tQ..., decimals 9) it also owns increases from 414,943 to 1,688,235,519 raw units (a real fungible inflow -- the released liquidity); and its own native SOL balance increases by 43,274,432 lamports net of the 160,000-lamport fee it paid as fee payer (a rent refund from the closed position account). The by-mint view (asset_deltas) still shows three separate assets since no two share a mint, but only the account-level view (account_deltas) actually proves this is a genuine multiple-token-account transaction from a real signer wallet, not a program-derived vault, and not merely an inference from seeing two different mints move. Balance deltas alone cannot prove the position-NFT closure and the token inflow are 'the same trade' -- negatives={GtbNSVUm: -1}, positives={SOL: +43274432, oreoN2tQ: +1687820576}, which is not a one-for-one shape, so the parser correctly falls to SWAP_COMPLEX (never copy-eligible) rather than guessing a confident single trade."
       },
       "transaction_failed": false,
       "wallet_perspective": {
         "method": "accountKeys[0] -- the transaction's fee payer and signer.",
-        "wallet_address": "6jDxfurJaWDBoFyyLAuJBZi24vynka6EuEPbvS88RRuu"
+        "wallet_address": "JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.469982+00:00",
-    "observed_classification": "UNKNOWN",
-    "observed_confidence": "0.000",
+    "imported_at": "2026-08-31T19:35:33.518065+00:00",
+    "observed_classification": "SWAP_COMPLEX",
+    "observed_confidence": "0.700",
     "observed_is_copy_eligible": false,
-    "original_sha256": "4d7d198c2d2e62a71f0158b689974e35e893c72a2c40894b1139962834beb5dd",
+    "original_sha256": "5d6895af2bf2d12534f4ae9252a837adc476224557aca24fed771fa2d465b1e5",
     "parser_version": "generic_balance_delta_v1",
     "quarantine_reason": null,
     "quarantined": false,
-    "sanitized_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc",
-    "signature": "2GD2R5FJUF9cX6gfuVLkB8NNS7APfozLm1M3Cq77hXc7HYvLZJJDM4sdHG7sWy8aTbxY8d5CGAJfdcz2cJwgJ1sN",
-    "slot": 281957400,
+    "sanitized_sha256": "7d997420d00d994f918caa4fbe16c7952dbf383022b885072509bcdcb4917882",
+    "signature": "2xoDWqKZP3p9eDF4iqpur4rmkuAvk1KnW2Gg18tGBgo1x76hdbXU4M1dL37cJoMDiCnaUACmCeRo24yQPUyH26VN",
+    "slot": 281957341,
     "transaction_version": "0",
     "transform_manifest": [
       {
         "applied": false,
         "name": "extract_ts_const_export_default",
-        "output_sha256": "4d7d198c2d2e62a71f0158b689974e35e893c72a2c40894b1139962834beb5dd"
+        "output_sha256": "5d6895af2bf2d12534f4ae9252a837adc476224557aca24fed771fa2d465b1e5"
       },
       {
         "applied": false,
         "name": "unwrap_json_array",
-        "output_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc"
+        "output_sha256": "7d997420d00d994f918caa4fbe16c7952dbf383022b885072509bcdcb4917882"
       },
       {
         "applied": false,
         "name": "unwrap_json_rpc_envelope",
-        "output_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc"
+        "output_sha256": "7d997420d00d994f918caa4fbe16c7952dbf383022b885072509bcdcb4917882"
       },
       {
         "applied": true,
         "name": "canonicalize_json_formatting",
-        "output_sha256": "5574f37e8439d21d02c2be1ed45c0ca86fd28ba69f2dd0b8d981f2ff33ea4ebc"
+        "output_sha256": "7d997420d00d994f918caa4fbe16c7952dbf383022b885072509bcdcb4917882"
       }
     ],
     "upstream_commit": "74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e",
-    "upstream_git_blob_sha1": "db69237886a1d0978e9aa6c50d14638203dfa0bc",
+    "upstream_git_blob_sha1": "0f6a7a1fc80144eba665b41472453d63ec3d4828",
     "upstream_license": {
       "attribution": "quellen-sol/ingestooor contributors, https://github.com/quellen-sol/ingestooor",
       "bytes_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
@@ -397,30 +551,74 @@
       "spdx_id": "GPL-3.0",
       "tree_attestation": {
         "blob_sha1": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7",
-        "captured_at": "2026-08-31T15:53:32.456816+00:00",
+        "captured_at": "2026-08-31T19:29:07.153588+00:00",
+        "commit_object_b64": "dHJlZSAxZDk5YzMyZGQ1Njg0ZTBlOGFlZThmZTEyMzFjN2Q3Mzk3YTdhNWQxCnBhcmVudCBkYmE3NDEyODEzZDhlM2RjMGUzY2M0NDhjMDAwYzAyOGRmYTdjOWZiCmF1dGhvciBxdWVsbGVuLXNvbCA8NTI2Nzg5NTkrcXVlbGxlbi1zb2xAdXNlcnMubm9yZXBseS5naXRodWIuY29tPiAxNzcxODc1MjExIC0wNzAwCmNvbW1pdHRlciBHaXRIdWIgPG5vcmVwbHlAZ2l0aHViLmNvbT4gMTc3MTg3NTIxMSAtMDcwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogd3NGY0JBQUJDQUFRQlFKcG5LdUxDUkMxYVE3dXU1VWhsQUFBQnF3UUFEaXZSQmVqUUJwWmw2VVc1TldOSE1qVgogT0tBbURYWHZMM1kvY2huZWo3NlVISzBVMnRTb1dUTHpNL044bXpUYlE5VHZTRlVFTm1PVzVjNlFRSTFFRThQTgogSTA3ZVZHWGI5TnZvellybnZpZm5HYnhvYitjV2pteVkvRFF2bkNVeFEyTWhSWHEvMkNOcnNYbjZjaHpKL2J5egogRGVUdWJReGYzNWNtRnRCMldmYS9QSjNBN2cvRE4vaUJtWVRPNXVody9KMFh3cnNPbXVLeUVaL0lqY3pxbURkaQogVlJTclRIWFAyUUpaVGQxT1A5cFFkWS9HUnZSVEpUL2FFbHBqNmFhOG9vb0hyL3NmZTVrU3JCYlM4cXNncE10dgogdXhDU0RMU1VPZkxNVXY3aDlOamozODFndDdZMmFXVmkxTEQ0dHN1SW9TbnBwdndGdzF1eWUvcjJhOCtuWjlKTwogaG1oNjZNZlAvckNzejZRbjhVTElIbU5UK2Y5N3NuRWt1TnZvSzFoNzZGUVprMG9OeE9ZNGUvNnlCUXNBMFBaRQogS2dGRytqUEljZFp3ditqRm1jcnNJcG9ZeDN0dVZyc2FzTGo2MHl5a2U4eHJ0T3h1NXFEWDlUeEhVNkZoMm9GaQogZ2JYOUpIbHJ6WVZNdE9lZ1JFV1hWbS9rdEw1dDluMFV5eUNBT1lvK3dQWC9yZWoxU1NFZEdudGY1ZExOenpRdgogc2c3UTFSYjg4RUZIdVlEbjhqQUdYdVIxT2Rjejhvc0ZPdHNxNkYvb0t5Ulk5cTUwUUlhLzZYKzR4NGVMZTEyNQogbUlQY2FoWEtGVDh2cm9heHlGbVhNZHo0bjhKalo4WUNSSC9FQVRVRWVuVWtUdkJOM1U0VkF3OXRlMDEzQ2lZNAogcGFrdUtpR0l2cnFQV0ZCRU5nQUoKID1oNkg0CiAtLS0tLUVORCBQR1AgU0lHTkFUVVJFLS0tLS0KIAoKQWRkIEdOVSBHZW5lcmFsIFB1YmxpYyBMaWNlbnNlIHZlcnNpb24gMw==",
+        "commit_sha": "74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob f288702d2fa16d3cdf0035b15a9fcbc552cd88e7\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmNhcmdvAJ1TZ89YzGVz4dh5YRLE+5P7K2hvNDAwMDAgLmNpcmNsZWNpAM/r7DHDS7F0uT/w488WaGrZGohjMTAwNjQ0IC5kb2NrZXJpZ25vcmUAo4N8yx6529yq6IyTf77cta4wR3sxMDA2NDQgLmVudi5leGFtcGxlACCuu5c7X3yv1i7OXlDFT3qbjsLMNDAwMDAgLmdpdGh1YgAFUyVRZ7p4wLnaNrHQ7Q3II2zVWzEwMDY0NCAuZ2l0aWdub3JlAFVe0SkABfmo010eDJtNavkEbtrrNDAwMDAgLnZzY29kZQD7q9MKPbxxcxMcFj7lgDPeFYYkejEwMDY0NCBDYXJnby5sb2NrAEwM/RuxgpzryjABBf0EElcp3N47MTAwNjQ0IENhcmdvLnRvbWwAFp3eHsPMwK0KkHVw8zeMQw0qEN0xMDA2NDQgRG9ja2VyZmlsZQB2UXVnTjxWIg+k4UiW0clS/aSbKzEwMDY0NCBMSUNFTlNFAPKIcC0voW083wA1sVqfy8VSzYjnMTAwNjQ0IFJFQURNRS5tZAAeE6Ao6fH3CLk1KSc7BDO4vAYauzEwMDc1NSBidWlsZC5zaACd28CFuLgmEDH3X24qbE3Xf8GqLzEwMDY0NCBjbGlwcHkudG9tbAAVRibvToH2qj58Jx72E/4BetZY+TQwMDAwIGNvbmZpZwBNV+6bR2BgxHQv5Tz43KZ+s2zcYzQwMDAwIGNyYXRlcwA/pI3m5F8q/McOOtNxW8d2hwo+qzEwMDY0NCBkb2NrZXItY29tcG9zZS5kZXYueW1sANi40ILD2JhVLn9Vm/zmuLpQ7zUMMTAwNjQ0IGRvY2tlci1jb21wb3NlLmxvY2FsLXZhbGlkYXRvci55bWwAY0A86PowNwQR7o1N6Mr+OzKPecg0MDAwMCBsaWJzAMz839WWpxWAkN2D+FHz6TSvKXZbMTAwNzU1IHJ1bi1jbGlja2hvdXNlLnNoAG0L01U7A2jlFHt62c/l8N2JLOXpMTAwNzU1IHJ1bi1sb2NhbC12YWxpZGF0b3Iuc2gAZdALyYz8UQwdfMmyE8AzBNoE3tkxMDA3NTUgcnVuLnNoAEKTOnjy4xVw0VMSdF9uqmJX8zTRMTAwNjQ0IHJ1c3QtdG9vbGNoYWluLnRvbWwA/LeOxWT9ewdtGQFwPFLmdayqhXoxMDA2NDQgcnVzdGZtdC50b21sALb3mdZVdeWECONKZOlvsP6pkmR+NDAwMDAgc2NyaXB0cwBEMxB6ygKzQdgM5i2SDp6RcfvwCQ=="
+        ]
       }
     },
-    "upstream_path": "crates/parsers/tests/orca/orca_add_liq.json",
-    "upstream_path_note": "Orca Whirlpool (program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc) increaseLiquidity call: the signer creates a temporary wrapped-SOL account, deposits it plus an existing SPL token into the Whirlpool position, then closes the temp account back to itself -- a genuine multi-token-account liquidity-provision transaction. Already a bare getTransaction-shaped object (transaction/meta/slot at the top level, plus harmless extra indexInBlock/slotSecondIdx/version keys this project's shape-check does not forbid) -- no extraction needed. Zero bytes of the captured transaction data changed.",
+    "upstream_path": "crates/parsers/tests/orca/orca_remove_liq.json",
+    "upstream_path_note": "Orca Whirlpool (program whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc) decreaseLiquidity/closePosition call: the signer's Whirlpool position NFT account (accountIndex 4) closes entirely (1 -> 0, decimals=0) while a separate fungible SPL token account (accountIndex 5) it also owns receives the released liquidity (a real inflow) -- a genuine multi-token-account liquidity-removal transaction from the actual signer/fee-payer's own perspective (not a program-derived vault). Already a bare getTransaction-shaped object (transaction/meta/slot at the top level, plus harmless extra indexInBlock/slotSecondIdx/version keys this project's shape-check does not forbid) -- no extraction needed. Zero bytes of the captured transaction data changed.",
     "upstream_repo": "quellen-sol/ingestooor",
     "upstream_tree_attestation": {
-      "blob_sha1": "db69237886a1d0978e9aa6c50d14638203dfa0bc",
-      "captured_at": "2026-08-31T15:53:32.454398+00:00",
+      "blob_sha1": "0f6a7a1fc80144eba665b41472453d63ec3d4828",
+      "captured_at": "2026-08-31T19:29:07.142921+00:00",
+      "commit_object_b64": "dHJlZSAxZDk5YzMyZGQ1Njg0ZTBlOGFlZThmZTEyMzFjN2Q3Mzk3YTdhNWQxCnBhcmVudCBkYmE3NDEyODEzZDhlM2RjMGUzY2M0NDhjMDAwYzAyOGRmYTdjOWZiCmF1dGhvciBxdWVsbGVuLXNvbCA8NTI2Nzg5NTkrcXVlbGxlbi1zb2xAdXNlcnMubm9yZXBseS5naXRodWIuY29tPiAxNzcxODc1MjExIC0wNzAwCmNvbW1pdHRlciBHaXRIdWIgPG5vcmVwbHlAZ2l0aHViLmNvbT4gMTc3MTg3NTIxMSAtMDcwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogd3NGY0JBQUJDQUFRQlFKcG5LdUxDUkMxYVE3dXU1VWhsQUFBQnF3UUFEaXZSQmVqUUJwWmw2VVc1TldOSE1qVgogT0tBbURYWHZMM1kvY2huZWo3NlVISzBVMnRTb1dUTHpNL044bXpUYlE5VHZTRlVFTm1PVzVjNlFRSTFFRThQTgogSTA3ZVZHWGI5TnZvellybnZpZm5HYnhvYitjV2pteVkvRFF2bkNVeFEyTWhSWHEvMkNOcnNYbjZjaHpKL2J5egogRGVUdWJReGYzNWNtRnRCMldmYS9QSjNBN2cvRE4vaUJtWVRPNXVody9KMFh3cnNPbXVLeUVaL0lqY3pxbURkaQogVlJTclRIWFAyUUpaVGQxT1A5cFFkWS9HUnZSVEpUL2FFbHBqNmFhOG9vb0hyL3NmZTVrU3JCYlM4cXNncE10dgogdXhDU0RMU1VPZkxNVXY3aDlOamozODFndDdZMmFXVmkxTEQ0dHN1SW9TbnBwdndGdzF1eWUvcjJhOCtuWjlKTwogaG1oNjZNZlAvckNzejZRbjhVTElIbU5UK2Y5N3NuRWt1TnZvSzFoNzZGUVprMG9OeE9ZNGUvNnlCUXNBMFBaRQogS2dGRytqUEljZFp3ditqRm1jcnNJcG9ZeDN0dVZyc2FzTGo2MHl5a2U4eHJ0T3h1NXFEWDlUeEhVNkZoMm9GaQogZ2JYOUpIbHJ6WVZNdE9lZ1JFV1hWbS9rdEw1dDluMFV5eUNBT1lvK3dQWC9yZWoxU1NFZEdudGY1ZExOenpRdgogc2c3UTFSYjg4RUZIdVlEbjhqQUdYdVIxT2Rjejhvc0ZPdHNxNkYvb0t5Ulk5cTUwUUlhLzZYKzR4NGVMZTEyNQogbUlQY2FoWEtGVDh2cm9heHlGbVhNZHo0bjhKalo4WUNSSC9FQVRVRWVuVWtUdkJOM1U0VkF3OXRlMDEzQ2lZNAogcGFrdUtpR0l2cnFQV0ZCRU5nQUoKID1oNkg0CiAtLS0tLUVORCBQR1AgU0lHTkFUVVJFLS0tLS0KIAoKQWRkIEdOVSBHZW5lcmFsIFB1YmxpYyBMaWNlbnNlIHZlcnNpb24gMw==",
+      "commit_sha": "74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e",
       "mode": "100644",
-      "object_type": "blob",
-      "path": "crates/parsers/tests/orca/orca_add_liq.json",
-      "raw_ls_tree_line": "100644 blob db69237886a1d0978e9aa6c50d14638203dfa0bc\tcrates/parsers/tests/orca/orca_add_liq.json"
+      "path": "crates/parsers/tests/orca/orca_remove_liq.json",
+      "path_components": [
+        "crates",
+        "parsers",
+        "tests",
+        "orca",
+        "orca_remove_liq.json"
+      ],
+      "tree_object_chain_b64": [
+        "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"
+      ]
     }
   },
   "real_mainnet_partial_sell": {
     "category": "real_mainnet_partial_sell",
     "chain": "solana",
-    "evidence_chain_hash": "0ce8c824a02077bfdbe6e4875fab18a7ebfc479f7cc5ec3174b1c64a8be0c305",
+    "evidence_chain_hash": "fe0956b71af692b58493d620a1c3fbedc00af028da4d4ca12c4bc5fc5f51b4e9",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": 1615104,
+          "owner": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8",
+          "post_raw_amount": 184387854020,
+          "pre_raw_amount": 184386443918,
+          "ui_delta": "0.001615104"
+        },
+        {
+          "account_identifier": "AarSAVG8DLJ27HYAy5GNmz2RAKzNWx5qk85AVUG3Vas3",
+          "account_index": 5,
+          "decimals": 6,
+          "mint": "AaJ6gmTzaQw9zxfK6BD9N89wzZLuSuwTRbi8YrTCpump",
+          "net_raw_delta": -22254340082,
+          "owner": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8",
+          "post_raw_amount": 2203179942160,
+          "pre_raw_amount": 2225434282242,
+          "ui_delta": "-22254.340082"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -450,7 +648,7 @@
         "evidence_refs": [
           "0xjeffro/tx-parser's own raydiumLiquidityPoolV4_swap_2.json naming"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Exactly two assets move for this wallet: a single SPL token (AaJ6gmTz..., 6 decimals, fungible) decreases by 22,254,340,082 raw units out of a much larger pre-transaction holding (a genuine partial, not full, liquidation), and SOL increases by 1,615,104 lamports net of the 205,002-lamport fee it paid as fee payer. A clean one-for-one fungible swap regardless of the partial-position size."
       },
       "transaction_failed": false,
@@ -459,7 +657,7 @@
         "wallet_address": "orcACRJYTFjTeo2pV8TfYRTpmqfoYgbVi9GeANXTCc8"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.461672+00:00",
+    "imported_at": "2026-08-31T19:35:33.507074+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -503,11 +701,17 @@
       "spdx_id": "MPL-2.0",
       "tree_attestation": {
         "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
-        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "captured_at": "2026-08-31T19:29:07.083384+00:00",
+        "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+        "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9"
+        ]
       }
     },
     "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_2.json",
@@ -515,18 +719,52 @@
     "upstream_repo": "0xjeffro/tx-parser",
     "upstream_tree_attestation": {
       "blob_sha1": "eb7e24823b36abbcfd049942b3fcf6b27763fa12",
-      "captured_at": "2026-08-31T15:31:19.073775+00:00",
+      "captured_at": "2026-08-31T19:29:07.051602+00:00",
+      "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+      "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
       "mode": "100644",
-      "object_type": "blob",
       "path": "solana/data/raydiumLiquidityPoolV4_swap_2.json",
-      "raw_ls_tree_line": "100644 blob eb7e24823b36abbcfd049942b3fcf6b27763fa12\tsolana/data/raydiumLiquidityPoolV4_swap_2.json"
+      "path_components": [
+        "solana",
+        "data",
+        "raydiumLiquidityPoolV4_swap_2.json"
+      ],
+      "tree_object_chain_b64": [
+        "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9",
+        "NDAwMDAgZGF0YQA/NPJ24ArFxpboa/q0GB8u63emFDQwMDAwIGdsb2JhbHMAv7n1xiEN9aLPr4kyRuKS0qN1nK00MDAwMCBpZGwApOYDxw65QSx+G5iIjR78GD6SgfcxMDA2NDQgcGFyc2VyLmdvABElLLWYnSzAqMg804sFtk2FGgCxMTAwNjQ0IHBhcnNlcl90ZXN0LmdvANVSj/dTkfNvmDZiuGKWmraPtWq3NDAwMDAgcHJvZ3JhbXMAi77SzZHFCVb0IDQXmbq2KCQo6100MDAwMCByZWdpc3RyeQCUWeH2dzUWXsSWb6VU7g1cuoGEETEwMDY0NCByb3V0ZXIuZ28AUHI+0ljB0wCWkRtzyKcGdiBN1vc0MDAwMCB0eXBlcwDlgHLLnPTw49LfIdBA7Bw1ldauNQ==",
+        "MTAwNjQ0IE9LWERFWF9jb21taXNzaW9uU29sU3dhcDIuanNvbgDM0REq6AuX9ET3nt5eEU8/f6V+HzEwMDY0NCBPS1hERVhfY29tbWlzc2lvblNwbFByb3h5U3dhcC5qc29uADYo02Sw6eZhC7SDa9i+XTxE5qpqMTAwNjQ0IE9LWERFWF9zd2FwXzAuanNvbgBg3NueXa0d3pvBe6jrGOTsIJlT5TEwMDY0NCBPS1hERVhfc3dhcF8xLmpzb24A0XWz732ngfk5K+uo7hYZtjPcDCMxMDA2NDQgT0tYREVYX3N3YXBfMi5qc29uAJ416ROt8B1SvBhyrqxoFbs5n8WFMTAwNjQ0IGJyb2tlbl9kYXRhXzAuanNvbgCnSP36O+KuQc+0SzNT1j4jNgjH4TEwMDY0NCBicm9rZW5fZGF0YV8xLmpzb24AF9gNfLgHD+qSKhP0F/yzOf479OIxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8xLmpzb24A5fPwZPrDaD3IwGLXBdBT6HHVQQMxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8yLmpzb24Aadk7th7TQDXRHXIzXssIidnnv4MxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9zaGFyZWRBY2NvdW50c1JvdXRlXzEuanNvbgC5ogrFt7TmeOcLejsGJys58Mj/NTEwMDY0NCBqdXBpdGVyQWdncmVnYXRvclY2X3NoYXJlZEFjY291bnRzUm91dGVfMi5qc29uAJHzs2dXecak+wqZTvD/HpG555KDMTAwNjQ0IGp1cGl0ZXJEY2FfQ2xvc2VEY2FfMC5qc29uAEr+wYDXp6tZpjepO/fWAoPwlRS6MTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMC5qc29uAPwxo/GG0BaRtjtYgBtkOn0iIqOsMTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMS5qc29uAFES4rjpgH9k3D2vFn0N5IABKhrKMTAwNjQ0IGp1cGl0ZXJEY2Ffb3BlbkRjYVYyXzAuanNvbgAxhwrWmIYMtslhchXOpIjSw7BvIzEwMDY0NCBqdXBpdGVyRGNhX29wZW5EY2FWMl8xLmpzb24AyPAYjbPRPlx9SYCMy3d4aB8h9GIxMDA2NDQgcGhvdG9uX3B1bXBmdW5fYnV5XzAuanNvbgAywLwW/OiYF53SDjk/iM8jvklWWzEwMDY0NCBwaG90b25fcHVtcGZ1bl9idXlfMS5qc29uANbQe19d1O2OAP0COQPfaqhg5ZhrMTAwNjQ0IHBob3Rvbl9wdW1wZnVuX3NlbGwuanNvbgD4LphmERzJeGU2UyAdLVPwsLBGHzEwMDY0NCBwdW1wZnVuX2J1eV8wLmpzb24A2PmLUt2g3gX5ho3bBgWiXoGL6u8xMDA2NDQgcHVtcGZ1bl9idXlfMS5qc29uAIoDUt8ed8Yj/qouoXksDNPJe8PPMTAwNjQ0IHB1bXBmdW5fYnV5X2J1bmRsZS5qc29uABaTXjZO1nbu7q0kqXRB4wD/KBoAMTAwNjQ0IHB1bXBmdW5fY3JlYXRlXzAuanNvbgDwnGSu7q1Xs6cY25q88uHCqjYKujEwMDY0NCBwdW1wZnVuX3NlbGxfMC5qc29uAN5Vsxror39kuZzd8oTQllfeTeyEMTAwNjQ0IHJheWRpdW1MaXF1aWRpdHlQb29sVjRfc3dhcF8wLmpzb24A+id8fU/5l/Mgw4+OFejgLsSZg8sxMDA2NDQgcmF5ZGl1bUxpcXVpZGl0eVBvb2xWNF9zd2FwXzEuanNvbgC5IAiTplS0Gk2FeGLrjtUju4JmODEwMDY0NCByYXlkaXVtTGlxdWlkaXR5UG9vbFY0X3N3YXBfMi5qc29uAOt+JII7Nqu8/QSZQrP89rJ3Y/oSMTAwNjQ0IHRva2VuX3RyYW5zZmVyXzAuanNvbgAE8IDua+KdG/ojoUzwkasrLdXjoDEwMDY0NCB0cmFuc2ZlckNoZWNrZWRfMC5qc29uAGFCpRrB521YefG9VStLD3pzYrl1"
+      ]
     }
   },
   "real_mainnet_sol_to_token_swap": {
     "category": "real_mainnet_sol_to_token_swap",
     "chain": "solana",
-    "evidence_chain_hash": "d53b35b9d7c31c8f5a11299729f26a4e3ffe535df91e4ad0c7aa27910873b15a",
+    "evidence_chain_hash": "6d1c35742385c0a6cf6bce373f57698b3592ff7b8c54177eed0264b718f16b3c",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": -3072039280,
+          "owner": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE",
+          "post_raw_amount": 579755258979,
+          "pre_raw_amount": 582831303260,
+          "ui_delta": "-3.072039280"
+        },
+        {
+          "account_identifier": "9QhdKzS2L6rdgiajWGxqX7jD1sWVn6WQfog66s3oqdDE",
+          "account_index": 2,
+          "decimals": 6,
+          "mint": "D66sbPtYqLnwPYcUqjDktrQtb52CnfF77C3sdpNpR8Si",
+          "net_raw_delta": 56716561396327,
+          "owner": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE",
+          "post_raw_amount": 56716561396327,
+          "pre_raw_amount": 0,
+          "ui_delta": "56716561.396327"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -556,7 +794,7 @@
         "evidence_refs": [
           "0xjeffro/tx-parser's own pumpfun_buy_0.json naming -- a pump.fun 'buy' instruction, matching this balance-delta shape exactly"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Exactly two assets move for this wallet: SOL decreases by 3,072,039,280 lamports (the purchase amount plus the 4,005,001-lamport fee it paid as fee payer) and a single SPL token (D66sbPtY..., 6 decimals, a real fungible mint -- not decimals-zero/NFT-shaped) increases from zero to 56,716,561,396,327 raw units. A clean one-for-one fungible swap: SOL in, token out."
       },
       "transaction_failed": false,
@@ -565,7 +803,7 @@
         "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.442333+00:00",
+    "imported_at": "2026-08-31T19:35:33.488108+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -609,11 +847,17 @@
       "spdx_id": "MPL-2.0",
       "tree_attestation": {
         "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
-        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "captured_at": "2026-08-31T19:29:07.083384+00:00",
+        "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+        "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9"
+        ]
       }
     },
     "upstream_path": "solana/data/pumpfun_buy_0.json",
@@ -621,18 +865,41 @@
     "upstream_repo": "0xjeffro/tx-parser",
     "upstream_tree_attestation": {
       "blob_sha1": "d8f98b52dda0de05f9868ddb0605a25e818beaef",
-      "captured_at": "2026-08-31T15:31:19.076006+00:00",
+      "captured_at": "2026-08-31T19:29:07.060113+00:00",
+      "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+      "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
       "mode": "100644",
-      "object_type": "blob",
       "path": "solana/data/pumpfun_buy_0.json",
-      "raw_ls_tree_line": "100644 blob d8f98b52dda0de05f9868ddb0605a25e818beaef\tsolana/data/pumpfun_buy_0.json"
+      "path_components": [
+        "solana",
+        "data",
+        "pumpfun_buy_0.json"
+      ],
+      "tree_object_chain_b64": [
+        "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9",
+        "NDAwMDAgZGF0YQA/NPJ24ArFxpboa/q0GB8u63emFDQwMDAwIGdsb2JhbHMAv7n1xiEN9aLPr4kyRuKS0qN1nK00MDAwMCBpZGwApOYDxw65QSx+G5iIjR78GD6SgfcxMDA2NDQgcGFyc2VyLmdvABElLLWYnSzAqMg804sFtk2FGgCxMTAwNjQ0IHBhcnNlcl90ZXN0LmdvANVSj/dTkfNvmDZiuGKWmraPtWq3NDAwMDAgcHJvZ3JhbXMAi77SzZHFCVb0IDQXmbq2KCQo6100MDAwMCByZWdpc3RyeQCUWeH2dzUWXsSWb6VU7g1cuoGEETEwMDY0NCByb3V0ZXIuZ28AUHI+0ljB0wCWkRtzyKcGdiBN1vc0MDAwMCB0eXBlcwDlgHLLnPTw49LfIdBA7Bw1ldauNQ==",
+        "MTAwNjQ0IE9LWERFWF9jb21taXNzaW9uU29sU3dhcDIuanNvbgDM0REq6AuX9ET3nt5eEU8/f6V+HzEwMDY0NCBPS1hERVhfY29tbWlzc2lvblNwbFByb3h5U3dhcC5qc29uADYo02Sw6eZhC7SDa9i+XTxE5qpqMTAwNjQ0IE9LWERFWF9zd2FwXzAuanNvbgBg3NueXa0d3pvBe6jrGOTsIJlT5TEwMDY0NCBPS1hERVhfc3dhcF8xLmpzb24A0XWz732ngfk5K+uo7hYZtjPcDCMxMDA2NDQgT0tYREVYX3N3YXBfMi5qc29uAJ416ROt8B1SvBhyrqxoFbs5n8WFMTAwNjQ0IGJyb2tlbl9kYXRhXzAuanNvbgCnSP36O+KuQc+0SzNT1j4jNgjH4TEwMDY0NCBicm9rZW5fZGF0YV8xLmpzb24AF9gNfLgHD+qSKhP0F/yzOf479OIxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8xLmpzb24A5fPwZPrDaD3IwGLXBdBT6HHVQQMxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8yLmpzb24Aadk7th7TQDXRHXIzXssIidnnv4MxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9zaGFyZWRBY2NvdW50c1JvdXRlXzEuanNvbgC5ogrFt7TmeOcLejsGJys58Mj/NTEwMDY0NCBqdXBpdGVyQWdncmVnYXRvclY2X3NoYXJlZEFjY291bnRzUm91dGVfMi5qc29uAJHzs2dXecak+wqZTvD/HpG555KDMTAwNjQ0IGp1cGl0ZXJEY2FfQ2xvc2VEY2FfMC5qc29uAEr+wYDXp6tZpjepO/fWAoPwlRS6MTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMC5qc29uAPwxo/GG0BaRtjtYgBtkOn0iIqOsMTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMS5qc29uAFES4rjpgH9k3D2vFn0N5IABKhrKMTAwNjQ0IGp1cGl0ZXJEY2Ffb3BlbkRjYVYyXzAuanNvbgAxhwrWmIYMtslhchXOpIjSw7BvIzEwMDY0NCBqdXBpdGVyRGNhX29wZW5EY2FWMl8xLmpzb24AyPAYjbPRPlx9SYCMy3d4aB8h9GIxMDA2NDQgcGhvdG9uX3B1bXBmdW5fYnV5XzAuanNvbgAywLwW/OiYF53SDjk/iM8jvklWWzEwMDY0NCBwaG90b25fcHVtcGZ1bl9idXlfMS5qc29uANbQe19d1O2OAP0COQPfaqhg5ZhrMTAwNjQ0IHBob3Rvbl9wdW1wZnVuX3NlbGwuanNvbgD4LphmERzJeGU2UyAdLVPwsLBGHzEwMDY0NCBwdW1wZnVuX2J1eV8wLmpzb24A2PmLUt2g3gX5ho3bBgWiXoGL6u8xMDA2NDQgcHVtcGZ1bl9idXlfMS5qc29uAIoDUt8ed8Yj/qouoXksDNPJe8PPMTAwNjQ0IHB1bXBmdW5fYnV5X2J1bmRsZS5qc29uABaTXjZO1nbu7q0kqXRB4wD/KBoAMTAwNjQ0IHB1bXBmdW5fY3JlYXRlXzAuanNvbgDwnGSu7q1Xs6cY25q88uHCqjYKujEwMDY0NCBwdW1wZnVuX3NlbGxfMC5qc29uAN5Vsxror39kuZzd8oTQllfeTeyEMTAwNjQ0IHJheWRpdW1MaXF1aWRpdHlQb29sVjRfc3dhcF8wLmpzb24A+id8fU/5l/Mgw4+OFejgLsSZg8sxMDA2NDQgcmF5ZGl1bUxpcXVpZGl0eVBvb2xWNF9zd2FwXzEuanNvbgC5IAiTplS0Gk2FeGLrjtUju4JmODEwMDY0NCByYXlkaXVtTGlxdWlkaXR5UG9vbFY0X3N3YXBfMi5qc29uAOt+JII7Nqu8/QSZQrP89rJ3Y/oSMTAwNjQ0IHRva2VuX3RyYW5zZmVyXzAuanNvbgAE8IDua+KdG/ojoUzwkasrLdXjoDEwMDY0NCB0cmFuc2ZlckNoZWNrZWRfMC5qc29uAGFCpRrB521YefG9VStLD3pzYrl1"
+      ]
     }
   },
   "real_mainnet_sol_transfer_multi": {
     "category": "real_mainnet_sol_transfer_multi",
     "chain": "solana",
-    "evidence_chain_hash": "932fd54c041b2ab4db8c09216f93dae3eb3408b10b13ca09bfa7a96cc6b07468",
+    "evidence_chain_hash": "83e7e440f8df2b7fd89b1205b86e428d9f692ea947ba43d0ce3b953f4bdf97ef",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": -31029181720,
+          "owner": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9",
+          "post_raw_amount": 2564806499091677,
+          "pre_raw_amount": 2564837528284397,
+          "ui_delta": "-31.029181720"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -655,7 +922,7 @@
         "evidence_refs": [
           "solana-labs/explorer's own mainnet-multi-sol-* fixture naming"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "The wallet's own net SOL balance decreases by 31,029,181,720 lamports (after adding back the 11000-lamport fee it paid as accountKeys[0]); no token balance entries exist. From this wallet's own perspective the multiple downstream recipients are invisible -- only its own net outflow matters, which is a single clean TRANSFER_OUT."
       },
       "transaction_failed": false,
@@ -664,7 +931,7 @@
         "wallet_address": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.434522+00:00",
+    "imported_at": "2026-08-31T19:35:33.481385+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -708,11 +975,17 @@
       "spdx_id": "MIT",
       "tree_attestation": {
         "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
-        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "captured_at": "2026-08-31T19:29:07.127229+00:00",
+        "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+        "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "MTAwNjQ0IC5icm93c2Vyc2xpc3RyYwC2fX2AjyBgnDPM3IvPLwan9Cia2DEwMDY0NCAuZWRpdG9yY29uZmlnAJVfcaoSdd+1TfktVkULGf1jEjnoMTAwNjQ0IC5lbnYuZXhhbXBsZQAIAHSLJ76GjOzgr+t9vdcWK25wVjQwMDAwIC5naXRob29rcwCmlpcgG9lzqxju9LhxcoD53L4CrzQwMDAwIC5naXRodWIA7s5PCTfHWBx81mtYxZqdqMLoEYgxMDA2NDQgLmdpdGlnbm9yZQAHa2UcPTOQjY06Ude5lmVQ54A9bzEwMDY0NCAubnBtcmMAt6f/qFs25cq81VpH37ay1A9LDT8xMDA2NDQgLm52bXJjACvVoKmKNswIraiLgE074EfmqluKMTAwNjQ0IC5wcmV0dGllcmlnbm9yZQCD6DBvSzsLkOxWQGZ4hSmABxWtrTEwMDY0NCAucHJldHRpZXJyYy5janMAuwy0YERkfVOLCUUgYOo7aOfZDEY0MDAwMCAuc3Rvcnlib29rACWa7kUbT/K+t6L+VFNpK20uGOMqNDAwMDAgLnZzY29kZQCZ7aIjqH/8ozz7teJW7DeVhvarDTEwMDY0NCBBR0VOVFMubWQANvHKI6PYu/qSLe/Weh5kOqe1eHIxMDA2NDQgQ09OVFJJQlVUSU5HLm1kAHCPz16jKYorB5I+HVF1VqII782yMTAwNjQ0IExJQ0VOU0UAfOUMI5ltSmPRwF2h0NOICaUJMKgxMDA2NDQgUkVBRE1FLm1kAJpxh4eIYktveuStAaefTdmvggFgNDAwMDAgYXBwAJw/NhOtc/CGSIUdvyv1/zyq3/LLNDAwMDAgYmVuY2gADIGgCxML1A6E125nXeTvFIHODdY0MDAwMCBjYWNoZQAfr0Cas5XZ5xEBVxRzVJ5aVxR1KzEwMDY0NCBjb21wb25lbnRzLmpzb24AXukdmbp1p8sesE8txWOExFniacc0MDAwMCBjb25maWcA0fDtkF0NAK7prj3qU9iDCeWyYHM0MDAwMCBkb2NzAIJvuALLigK458JsHyTUZ8V1S68+MTAwNjQ0IGVtcHR5LnRzAGkOyXDOEzN4XQCI0dJcSmhBZ/NrMTAwNjQ0IGVzbGludC5jb25maWcubWpzAK7yXZtpE3VF37Hr6QMQoctPLlw3MTAwNjQ0IGluc3RydW1lbnRhdGlvbi1jbGllbnQudHMAYkFazf4+BS44KSv9XDy6hl+nDGExMDA2NDQgaW5zdHJ1bWVudGF0aW9uLnRzAIny6v3GkN5bo0wJ0qrHsch63H1GMTAwNjQ0IG5leHQuY29uZmlnLm1qcwCui/fu1jOTHTgH+bz7m851Yx4S7TQwMDAwIG9wZW5zcGVjAIJANKlLRkH/Ap/+C2GwuP56Pu6fMTAwNjQ0IHBhY2thZ2UuanNvbgDkEOwfR1dRs6yriHFF/xhdB3+2gzQwMDAwIHBhY2thZ2VzADO1j7bTxWEcaT6G8lQss125YZNhNDAwMDAgcGF0Y2hlcwDR0ljUzo/yttGpOmtGNsbVY8CicTEwMDY0NCBwbGF5d3JpZ2h0LmNvbmZpZy50cwAubsQwceyfIxosUzkxNNGGUps16jEwMDY0NCBwbnBtLWxvY2sueWFtbAASlfVX5E5cLsGzwfDYzXfvg9bw6jEwMDY0NCBwbnBtLXdvcmtzcGFjZS55YW1sAFKTH3h8fGyA7Sc6CCheUIGoBQv2MTAwNjQ0IHBvc3Rjc3MuY29uZmlnLm1qcwCnu83qJj5yh+knjc3DVj6tlSaquzEwMDY0NCBwcm94eS50cwBbWZBXP09yFYc8qX+StOaQ2Xw6sTQwMDAwIHB1YmxpYwDJcM1rurCP8QpVugr4feg4uBzcfzQwMDAwIHNjcmlwdHMAjOJLK++uQMmWBrMoEpaDIRNbyJAxMDA2NDQgc2VudHJ5LmVkZ2UuY29uZmlnLnRzAAyBk4a+jD3B0JI03WHWs9h+O831MTAwNjQ0IHNlbnRyeS5zZXJ2ZXIuY29uZmlnLnRzAMMnhFQBYAUMzdnEYcWTqOov+mL3NDAwMDAgc2VudHJ5AIUQhny14N8DeLUEItkad8Q4us8EMTAwNjQ0IHRhaWx3aW5kLmNvbmZpZy50cwAI07V3N3CAy49+rkyPcjSkYRMzazEwMDY0NCB0ZXN0LXNldHVwLnNwZWNzLnRzAECI4xHTZsASY+cxAjtml+TCADYIMTAwNjQ0IHRlc3Qtc2V0dXAudHMAcnwuoZqqaZtWee3JFI/S7Gi311YxMDA2NDQgdHNjb25maWcuanNvbgDiluNXaf8gjjh7MpFp5nr/4fvd5jEwMDY0NCB2aXRlLmNvbmZpZy5tdHMA2O+WCiuq6uk3vaVPk/wMuMaTQcQxMDA2NDQgdml0ZXN0LmQudHMAmJbEcvvV3OOzjYtXiHS/dUjgdgc="
+        ]
       }
     },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json",
@@ -720,18 +993,45 @@
     "upstream_repo": "solana-labs/explorer",
     "upstream_tree_attestation": {
       "blob_sha1": "2f0b06a43a38ec1416e6b7935ed667a07ae90115",
-      "captured_at": "2026-08-31T15:31:19.085131+00:00",
+      "captured_at": "2026-08-31T19:29:07.096018+00:00",
+      "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+      "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
       "mode": "100644",
-      "object_type": "blob",
       "path": "app/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json",
-      "raw_ls_tree_line": "100644 blob 2f0b06a43a38ec1416e6b7935ed667a07ae90115\tapp/entities/transfer-instruction/__fixtures__/mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json"
+      "path_components": [
+        "app",
+        "entities",
+        "transfer-instruction",
+        "__fixtures__",
+        "mainnet-multi-sol-2msqMqeUTTZhgite3PvWSLJhZJ3m4v4UMbDAcXymTPpXwKM5PcKfZFfxn4izZ2UTZmngYJeWSf1ztdD6kdeDkdbr.json"
+      ],
+      "tree_object_chain_b64": [
+        "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QDQwMDAwIHRva2VuLXJlY2VpcHQAgrlES+4s+39w7aKEcj0qJaqdtEg0MDAwMCB0cmFuc2FjdGlvbi1kYXRhABg3YYmKUJNKBrs9c+vuskWvMPMQNDAwMDAgdHJhbnNhY3Rpb24tZmVlACHIbCRDlcN2ynekPMvBpQCcmOIvNDAwMDAgdHJhbnNmZXItaW5zdHJ1Y3Rpb24AdtPtvNbuqf/qYG5mI0PTzFvuBtk0MDAwMCB6ay1lbGdhbWFsLXByb29mABX95AOncJiKfoxS6EfmjD8W7t4+",
+        "NDAwMDAgX19maXh0dXJlc19fAF2nqqMZOeq+ZVifUJ9WYs+Q+lijNDAwMDAgX190ZXN0c19fAEOYEyvyTQ7FhOzSbwU2Liw0R+5dMTAwNjQ0IGluZGV4LnRzAKqUHjXcHOOyyVDb99alaMFGksNiMTAwNjQ0IGxpYi50cwD6SDoOQ6JcKMtJn74n3eif62TDCDEwMDY0NCB0eXBlcy50cwD0ku9vkKn5FiYsToamoQloZaCZzw==",
+        "MTAwNjQ0IGRldm5ldC1tdWx0aS1zb2wtbWVtby01UFFjUWg3dzYzRHpnYVNhb3ZUNW5MZ3lmY2lXbTZma3llQkh3QURvYVZ1ZXNrOEtBdXdFSzF2OWducnVQZm1vTjRIc2VXTW5QdVp5NXhqZnhMYXp4NXd0Lmpzb24ADMRAt0Udi5v8UUxtsmZ5mnUJBwwxMDA2NDQgZGV2bmV0LXNpbmdsZS1zb2wtbWVtby0yRWhnTmRORGFIMkFyc29FQ2hFRllNbk56dTZxZXJRcHFGUDVhdUdRSFhVREV6NUNING1HRjF0M2dhNHRLc1ZyaW8zU1NQRHhTdjhIWW1VUlF1MVRQVGtKLmpzb24Apz3e18PI8HmtFDBBK+5vYP+DTG0xMDA2NDQgZGV2bmV0LXNvbC13aXRoLWF0YS1yZW50LTRIb2J2VVdMdVVKQnJxdVdCamlNakVub3ZUZm1jbThmY2pVUm1pSzJ3QlY2MjNqc1VEVVpmUmVLeTFiUUVQb3RrUGRSV1IxQk1weXlYZE1weXU3V01WRnouanNvbgCmms2t+moBMSSrAlwzp2B5NKmalDEwMDY0NCBkZXZuZXQtdHJhbnNmZXItd2l0aC1zZWVkLTR6Wkt3amVkTE01Y1Z4aXVGeEY5QmdDR1AyOVJZZEg5S2lmS0hrOXBuY21ub0h3WU5BaURhZWo4djdoRGFNd2hpa2JDMUw0cXp1MkFzTlZQWmZYUEVjQmguanNvbgC/4EAJc5CnuEnn4mC6W1EpQGy5vzEwMDY0NCBsb2FkLWZpeHR1cmUudHMALpJ75GmgnKcHpU9VFC69zDoP0f0xMDA2NDQgbWFpbm5ldC1tdWx0aS1zb2wtMm1zcU1xZVVUVFpoZ2l0ZTNQdldTTEpoWkozbTR2NFVNYkRBY1h5bVRQcFh3S001UGNLZlpGZnhuNGl6WjJVVFptbmdZSmVXU2YxenRkRDZrZGVEa2Rici5qc29uAC8LBqQ6OOwUFua3k17WZ6B66QEVMTAwNjQ0IG1haW5uZXQtc2luZ2xlLXNvbC0ya0hiUFVHemVoZW5VWFFiQmZBVlpHY3VUclNVVkRNRXlVMmFHY2pGYnVVQUprRzI4Q3lRUENHWkY2OHUzNjlNVTdXSE12SmJveWlvcXlpaHZ0Ujc1bkxuLmpzb24AJkAevyrFwc/5w8udDT1+UbSHb+gxMDA2NDQgbWFpbm5ldC1zaW5nbGUtdXNkYy00TFhwRjNNQ2RwNjlpRm1EMjdTbjgxMlVOcHFGUEhNNHFYSDdZMTJFOTY0cDlHSFh2d01lMVhFbXlhc29nVlQyTjRYRWN0ZFFRTGYxc0hZNkd2c2E1c0ZYLmpzb24AzX7q/H/ZnExyPrw3GXN7jxJzYrgxMDA2NDQgc3VyZnBvb2wtbXVsdGktdHJhbnNmZXItM3A5ZnpTaFNQRUM1b2NaNTJVcVFCc3pFS3JyNm0xdzVRd0NGckNod1FCZ1FBS2JBRzFkZ01yYVF1WEt0WmhTdmc2c1NIWnphUXZEamhoOHdLQ1dMNmY5RC5qc29uAIMWgpXIpi4JT+8zPdSL+tmsA1e4"
+      ]
     }
   },
   "real_mainnet_sol_transfer_received": {
     "category": "real_mainnet_sol_transfer_received",
     "chain": "solana",
-    "evidence_chain_hash": "e356c568ec0f5b756088293d6ddfc9e3322e839c28b81bde30e208c75fa93a1f",
+    "evidence_chain_hash": "83603e3a8a405b40fbcf3a8bdf99901bb2ba8ca26cfc86b159b25865aa5b7fbd",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "3eF3iBQqi2DmDLS7o9y8gG7necF5VBbwYy5gqF7sh899",
+          "account_index": 1,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": 24922118,
+          "owner": "3eF3iBQqi2DmDLS7o9y8gG7necF5VBbwYy5gqF7sh899",
+          "post_raw_amount": 1022997471,
+          "pre_raw_amount": 998075353,
+          "ui_delta": "0.024922118"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -754,7 +1054,7 @@
         "evidence_refs": [
           "solana-labs/explorer's own mainnet-single-sol-* fixture naming"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "This wallet is accountKeys[1], not the fee payer -- its SOL balance increases by exactly 24,922,118 lamports with zero fee attribution (it paid no network fee) and no token balance entries at all. A single, unambiguous inflow with nothing given up. TRANSFER_IN is never copy-eligible."
       },
       "transaction_failed": false,
@@ -763,7 +1063,7 @@
         "wallet_address": "3eF3iBQqi2DmDLS7o9y8gG7necF5VBbwYy5gqF7sh899"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.431221+00:00",
+    "imported_at": "2026-08-31T19:35:33.479167+00:00",
     "observed_classification": "TRANSFER_IN",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -807,11 +1107,17 @@
       "spdx_id": "MIT",
       "tree_attestation": {
         "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
-        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "captured_at": "2026-08-31T19:29:07.127229+00:00",
+        "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+        "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "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"
+        ]
       }
     },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
@@ -819,18 +1125,45 @@
     "upstream_repo": "solana-labs/explorer",
     "upstream_tree_attestation": {
       "blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
-      "captured_at": "2026-08-31T15:31:19.087461+00:00",
+      "captured_at": "2026-08-31T19:29:07.108349+00:00",
+      "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+      "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
       "mode": "100644",
-      "object_type": "blob",
       "path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
-      "raw_ls_tree_line": "100644 blob 26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8\tapp/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json"
+      "path_components": [
+        "app",
+        "entities",
+        "transfer-instruction",
+        "__fixtures__",
+        "mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json"
+      ],
+      "tree_object_chain_b64": [
+        "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QDQwMDAwIHRva2VuLXJlY2VpcHQAgrlES+4s+39w7aKEcj0qJaqdtEg0MDAwMCB0cmFuc2FjdGlvbi1kYXRhABg3YYmKUJNKBrs9c+vuskWvMPMQNDAwMDAgdHJhbnNhY3Rpb24tZmVlACHIbCRDlcN2ynekPMvBpQCcmOIvNDAwMDAgdHJhbnNmZXItaW5zdHJ1Y3Rpb24AdtPtvNbuqf/qYG5mI0PTzFvuBtk0MDAwMCB6ay1lbGdhbWFsLXByb29mABX95AOncJiKfoxS6EfmjD8W7t4+",
+        "NDAwMDAgX19maXh0dXJlc19fAF2nqqMZOeq+ZVifUJ9WYs+Q+lijNDAwMDAgX190ZXN0c19fAEOYEyvyTQ7FhOzSbwU2Liw0R+5dMTAwNjQ0IGluZGV4LnRzAKqUHjXcHOOyyVDb99alaMFGksNiMTAwNjQ0IGxpYi50cwD6SDoOQ6JcKMtJn74n3eif62TDCDEwMDY0NCB0eXBlcy50cwD0ku9vkKn5FiYsToamoQloZaCZzw==",
+        "MTAwNjQ0IGRldm5ldC1tdWx0aS1zb2wtbWVtby01UFFjUWg3dzYzRHpnYVNhb3ZUNW5MZ3lmY2lXbTZma3llQkh3QURvYVZ1ZXNrOEtBdXdFSzF2OWducnVQZm1vTjRIc2VXTW5QdVp5NXhqZnhMYXp4NXd0Lmpzb24ADMRAt0Udi5v8UUxtsmZ5mnUJBwwxMDA2NDQgZGV2bmV0LXNpbmdsZS1zb2wtbWVtby0yRWhnTmRORGFIMkFyc29FQ2hFRllNbk56dTZxZXJRcHFGUDVhdUdRSFhVREV6NUNING1HRjF0M2dhNHRLc1ZyaW8zU1NQRHhTdjhIWW1VUlF1MVRQVGtKLmpzb24Apz3e18PI8HmtFDBBK+5vYP+DTG0xMDA2NDQgZGV2bmV0LXNvbC13aXRoLWF0YS1yZW50LTRIb2J2VVdMdVVKQnJxdVdCamlNakVub3ZUZm1jbThmY2pVUm1pSzJ3QlY2MjNqc1VEVVpmUmVLeTFiUUVQb3RrUGRSV1IxQk1weXlYZE1weXU3V01WRnouanNvbgCmms2t+moBMSSrAlwzp2B5NKmalDEwMDY0NCBkZXZuZXQtdHJhbnNmZXItd2l0aC1zZWVkLTR6Wkt3amVkTE01Y1Z4aXVGeEY5QmdDR1AyOVJZZEg5S2lmS0hrOXBuY21ub0h3WU5BaURhZWo4djdoRGFNd2hpa2JDMUw0cXp1MkFzTlZQWmZYUEVjQmguanNvbgC/4EAJc5CnuEnn4mC6W1EpQGy5vzEwMDY0NCBsb2FkLWZpeHR1cmUudHMALpJ75GmgnKcHpU9VFC69zDoP0f0xMDA2NDQgbWFpbm5ldC1tdWx0aS1zb2wtMm1zcU1xZVVUVFpoZ2l0ZTNQdldTTEpoWkozbTR2NFVNYkRBY1h5bVRQcFh3S001UGNLZlpGZnhuNGl6WjJVVFptbmdZSmVXU2YxenRkRDZrZGVEa2Rici5qc29uAC8LBqQ6OOwUFua3k17WZ6B66QEVMTAwNjQ0IG1haW5uZXQtc2luZ2xlLXNvbC0ya0hiUFVHemVoZW5VWFFiQmZBVlpHY3VUclNVVkRNRXlVMmFHY2pGYnVVQUprRzI4Q3lRUENHWkY2OHUzNjlNVTdXSE12SmJveWlvcXlpaHZ0Ujc1bkxuLmpzb24AJkAevyrFwc/5w8udDT1+UbSHb+gxMDA2NDQgbWFpbm5ldC1zaW5nbGUtdXNkYy00TFhwRjNNQ2RwNjlpRm1EMjdTbjgxMlVOcHFGUEhNNHFYSDdZMTJFOTY0cDlHSFh2d01lMVhFbXlhc29nVlQyTjRYRWN0ZFFRTGYxc0hZNkd2c2E1c0ZYLmpzb24AzX7q/H/ZnExyPrw3GXN7jxJzYrgxMDA2NDQgc3VyZnBvb2wtbXVsdGktdHJhbnNmZXItM3A5ZnpTaFNQRUM1b2NaNTJVcVFCc3pFS3JyNm0xdzVRd0NGckNod1FCZ1FBS2JBRzFkZ01yYVF1WEt0WmhTdmc2c1NIWnphUXZEamhoOHdLQ1dMNmY5RC5qc29uAIMWgpXIpi4JT+8zPdSL+tmsA1e4"
+      ]
     }
   },
   "real_mainnet_sol_transfer_single": {
     "category": "real_mainnet_sol_transfer_single",
     "chain": "solana",
-    "evidence_chain_hash": "94cecd618474104ae1fb953f8332f6ad96d871d00f725b317a3e76a3c18afa8f",
+    "evidence_chain_hash": "fd4e08508b8535213112037783ba5a814553b6506f9f0212cbef585d9ad02c86",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "4Y5YjAPB4hMdCsiFy7BaBSscyiAvB7cuAbhxnBZ5xmgy",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": -24922118,
+          "owner": "4Y5YjAPB4hMdCsiFy7BaBSscyiAvB7cuAbhxnBZ5xmgy",
+          "post_raw_amount": 506775438,
+          "pre_raw_amount": 531702556,
+          "ui_delta": "-0.024922118"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -853,7 +1186,7 @@
         "evidence_refs": [
           "solana-labs/explorer's own mainnet-single-sol-* fixture naming (the repo's own provenance labeling, not an inference from payload shape alone)"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Only meta.preBalances/postBalances move (no token balance entries at all); the wallet's own SOL balance decreases by exactly 24,922,118 lamports after the 5000-lamport network fee it paid (as accountKeys[0]) is added back -- a single, unambiguous outflow with nothing received in return. TRANSFER_OUT is not a trade classification and is never copy-eligible."
       },
       "transaction_failed": false,
@@ -862,7 +1195,7 @@
         "wallet_address": "4Y5YjAPB4hMdCsiFy7BaBSscyiAvB7cuAbhxnBZ5xmgy"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.427593+00:00",
+    "imported_at": "2026-08-31T19:35:33.477742+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -906,11 +1239,17 @@
       "spdx_id": "MIT",
       "tree_attestation": {
         "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
-        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "captured_at": "2026-08-31T19:29:07.127229+00:00",
+        "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+        "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "MTAwNjQ0IC5icm93c2Vyc2xpc3RyYwC2fX2AjyBgnDPM3IvPLwan9Cia2DEwMDY0NCAuZWRpdG9yY29uZmlnAJVfcaoSdd+1TfktVkULGf1jEjnoMTAwNjQ0IC5lbnYuZXhhbXBsZQAIAHSLJ76GjOzgr+t9vdcWK25wVjQwMDAwIC5naXRob29rcwCmlpcgG9lzqxju9LhxcoD53L4CrzQwMDAwIC5naXRodWIA7s5PCTfHWBx81mtYxZqdqMLoEYgxMDA2NDQgLmdpdGlnbm9yZQAHa2UcPTOQjY06Ude5lmVQ54A9bzEwMDY0NCAubnBtcmMAt6f/qFs25cq81VpH37ay1A9LDT8xMDA2NDQgLm52bXJjACvVoKmKNswIraiLgE074EfmqluKMTAwNjQ0IC5wcmV0dGllcmlnbm9yZQCD6DBvSzsLkOxWQGZ4hSmABxWtrTEwMDY0NCAucHJldHRpZXJyYy5janMAuwy0YERkfVOLCUUgYOo7aOfZDEY0MDAwMCAuc3Rvcnlib29rACWa7kUbT/K+t6L+VFNpK20uGOMqNDAwMDAgLnZzY29kZQCZ7aIjqH/8ozz7teJW7DeVhvarDTEwMDY0NCBBR0VOVFMubWQANvHKI6PYu/qSLe/Weh5kOqe1eHIxMDA2NDQgQ09OVFJJQlVUSU5HLm1kAHCPz16jKYorB5I+HVF1VqII782yMTAwNjQ0IExJQ0VOU0UAfOUMI5ltSmPRwF2h0NOICaUJMKgxMDA2NDQgUkVBRE1FLm1kAJpxh4eIYktveuStAaefTdmvggFgNDAwMDAgYXBwAJw/NhOtc/CGSIUdvyv1/zyq3/LLNDAwMDAgYmVuY2gADIGgCxML1A6E125nXeTvFIHODdY0MDAwMCBjYWNoZQAfr0Cas5XZ5xEBVxRzVJ5aVxR1KzEwMDY0NCBjb21wb25lbnRzLmpzb24AXukdmbp1p8sesE8txWOExFniacc0MDAwMCBjb25maWcA0fDtkF0NAK7prj3qU9iDCeWyYHM0MDAwMCBkb2NzAIJvuALLigK458JsHyTUZ8V1S68+MTAwNjQ0IGVtcHR5LnRzAGkOyXDOEzN4XQCI0dJcSmhBZ/NrMTAwNjQ0IGVzbGludC5jb25maWcubWpzAK7yXZtpE3VF37Hr6QMQoctPLlw3MTAwNjQ0IGluc3RydW1lbnRhdGlvbi1jbGllbnQudHMAYkFazf4+BS44KSv9XDy6hl+nDGExMDA2NDQgaW5zdHJ1bWVudGF0aW9uLnRzAIny6v3GkN5bo0wJ0qrHsch63H1GMTAwNjQ0IG5leHQuY29uZmlnLm1qcwCui/fu1jOTHTgH+bz7m851Yx4S7TQwMDAwIG9wZW5zcGVjAIJANKlLRkH/Ap/+C2GwuP56Pu6fMTAwNjQ0IHBhY2thZ2UuanNvbgDkEOwfR1dRs6yriHFF/xhdB3+2gzQwMDAwIHBhY2thZ2VzADO1j7bTxWEcaT6G8lQss125YZNhNDAwMDAgcGF0Y2hlcwDR0ljUzo/yttGpOmtGNsbVY8CicTEwMDY0NCBwbGF5d3JpZ2h0LmNvbmZpZy50cwAubsQwceyfIxosUzkxNNGGUps16jEwMDY0NCBwbnBtLWxvY2sueWFtbAASlfVX5E5cLsGzwfDYzXfvg9bw6jEwMDY0NCBwbnBtLXdvcmtzcGFjZS55YW1sAFKTH3h8fGyA7Sc6CCheUIGoBQv2MTAwNjQ0IHBvc3Rjc3MuY29uZmlnLm1qcwCnu83qJj5yh+knjc3DVj6tlSaquzEwMDY0NCBwcm94eS50cwBbWZBXP09yFYc8qX+StOaQ2Xw6sTQwMDAwIHB1YmxpYwDJcM1rurCP8QpVugr4feg4uBzcfzQwMDAwIHNjcmlwdHMAjOJLK++uQMmWBrMoEpaDIRNbyJAxMDA2NDQgc2VudHJ5LmVkZ2UuY29uZmlnLnRzAAyBk4a+jD3B0JI03WHWs9h+O831MTAwNjQ0IHNlbnRyeS5zZXJ2ZXIuY29uZmlnLnRzAMMnhFQBYAUMzdnEYcWTqOov+mL3NDAwMDAgc2VudHJ5AIUQhny14N8DeLUEItkad8Q4us8EMTAwNjQ0IHRhaWx3aW5kLmNvbmZpZy50cwAI07V3N3CAy49+rkyPcjSkYRMzazEwMDY0NCB0ZXN0LXNldHVwLnNwZWNzLnRzAECI4xHTZsASY+cxAjtml+TCADYIMTAwNjQ0IHRlc3Qtc2V0dXAudHMAcnwuoZqqaZtWee3JFI/S7Gi311YxMDA2NDQgdHNjb25maWcuanNvbgDiluNXaf8gjjh7MpFp5nr/4fvd5jEwMDY0NCB2aXRlLmNvbmZpZy5tdHMA2O+WCiuq6uk3vaVPk/wMuMaTQcQxMDA2NDQgdml0ZXN0LmQudHMAmJbEcvvV3OOzjYtXiHS/dUjgdgc="
+        ]
       }
     },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
@@ -918,18 +1257,56 @@
     "upstream_repo": "solana-labs/explorer",
     "upstream_tree_attestation": {
       "blob_sha1": "26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8",
-      "captured_at": "2026-08-31T15:31:19.087461+00:00",
+      "captured_at": "2026-08-31T19:29:07.108349+00:00",
+      "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+      "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
       "mode": "100644",
-      "object_type": "blob",
       "path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json",
-      "raw_ls_tree_line": "100644 blob 26401ebf2ac5c1cff9c3cb9d0d3d7e51b4876fe8\tapp/entities/transfer-instruction/__fixtures__/mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json"
+      "path_components": [
+        "app",
+        "entities",
+        "transfer-instruction",
+        "__fixtures__",
+        "mainnet-single-sol-2kHbPUGzehenUXQbBfAVZGcuTrSUVDMEyU2aGcjFbuUAJkG28CyQPCGZF68u369MU7WHMvJboyioqyihvtR75nLn.json"
+      ],
+      "tree_object_chain_b64": [
+        "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QDQwMDAwIHRva2VuLXJlY2VpcHQAgrlES+4s+39w7aKEcj0qJaqdtEg0MDAwMCB0cmFuc2FjdGlvbi1kYXRhABg3YYmKUJNKBrs9c+vuskWvMPMQNDAwMDAgdHJhbnNhY3Rpb24tZmVlACHIbCRDlcN2ynekPMvBpQCcmOIvNDAwMDAgdHJhbnNmZXItaW5zdHJ1Y3Rpb24AdtPtvNbuqf/qYG5mI0PTzFvuBtk0MDAwMCB6ay1lbGdhbWFsLXByb29mABX95AOncJiKfoxS6EfmjD8W7t4+",
+        "NDAwMDAgX19maXh0dXJlc19fAF2nqqMZOeq+ZVifUJ9WYs+Q+lijNDAwMDAgX190ZXN0c19fAEOYEyvyTQ7FhOzSbwU2Liw0R+5dMTAwNjQ0IGluZGV4LnRzAKqUHjXcHOOyyVDb99alaMFGksNiMTAwNjQ0IGxpYi50cwD6SDoOQ6JcKMtJn74n3eif62TDCDEwMDY0NCB0eXBlcy50cwD0ku9vkKn5FiYsToamoQloZaCZzw==",
+        "MTAwNjQ0IGRldm5ldC1tdWx0aS1zb2wtbWVtby01UFFjUWg3dzYzRHpnYVNhb3ZUNW5MZ3lmY2lXbTZma3llQkh3QURvYVZ1ZXNrOEtBdXdFSzF2OWducnVQZm1vTjRIc2VXTW5QdVp5NXhqZnhMYXp4NXd0Lmpzb24ADMRAt0Udi5v8UUxtsmZ5mnUJBwwxMDA2NDQgZGV2bmV0LXNpbmdsZS1zb2wtbWVtby0yRWhnTmRORGFIMkFyc29FQ2hFRllNbk56dTZxZXJRcHFGUDVhdUdRSFhVREV6NUNING1HRjF0M2dhNHRLc1ZyaW8zU1NQRHhTdjhIWW1VUlF1MVRQVGtKLmpzb24Apz3e18PI8HmtFDBBK+5vYP+DTG0xMDA2NDQgZGV2bmV0LXNvbC13aXRoLWF0YS1yZW50LTRIb2J2VVdMdVVKQnJxdVdCamlNakVub3ZUZm1jbThmY2pVUm1pSzJ3QlY2MjNqc1VEVVpmUmVLeTFiUUVQb3RrUGRSV1IxQk1weXlYZE1weXU3V01WRnouanNvbgCmms2t+moBMSSrAlwzp2B5NKmalDEwMDY0NCBkZXZuZXQtdHJhbnNmZXItd2l0aC1zZWVkLTR6Wkt3amVkTE01Y1Z4aXVGeEY5QmdDR1AyOVJZZEg5S2lmS0hrOXBuY21ub0h3WU5BaURhZWo4djdoRGFNd2hpa2JDMUw0cXp1MkFzTlZQWmZYUEVjQmguanNvbgC/4EAJc5CnuEnn4mC6W1EpQGy5vzEwMDY0NCBsb2FkLWZpeHR1cmUudHMALpJ75GmgnKcHpU9VFC69zDoP0f0xMDA2NDQgbWFpbm5ldC1tdWx0aS1zb2wtMm1zcU1xZVVUVFpoZ2l0ZTNQdldTTEpoWkozbTR2NFVNYkRBY1h5bVRQcFh3S001UGNLZlpGZnhuNGl6WjJVVFptbmdZSmVXU2YxenRkRDZrZGVEa2Rici5qc29uAC8LBqQ6OOwUFua3k17WZ6B66QEVMTAwNjQ0IG1haW5uZXQtc2luZ2xlLXNvbC0ya0hiUFVHemVoZW5VWFFiQmZBVlpHY3VUclNVVkRNRXlVMmFHY2pGYnVVQUprRzI4Q3lRUENHWkY2OHUzNjlNVTdXSE12SmJveWlvcXlpaHZ0Ujc1bkxuLmpzb24AJkAevyrFwc/5w8udDT1+UbSHb+gxMDA2NDQgbWFpbm5ldC1zaW5nbGUtdXNkYy00TFhwRjNNQ2RwNjlpRm1EMjdTbjgxMlVOcHFGUEhNNHFYSDdZMTJFOTY0cDlHSFh2d01lMVhFbXlhc29nVlQyTjRYRWN0ZFFRTGYxc0hZNkd2c2E1c0ZYLmpzb24AzX7q/H/ZnExyPrw3GXN7jxJzYrgxMDA2NDQgc3VyZnBvb2wtbXVsdGktdHJhbnNmZXItM3A5ZnpTaFNQRUM1b2NaNTJVcVFCc3pFS3JyNm0xdzVRd0NGckNod1FCZ1FBS2JBRzFkZ01yYVF1WEt0WmhTdmc2c1NIWnphUXZEamhoOHdLQ1dMNmY5RC5qc29uAIMWgpXIpi4JT+8zPdSL+tmsA1e4"
+      ]
     }
   },
   "real_mainnet_token_to_sol_swap": {
     "category": "real_mainnet_token_to_sol_swap",
     "chain": "solana",
-    "evidence_chain_hash": "716cceaef7f491ecd821e3d0c467aa8958058cdf4d4df1628a47d771c0f71a04",
+    "evidence_chain_hash": "88a91b1210d97aa7099c7e8bb5633d6561a04ed04ee7b36f4a17a79b0c0b97af",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5",
+          "account_index": 0,
+          "decimals": 9,
+          "mint": "SOL",
+          "net_raw_delta": 348783354,
+          "owner": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5",
+          "post_raw_amount": 6554573528,
+          "pre_raw_amount": 6206795174,
+          "ui_delta": "0.348783354"
+        },
+        {
+          "account_identifier": "D2KYhSJfjgBv92JqJ24VkTsGaEXnyFDe7JBjxuRDdFHZ",
+          "account_index": 13,
+          "decimals": 6,
+          "mint": "2CrtdajpSb7DpMRLKP4yMtFLbCsWZjMkEvgSTf4Ypump",
+          "net_raw_delta": -836112233953,
+          "owner": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5",
+          "post_raw_amount": 0,
+          "pre_raw_amount": 836112233953,
+          "ui_delta": "-836112.233953"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -959,7 +1336,7 @@
         "evidence_refs": [
           "0xjeffro/tx-parser's own raydiumLiquidityPoolV4_swap_0.json naming"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Exactly two assets move for this wallet: a single SPL token (2Crtdajp..., 6 decimals, fungible) decreases from 836,112,233,953 raw units to zero (a full liquidation) and SOL increases by 348,783,354 lamports net of the 1,005,000-lamport fee it paid as fee payer. A clean one-for-one fungible swap: token in, SOL out."
       },
       "transaction_failed": false,
@@ -968,7 +1345,7 @@
         "wallet_address": "Do3UdALe5F7NRXB4uYcBzZtCbAt8ssu4a5kGZVucKhC5"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.446635+00:00",
+    "imported_at": "2026-08-31T19:35:33.491903+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -1012,11 +1389,17 @@
       "spdx_id": "MPL-2.0",
       "tree_attestation": {
         "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
-        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "captured_at": "2026-08-31T19:29:07.083384+00:00",
+        "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+        "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9"
+        ]
       }
     },
     "upstream_path": "solana/data/raydiumLiquidityPoolV4_swap_0.json",
@@ -1024,18 +1407,52 @@
     "upstream_repo": "0xjeffro/tx-parser",
     "upstream_tree_attestation": {
       "blob_sha1": "fa277c7d4ff997f320c38f8e15e8e02ec49983cb",
-      "captured_at": "2026-08-31T15:31:19.078319+00:00",
+      "captured_at": "2026-08-31T19:29:07.069040+00:00",
+      "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+      "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
       "mode": "100644",
-      "object_type": "blob",
       "path": "solana/data/raydiumLiquidityPoolV4_swap_0.json",
-      "raw_ls_tree_line": "100644 blob fa277c7d4ff997f320c38f8e15e8e02ec49983cb\tsolana/data/raydiumLiquidityPoolV4_swap_0.json"
+      "path_components": [
+        "solana",
+        "data",
+        "raydiumLiquidityPoolV4_swap_0.json"
+      ],
+      "tree_object_chain_b64": [
+        "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9",
+        "NDAwMDAgZGF0YQA/NPJ24ArFxpboa/q0GB8u63emFDQwMDAwIGdsb2JhbHMAv7n1xiEN9aLPr4kyRuKS0qN1nK00MDAwMCBpZGwApOYDxw65QSx+G5iIjR78GD6SgfcxMDA2NDQgcGFyc2VyLmdvABElLLWYnSzAqMg804sFtk2FGgCxMTAwNjQ0IHBhcnNlcl90ZXN0LmdvANVSj/dTkfNvmDZiuGKWmraPtWq3NDAwMDAgcHJvZ3JhbXMAi77SzZHFCVb0IDQXmbq2KCQo6100MDAwMCByZWdpc3RyeQCUWeH2dzUWXsSWb6VU7g1cuoGEETEwMDY0NCByb3V0ZXIuZ28AUHI+0ljB0wCWkRtzyKcGdiBN1vc0MDAwMCB0eXBlcwDlgHLLnPTw49LfIdBA7Bw1ldauNQ==",
+        "MTAwNjQ0IE9LWERFWF9jb21taXNzaW9uU29sU3dhcDIuanNvbgDM0REq6AuX9ET3nt5eEU8/f6V+HzEwMDY0NCBPS1hERVhfY29tbWlzc2lvblNwbFByb3h5U3dhcC5qc29uADYo02Sw6eZhC7SDa9i+XTxE5qpqMTAwNjQ0IE9LWERFWF9zd2FwXzAuanNvbgBg3NueXa0d3pvBe6jrGOTsIJlT5TEwMDY0NCBPS1hERVhfc3dhcF8xLmpzb24A0XWz732ngfk5K+uo7hYZtjPcDCMxMDA2NDQgT0tYREVYX3N3YXBfMi5qc29uAJ416ROt8B1SvBhyrqxoFbs5n8WFMTAwNjQ0IGJyb2tlbl9kYXRhXzAuanNvbgCnSP36O+KuQc+0SzNT1j4jNgjH4TEwMDY0NCBicm9rZW5fZGF0YV8xLmpzb24AF9gNfLgHD+qSKhP0F/yzOf479OIxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8xLmpzb24A5fPwZPrDaD3IwGLXBdBT6HHVQQMxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8yLmpzb24Aadk7th7TQDXRHXIzXssIidnnv4MxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9zaGFyZWRBY2NvdW50c1JvdXRlXzEuanNvbgC5ogrFt7TmeOcLejsGJys58Mj/NTEwMDY0NCBqdXBpdGVyQWdncmVnYXRvclY2X3NoYXJlZEFjY291bnRzUm91dGVfMi5qc29uAJHzs2dXecak+wqZTvD/HpG555KDMTAwNjQ0IGp1cGl0ZXJEY2FfQ2xvc2VEY2FfMC5qc29uAEr+wYDXp6tZpjepO/fWAoPwlRS6MTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMC5qc29uAPwxo/GG0BaRtjtYgBtkOn0iIqOsMTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMS5qc29uAFES4rjpgH9k3D2vFn0N5IABKhrKMTAwNjQ0IGp1cGl0ZXJEY2Ffb3BlbkRjYVYyXzAuanNvbgAxhwrWmIYMtslhchXOpIjSw7BvIzEwMDY0NCBqdXBpdGVyRGNhX29wZW5EY2FWMl8xLmpzb24AyPAYjbPRPlx9SYCMy3d4aB8h9GIxMDA2NDQgcGhvdG9uX3B1bXBmdW5fYnV5XzAuanNvbgAywLwW/OiYF53SDjk/iM8jvklWWzEwMDY0NCBwaG90b25fcHVtcGZ1bl9idXlfMS5qc29uANbQe19d1O2OAP0COQPfaqhg5ZhrMTAwNjQ0IHBob3Rvbl9wdW1wZnVuX3NlbGwuanNvbgD4LphmERzJeGU2UyAdLVPwsLBGHzEwMDY0NCBwdW1wZnVuX2J1eV8wLmpzb24A2PmLUt2g3gX5ho3bBgWiXoGL6u8xMDA2NDQgcHVtcGZ1bl9idXlfMS5qc29uAIoDUt8ed8Yj/qouoXksDNPJe8PPMTAwNjQ0IHB1bXBmdW5fYnV5X2J1bmRsZS5qc29uABaTXjZO1nbu7q0kqXRB4wD/KBoAMTAwNjQ0IHB1bXBmdW5fY3JlYXRlXzAuanNvbgDwnGSu7q1Xs6cY25q88uHCqjYKujEwMDY0NCBwdW1wZnVuX3NlbGxfMC5qc29uAN5Vsxror39kuZzd8oTQllfeTeyEMTAwNjQ0IHJheWRpdW1MaXF1aWRpdHlQb29sVjRfc3dhcF8wLmpzb24A+id8fU/5l/Mgw4+OFejgLsSZg8sxMDA2NDQgcmF5ZGl1bUxpcXVpZGl0eVBvb2xWNF9zd2FwXzEuanNvbgC5IAiTplS0Gk2FeGLrjtUju4JmODEwMDY0NCByYXlkaXVtTGlxdWlkaXR5UG9vbFY0X3N3YXBfMi5qc29uAOt+JII7Nqu8/QSZQrP89rJ3Y/oSMTAwNjQ0IHRva2VuX3RyYW5zZmVyXzAuanNvbgAE8IDua+KdG/ojoUzwkasrLdXjoDEwMDY0NCB0cmFuc2ZlckNoZWNrZWRfMC5qc29uAGFCpRrB521YefG9VStLD3pzYrl1"
+      ]
     }
   },
   "real_mainnet_token_to_usdc_swap": {
     "category": "real_mainnet_token_to_usdc_swap",
     "chain": "solana",
-    "evidence_chain_hash": "d52bb2157d8e605ad4be2e196b7ce8b33599033448d8ea382fbeff58739f54f4",
+    "evidence_chain_hash": "5e0447036136050d7f5bd6c54de38243e206f0d83291cd2399209af062c1ca2d",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "Tk1dqcZ8BD9nZSDEvym8ThfweYZgP8SKp3xvJsS9HyN",
+          "account_index": 1,
+          "decimals": 6,
+          "mint": "CMjfdovtzmgRsnhE1cCzdwDFGKt1UzZB4oCGQchQpump",
+          "net_raw_delta": -634862142081,
+          "owner": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy",
+          "post_raw_amount": 0,
+          "pre_raw_amount": 634862142081,
+          "ui_delta": "-634862.142081"
+        },
+        {
+          "account_identifier": "HEdQot5BusCbwL75zFrPnJuPMzMgGkbk6jrDV9PprjE8",
+          "account_index": 7,
+          "decimals": 6,
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "net_raw_delta": 47461249,
+          "owner": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy",
+          "post_raw_amount": 1400961249,
+          "pre_raw_amount": 1353500000,
+          "ui_delta": "47.461249"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -1065,7 +1482,7 @@
         "evidence_refs": [
           "0xjeffro/tx-parser's own jupiterAggregatorV6_sharedAccountsRoute_2.json naming"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Exactly two assets move for this wallet: a single SPL token (CMjfdovt..., 6 decimals, fungible) decreases from 634,862,142,081 raw units to zero, and the real USDC mint (EPjFWdd5..., the same mint this project treats as canonical) increases by 47,461,249 raw units. A clean one-for-one fungible swap despite the multi-hop Jupiter route underneath -- only the net wallet-level deltas are one-for-one, which is exactly what SWAP_SIMPLE asserts."
       },
       "transaction_failed": false,
@@ -1074,7 +1491,7 @@
         "wallet_address": "GKj54MVFppoYsxPU9jMn7CMniVRAuveFadyTtFhn1vXy"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.451701+00:00",
+    "imported_at": "2026-08-31T19:35:33.496928+00:00",
     "observed_classification": "SWAP_SIMPLE",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": true,
@@ -1118,11 +1535,17 @@
       "spdx_id": "MPL-2.0",
       "tree_attestation": {
         "blob_sha1": "a612ad9813b006ce81d1ee438dd784da99a54007",
-        "captured_at": "2026-08-31T15:31:19.082649+00:00",
+        "captured_at": "2026-08-31T19:29:07.083384+00:00",
+        "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+        "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob a612ad9813b006ce81d1ee438dd784da99a54007\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9"
+        ]
       }
     },
     "upstream_path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json",
@@ -1130,18 +1553,41 @@
     "upstream_repo": "0xjeffro/tx-parser",
     "upstream_tree_attestation": {
       "blob_sha1": "91f3b3675779c6a4fb0a994ef0ff1e91b9e79283",
-      "captured_at": "2026-08-31T15:31:19.080507+00:00",
+      "captured_at": "2026-08-31T19:29:07.077711+00:00",
+      "commit_object_b64": "dHJlZSAxMTNkMmIwNzY4NjZiY2IwZDQyZjg1ODVkNTU0ZDFhZDYxOWE1OWQ2CnBhcmVudCAxMTkxZjlmN2QyZjg4ZTk2NTFkNWViNzlkNzI5M2RiMmExZGNkMGY5CmF1dGhvciBKZWZmcm8gPDB4amVmZnJvQGdtYWlsLmNvbT4gMTc0MzYzNjY1MSAtMDcwMApjb21taXR0ZXIgSmVmZnJvIDwweGplZmZyb0BnbWFpbC5jb20+IDE3NDM2MzY2NTEgLTA3MDAKCmFkZCBwYXJzZXIgZm9yIHBob3Rvbl9wcm9ncmFtOnB1bXBmdW5fc2VsbAoKUmVzb2x2ZXMgIzE0Cg==",
+      "commit_sha": "475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
       "mode": "100644",
-      "object_type": "blob",
       "path": "solana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json",
-      "raw_ls_tree_line": "100644 blob 91f3b3675779c6a4fb0a994ef0ff1e91b9e79283\tsolana/data/jupiterAggregatorV6_sharedAccountsRoute_2.json"
+      "path_components": [
+        "solana",
+        "data",
+        "jupiterAggregatorV6_sharedAccountsRoute_2.json"
+      ],
+      "tree_object_chain_b64": [
+        "NDAwMDAgLmdpdGh1YgBL+6k+trD9NN/0ehBMQBYBVjueIjEwMDY0NCAuZ2l0aWdub3JlAKUCf/veFAuRoyMEcN7pJV+F0COBMTAwNjQ0IExJQ0VOU0UAphKtmBOwBs6B0e5DjdeE2pmlQAcxMDA2NDQgUkVBRE1FLm1kANimZJgubGxr7KtXcVcDYZJaOLNbMTAwNjQ0IGdvLm1vZACh5kP3ZEbE4y0Kwq8m/OUeCHffiTEwMDY0NCBnby5zdW0AZrSAjKNqIeVxEP1P4oGvmeWSeF4xMDA2NDQgbWFpbi5nbwCT5vhRl5TdtbFeFvnKNTZDZiGE6DQwMDAwIHNvbGFuYQByb+WBLzBFmTZkU1wAOzvAJjOCZDQwMDAwIHV0aWxzAJ+KoT7ujoshiABymr28D64IEXl9",
+        "NDAwMDAgZGF0YQA/NPJ24ArFxpboa/q0GB8u63emFDQwMDAwIGdsb2JhbHMAv7n1xiEN9aLPr4kyRuKS0qN1nK00MDAwMCBpZGwApOYDxw65QSx+G5iIjR78GD6SgfcxMDA2NDQgcGFyc2VyLmdvABElLLWYnSzAqMg804sFtk2FGgCxMTAwNjQ0IHBhcnNlcl90ZXN0LmdvANVSj/dTkfNvmDZiuGKWmraPtWq3NDAwMDAgcHJvZ3JhbXMAi77SzZHFCVb0IDQXmbq2KCQo6100MDAwMCByZWdpc3RyeQCUWeH2dzUWXsSWb6VU7g1cuoGEETEwMDY0NCByb3V0ZXIuZ28AUHI+0ljB0wCWkRtzyKcGdiBN1vc0MDAwMCB0eXBlcwDlgHLLnPTw49LfIdBA7Bw1ldauNQ==",
+        "MTAwNjQ0IE9LWERFWF9jb21taXNzaW9uU29sU3dhcDIuanNvbgDM0REq6AuX9ET3nt5eEU8/f6V+HzEwMDY0NCBPS1hERVhfY29tbWlzc2lvblNwbFByb3h5U3dhcC5qc29uADYo02Sw6eZhC7SDa9i+XTxE5qpqMTAwNjQ0IE9LWERFWF9zd2FwXzAuanNvbgBg3NueXa0d3pvBe6jrGOTsIJlT5TEwMDY0NCBPS1hERVhfc3dhcF8xLmpzb24A0XWz732ngfk5K+uo7hYZtjPcDCMxMDA2NDQgT0tYREVYX3N3YXBfMi5qc29uAJ416ROt8B1SvBhyrqxoFbs5n8WFMTAwNjQ0IGJyb2tlbl9kYXRhXzAuanNvbgCnSP36O+KuQc+0SzNT1j4jNgjH4TEwMDY0NCBicm9rZW5fZGF0YV8xLmpzb24AF9gNfLgHD+qSKhP0F/yzOf479OIxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8xLmpzb24A5fPwZPrDaD3IwGLXBdBT6HHVQQMxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9Sb3V0ZV8yLmpzb24Aadk7th7TQDXRHXIzXssIidnnv4MxMDA2NDQganVwaXRlckFnZ3JlZ2F0b3JWNl9zaGFyZWRBY2NvdW50c1JvdXRlXzEuanNvbgC5ogrFt7TmeOcLejsGJys58Mj/NTEwMDY0NCBqdXBpdGVyQWdncmVnYXRvclY2X3NoYXJlZEFjY291bnRzUm91dGVfMi5qc29uAJHzs2dXecak+wqZTvD/HpG555KDMTAwNjQ0IGp1cGl0ZXJEY2FfQ2xvc2VEY2FfMC5qc29uAEr+wYDXp6tZpjepO/fWAoPwlRS6MTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMC5qc29uAPwxo/GG0BaRtjtYgBtkOn0iIqOsMTAwNjQ0IGp1cGl0ZXJEY2FfZW5kQW5kQ2xvc2VfMS5qc29uAFES4rjpgH9k3D2vFn0N5IABKhrKMTAwNjQ0IGp1cGl0ZXJEY2Ffb3BlbkRjYVYyXzAuanNvbgAxhwrWmIYMtslhchXOpIjSw7BvIzEwMDY0NCBqdXBpdGVyRGNhX29wZW5EY2FWMl8xLmpzb24AyPAYjbPRPlx9SYCMy3d4aB8h9GIxMDA2NDQgcGhvdG9uX3B1bXBmdW5fYnV5XzAuanNvbgAywLwW/OiYF53SDjk/iM8jvklWWzEwMDY0NCBwaG90b25fcHVtcGZ1bl9idXlfMS5qc29uANbQe19d1O2OAP0COQPfaqhg5ZhrMTAwNjQ0IHBob3Rvbl9wdW1wZnVuX3NlbGwuanNvbgD4LphmERzJeGU2UyAdLVPwsLBGHzEwMDY0NCBwdW1wZnVuX2J1eV8wLmpzb24A2PmLUt2g3gX5ho3bBgWiXoGL6u8xMDA2NDQgcHVtcGZ1bl9idXlfMS5qc29uAIoDUt8ed8Yj/qouoXksDNPJe8PPMTAwNjQ0IHB1bXBmdW5fYnV5X2J1bmRsZS5qc29uABaTXjZO1nbu7q0kqXRB4wD/KBoAMTAwNjQ0IHB1bXBmdW5fY3JlYXRlXzAuanNvbgDwnGSu7q1Xs6cY25q88uHCqjYKujEwMDY0NCBwdW1wZnVuX3NlbGxfMC5qc29uAN5Vsxror39kuZzd8oTQllfeTeyEMTAwNjQ0IHJheWRpdW1MaXF1aWRpdHlQb29sVjRfc3dhcF8wLmpzb24A+id8fU/5l/Mgw4+OFejgLsSZg8sxMDA2NDQgcmF5ZGl1bUxpcXVpZGl0eVBvb2xWNF9zd2FwXzEuanNvbgC5IAiTplS0Gk2FeGLrjtUju4JmODEwMDY0NCByYXlkaXVtTGlxdWlkaXR5UG9vbFY0X3N3YXBfMi5qc29uAOt+JII7Nqu8/QSZQrP89rJ3Y/oSMTAwNjQ0IHRva2VuX3RyYW5zZmVyXzAuanNvbgAE8IDua+KdG/ojoUzwkasrLdXjoDEwMDY0NCB0cmFuc2ZlckNoZWNrZWRfMC5qc29uAGFCpRrB521YefG9VStLD3pzYrl1"
+      ]
     }
   },
   "real_mainnet_usdc_transfer": {
     "category": "real_mainnet_usdc_transfer",
     "chain": "solana",
-    "evidence_chain_hash": "4f6acaab65884a36f1b2d22038cb39b6c5a29f9d4970e2eb65fa6b5034bfbf44",
+    "evidence_chain_hash": "35184e209126653c80b67224358472c09184a872389a21f615873b28e8a363a8",
     "expectation": {
+      "account_deltas": [
+        {
+          "account_identifier": "2e3Eb9tkT8252WhFR26Xz6SKoiatJScuMW1BHgGqPvvc",
+          "account_index": 3,
+          "decimals": 6,
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "net_raw_delta": -3800000,
+          "owner": "3V9bd3EN5aNuhE4RiHGbZ1eZakJ1F9cDb8V4YLjCG8cg",
+          "post_raw_amount": 101899968394,
+          "pre_raw_amount": 101903768394,
+          "ui_delta": "-3.800000"
+        }
+      ],
       "asset_deltas": [
         {
           "account_context": null,
@@ -1164,7 +1610,7 @@
         "evidence_refs": [
           "solana-labs/explorer's own mainnet-single-usdc-* fixture naming"
         ],
-        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output.",
+        "method": "Manual review of the raw getTransaction payload's meta.preBalances/postBalances and meta.preTokenBalances/postTokenBalances for the named wallet: independently computed each asset's net delta and the transaction's fee-payer status directly from those fields and the wallet's index in transaction.message.accountKeys, reasoning about the balance-delta shape's semantics before checking it against the parser's own output. Round 6, finding #3: account-level rows (account_deltas) were independently re-derived the same way, reading each preTokenBalances/postTokenBalances entry's own accountIndex directly (never by calling compute_account_level_deltas and copying its output) before checking against it.",
         "rationale": "Only meta.preTokenBalances/postTokenBalances for the real USDC mint (EPjFWdd5...) move for this wallet, decreasing by exactly 3,800,000 raw units (6 decimals); no other asset (including SOL beyond the 48370-lamport fee it paid as fee payer) changes. A single clean token outflow."
       },
       "transaction_failed": false,
@@ -1173,7 +1619,7 @@
         "wallet_address": "3V9bd3EN5aNuhE4RiHGbZ1eZakJ1F9cDb8V4YLjCG8cg"
       }
     },
-    "imported_at": "2026-08-31T15:55:46.438114+00:00",
+    "imported_at": "2026-08-31T19:35:33.483951+00:00",
     "observed_classification": "TRANSFER_OUT",
     "observed_confidence": "1.000",
     "observed_is_copy_eligible": false,
@@ -1217,11 +1663,17 @@
       "spdx_id": "MIT",
       "tree_attestation": {
         "blob_sha1": "7ce50c23996d4a63d1c05da1d0d38809a50930a8",
-        "captured_at": "2026-08-31T15:31:19.092049+00:00",
+        "captured_at": "2026-08-31T19:29:07.127229+00:00",
+        "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+        "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
         "mode": "100644",
-        "object_type": "blob",
         "path": "LICENSE",
-        "raw_ls_tree_line": "100644 blob 7ce50c23996d4a63d1c05da1d0d38809a50930a8\tLICENSE"
+        "path_components": [
+          "LICENSE"
+        ],
+        "tree_object_chain_b64": [
+          "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"
+        ]
       }
     },
     "upstream_path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json",
@@ -1229,11 +1681,25 @@
     "upstream_repo": "solana-labs/explorer",
     "upstream_tree_attestation": {
       "blob_sha1": "cd7eeafc7fd99c4c723ebc3719737b8f127362b8",
-      "captured_at": "2026-08-31T15:31:19.089819+00:00",
+      "captured_at": "2026-08-31T19:29:07.121668+00:00",
+      "commit_object_b64": "dHJlZSBmMjg4ZWUxYTcxNDYxZTU2ZmU4NWFmMjU4YmYwZTM3NGI4YzM1YTYwCnBhcmVudCBmZmVjOTVkY2JmMjNiYWU4ZjY1NTUzMWVkMjkzNTI2ZjBmYjUzMjJkCmF1dGhvciBBbGV4IFMgPDI3MTkzODU3K2Fza292QHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gMTc4NzkzMzk1OSArMDcwMApjb21taXR0ZXIgR2l0SHViIDxub3JlcGx5QGdpdGh1Yi5jb20+IDE3ODc5MzM5NTkgKzAxMDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIHdzRmNCQUFCQ0FBUUJRSnFrYlVIQ1JDMWFRN3V1NVVobEFBQTFSZ1FBSEl3Qi9md2VaUnNadGl6SkRBeXgyZkEKIHI5OFpLNVhncS9ZTTh3WVJwM0p6Nk9uWU15blpUNWFtM01PeHlSL1VlYWppNWVVZUZORXh0YjlqOVQ2YkR4U2kKIGw0MXZlZVVTNHhuUm9tQ3lmd2twOE94TFFxdTRYUlZPT1JRQ3RmRHFPSE9vQU01VWFTZmNOTmpFWlNvZFNZeDEKIHZuWGRJd0tsUnh6WDNlN3R0WTllRDlhMDZjYVg5Q2FDYnNJeitSekU2b3ZaYkF5WUVtTHg3QkxmT1Q3SG1kOFIKIDVJd09sYzh5dC9HYU1hZ3NZVzVLbUhhUmwrZlQxVjBoSGZNbXdFZVpLOW04Q25vc29Bb0JtZ1g5NUl2QjR5T3QKIGt0bHpoeDZBRys3WWNFajZoNjYvSTR3YW56YXg5NVpqYlJPZlNRaWIxS29WTktOMXNiSi9ZWUtUQWhjeDk3M0UKIDhwSmNCTTBvQjF4czBEbFRtRkFSOFlxM1B1UVlXcVcwSU1HcUtuNEpDSDhHUUhpY2F0Y2krNnIzZi9OSjJyUUwKIHJ0US9saTBYdVo1N01pT2NjbE1YTm90TGlBQ3hyN1l2LzdQUnYyWHFwY1RidzU5aUIvbElNaCtLZG85dSs3MEMKIFZaVU03a0hFSHlOT3FXVXFUR1g0RVRQNkhlV0ZmSDNrZVZuZzNUTXZSSnpCdFJPVGo2UysyR3YwK0hodW9nUVIKIDNOTXU5cEVDMERNWEczZ3NnQ29TQUU5V0dLdlI1a3BMNGtIRVEzbE1iMHVWdUZtRjdzcFY5MzlZTTN1WlEwZXUKIDdIdmFlTDVacDhMWDloVjlxS0hCNDh4V1pVQWdJOGtyREhrV2Q5ZkU0Yk80MW1RUDhYbGZpVmtzNDk0MmhVaGQKIFI1YUlLZUtsT3l6TkN6bXZwd3c1CiA9dXEwNAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCiAKCmZpeChzdXBwbHkpOiByZWFkIGNoYWluIHN1cHBseSB0aHJvdWdoIGEgY2FjaGVkIHNlcnZlciByb3V0ZSAoIzEyNTIp",
+      "commit_sha": "f144a3103cb9cb4df66616f40fb80b317f44dc86",
       "mode": "100644",
-      "object_type": "blob",
       "path": "app/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json",
-      "raw_ls_tree_line": "100644 blob cd7eeafc7fd99c4c723ebc3719737b8f127362b8\tapp/entities/transfer-instruction/__fixtures__/mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json"
+      "path_components": [
+        "app",
+        "entities",
+        "transfer-instruction",
+        "__fixtures__",
+        "mainnet-single-usdc-4LXpF3MCdp69iFmD27Sn812UNpqFPHM4qXH7Y12E964p9GHXvwMe1XEmyasogVT2N4XEctdQQLf1sHY6Gvsa5sFX.json"
+      ],
+      "tree_object_chain_b64": [
+        "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QDQwMDAwIHRva2VuLXJlY2VpcHQAgrlES+4s+39w7aKEcj0qJaqdtEg0MDAwMCB0cmFuc2FjdGlvbi1kYXRhABg3YYmKUJNKBrs9c+vuskWvMPMQNDAwMDAgdHJhbnNhY3Rpb24tZmVlACHIbCRDlcN2ynekPMvBpQCcmOIvNDAwMDAgdHJhbnNmZXItaW5zdHJ1Y3Rpb24AdtPtvNbuqf/qYG5mI0PTzFvuBtk0MDAwMCB6ay1lbGdhbWFsLXByb29mABX95AOncJiKfoxS6EfmjD8W7t4+",
+        "NDAwMDAgX19maXh0dXJlc19fAF2nqqMZOeq+ZVifUJ9WYs+Q+lijNDAwMDAgX190ZXN0c19fAEOYEyvyTQ7FhOzSbwU2Liw0R+5dMTAwNjQ0IGluZGV4LnRzAKqUHjXcHOOyyVDb99alaMFGksNiMTAwNjQ0IGxpYi50cwD6SDoOQ6JcKMtJn74n3eif62TDCDEwMDY0NCB0eXBlcy50cwD0ku9vkKn5FiYsToamoQloZaCZzw==",
+        "MTAwNjQ0IGRldm5ldC1tdWx0aS1zb2wtbWVtby01UFFjUWg3dzYzRHpnYVNhb3ZUNW5MZ3lmY2lXbTZma3llQkh3QURvYVZ1ZXNrOEtBdXdFSzF2OWducnVQZm1vTjRIc2VXTW5QdVp5NXhqZnhMYXp4NXd0Lmpzb24ADMRAt0Udi5v8UUxtsmZ5mnUJBwwxMDA2NDQgZGV2bmV0LXNpbmdsZS1zb2wtbWVtby0yRWhnTmRORGFIMkFyc29FQ2hFRllNbk56dTZxZXJRcHFGUDVhdUdRSFhVREV6NUNING1HRjF0M2dhNHRLc1ZyaW8zU1NQRHhTdjhIWW1VUlF1MVRQVGtKLmpzb24Apz3e18PI8HmtFDBBK+5vYP+DTG0xMDA2NDQgZGV2bmV0LXNvbC13aXRoLWF0YS1yZW50LTRIb2J2VVdMdVVKQnJxdVdCamlNakVub3ZUZm1jbThmY2pVUm1pSzJ3QlY2MjNqc1VEVVpmUmVLeTFiUUVQb3RrUGRSV1IxQk1weXlYZE1weXU3V01WRnouanNvbgCmms2t+moBMSSrAlwzp2B5NKmalDEwMDY0NCBkZXZuZXQtdHJhbnNmZXItd2l0aC1zZWVkLTR6Wkt3amVkTE01Y1Z4aXVGeEY5QmdDR1AyOVJZZEg5S2lmS0hrOXBuY21ub0h3WU5BaURhZWo4djdoRGFNd2hpa2JDMUw0cXp1MkFzTlZQWmZYUEVjQmguanNvbgC/4EAJc5CnuEnn4mC6W1EpQGy5vzEwMDY0NCBsb2FkLWZpeHR1cmUudHMALpJ75GmgnKcHpU9VFC69zDoP0f0xMDA2NDQgbWFpbm5ldC1tdWx0aS1zb2wtMm1zcU1xZVVUVFpoZ2l0ZTNQdldTTEpoWkozbTR2NFVNYkRBY1h5bVRQcFh3S001UGNLZlpGZnhuNGl6WjJVVFptbmdZSmVXU2YxenRkRDZrZGVEa2Rici5qc29uAC8LBqQ6OOwUFua3k17WZ6B66QEVMTAwNjQ0IG1haW5uZXQtc2luZ2xlLXNvbC0ya0hiUFVHemVoZW5VWFFiQmZBVlpHY3VUclNVVkRNRXlVMmFHY2pGYnVVQUprRzI4Q3lRUENHWkY2OHUzNjlNVTdXSE12SmJveWlvcXlpaHZ0Ujc1bkxuLmpzb24AJkAevyrFwc/5w8udDT1+UbSHb+gxMDA2NDQgbWFpbm5ldC1zaW5nbGUtdXNkYy00TFhwRjNNQ2RwNjlpRm1EMjdTbjgxMlVOcHFGUEhNNHFYSDdZMTJFOTY0cDlHSFh2d01lMVhFbXlhc29nVlQyTjRYRWN0ZFFRTGYxc0hZNkd2c2E1c0ZYLmpzb24AzX7q/H/ZnExyPrw3GXN7jxJzYrgxMDA2NDQgc3VyZnBvb2wtbXVsdGktdHJhbnNmZXItM3A5ZnpTaFNQRUM1b2NaNTJVcVFCc3pFS3JyNm0xdzVRd0NGckNod1FCZ1FBS2JBRzFkZ01yYVF1WEt0WmhTdmc2c1NIWnphUXZEamhoOHdLQ1dMNmY5RC5qc29uAIMWgpXIpi4JT+8zPdSL+tmsA1e4"
+      ]
     }
   }
 }

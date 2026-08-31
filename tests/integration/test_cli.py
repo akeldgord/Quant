@@ -58,14 +58,48 @@ def _git_blob_sha1(data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()  # noqa: S324
 
 
+def _git_object_sha1(object_type: str, content: bytes) -> str:
+    import hashlib
+
+    header = f"{object_type} {len(content)}\0".encode()
+    return hashlib.sha1(header + content).hexdigest()  # noqa: S324
+
+
 def _attestation(raw_bytes: bytes, path: str) -> dict:
-    blob = _git_blob_sha1(raw_bytes)
+    """A real, independently-recomputable Git object chain -- same
+    construction as tests/unit/test_golden_fixtures.py's helper of the
+    same purpose (Phase 1 remediation round 6, finding #2), just returning
+    a plain JSON-serializable dict here since this is fed straight into a
+    CLI evidence file."""
+    import base64
+
+    blob_sha1 = _git_blob_sha1(raw_bytes)
+    components = path.split("/")
+    chain: list[bytes] = []
+    current_sha = blob_sha1
+    current_mode = "100644"
+    for component in reversed(components):
+        entry_bytes = f"{current_mode} {component}".encode() + b"\0" + bytes.fromhex(current_sha)
+        chain.append(entry_bytes)
+        current_sha = _git_object_sha1("tree", entry_bytes)
+        current_mode = "40000"
+    chain.reverse()
+    root_tree_sha = _git_object_sha1("tree", chain[0])
+    commit_content = (
+        f"tree {root_tree_sha}\n"
+        "author Test <test@example.invalid> 1735689600 +0000\n"
+        "committer Test <test@example.invalid> 1735689600 +0000\n\n"
+        "synthetic test commit\n"
+    ).encode()
+    commit_sha = _git_object_sha1("commit", commit_content)
     return {
-        "mode": "100644",
-        "object_type": "blob",
-        "blob_sha1": blob,
+        "commit_sha": commit_sha,
+        "commit_object_b64": base64.b64encode(commit_content).decode("ascii"),
         "path": path,
-        "raw_ls_tree_line": f"100644 blob {blob}\t{path}",
+        "path_components": components,
+        "tree_object_chain_b64": [base64.b64encode(t).decode("ascii") for t in chain],
+        "mode": "100644",
+        "blob_sha1": blob_sha1,
         "captured_at": "2026-01-01T00:00:00+00:00",
     }
 
@@ -100,12 +134,13 @@ def test_cli_fixtures_import_real_chain_round_trip(tmp_path) -> None:
     license_path = tmp_path / "LICENSE"
     license_path.write_bytes(license_bytes)
 
+    tree_attestation = _attestation(input_path.read_bytes(), "tests/example.json")
     evidence = {
         "category": "cli_round_trip",
         "upstream_repo": "example-org/example-repo",
-        "upstream_commit": "a" * 40,
+        "upstream_commit": tree_attestation["commit_sha"],
         "upstream_path_note": "cli self-test fixture, not a real upstream capture.",
-        "upstream_tree_attestation": _attestation(input_path.read_bytes(), "tests/example.json"),
+        "upstream_tree_attestation": tree_attestation,
         "upstream_license": {
             "spdx_id": "MIT",
             "path": "LICENSE",
@@ -128,6 +163,19 @@ def test_cli_fixtures_import_real_chain_round_trip(tmp_path) -> None:
                     "raw_amount": -999_995_000,
                     "decimals": 9,
                     "ui_amount": "-0.999995000",
+                }
+            ],
+            "account_deltas": [
+                {
+                    "account_identifier": "CliRoundTripWalletNotReal1111111111111111111",
+                    "account_index": 0,
+                    "owner": "CliRoundTripWalletNotReal1111111111111111111",
+                    "mint": "SOL",
+                    "pre_raw_amount": 2_000_000_000,
+                    "post_raw_amount": 1_000_000_000,
+                    "net_raw_delta": -999_995_000,
+                    "decimals": 9,
+                    "ui_delta": "-0.999995000",
                 }
             ],
             "expected_input_mint": "SOL",
@@ -185,12 +233,13 @@ def test_cli_fixtures_import_real_chain_rejects_malformed_input(tmp_path) -> Non
 
     import hashlib
 
+    tree_attestation = _attestation(input_path.read_bytes(), "tests/example.json")
     evidence: dict = {
         "category": "bad",
         "upstream_repo": "example-org/example-repo",
-        "upstream_commit": "a" * 40,
+        "upstream_commit": tree_attestation["commit_sha"],
         "upstream_path_note": "malformed-input self-test.",
-        "upstream_tree_attestation": _attestation(input_path.read_bytes(), "tests/example.json"),
+        "upstream_tree_attestation": tree_attestation,
         "upstream_license": {
             "spdx_id": "MIT",
             "path": "LICENSE",
@@ -204,6 +253,7 @@ def test_cli_fixtures_import_real_chain_rejects_malformed_input(tmp_path) -> Non
             "is_copy_eligible": False,
             "wallet_perspective": {"wallet_address": "irrelevant", "method": "n/a"},
             "asset_deltas": [],
+            "account_deltas": [],
             "expected_input_mint": None,
             "expected_input_amount_raw": None,
             "expected_output_mint": None,

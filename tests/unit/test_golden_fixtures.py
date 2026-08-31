@@ -13,6 +13,7 @@ actual imported real-chain fixture.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
 import json
@@ -24,6 +25,7 @@ import pytest
 
 from argus.clock import Clock
 from argus.golden_fixtures import (
+    ExpectedAccountAssetDelta,
     ExpectedAssetDelta,
     ExpectedOutcome,
     GitTreeAttestation,
@@ -32,10 +34,12 @@ from argus.golden_fixtures import (
     ReviewerEvidence,
     WalletPerspective,
     _git_blob_sha1,
+    _git_object_sha1,
     compute_evidence_chain_hash,
     import_real_chain_fixture,
     load_provenance,
     validate_real_chain_fixtures,
+    verify_git_object_chain,
 )
 
 # Deliberately shaped like a real Solana getTransaction RPC response, but
@@ -105,22 +109,59 @@ def _fixed_clock() -> Clock:
     return _Frozen()
 
 
+def _tree_entry_bytes(mode: str, name: str, sha_hex: str) -> bytes:
+    return f"{mode} {name}".encode() + b"\0" + bytes.fromhex(sha_hex)
+
+
 def _attestation_for(raw_bytes: bytes, path: str) -> GitTreeAttestation:
-    """A real, internally-self-consistent attestation for arbitrary test
-    bytes -- built the same way :func:`argus.golden_fixtures.attest_git_tree`
-    would from real ``git ls-tree`` output, just without an actual git
-    subprocess call, since these tests don't have a real upstream repo to
-    clone."""
-    blob = _git_blob_sha1(raw_bytes)
-    line = f"100644 blob {blob}\t{path}"
+    """A real, independently-recomputable Git object chain for arbitrary
+    test bytes -- constructed the same way
+    :func:`argus.golden_fixtures.attest_git_tree` would build one from a
+    real local clone, just without an actual git subprocess call or
+    on-disk repository, since these tests don't have a real upstream repo
+    to clone. Every object built here is a genuine git commit/tree object
+    per git's own content-addressing (verified in
+    ``test_attestation_helper_produces_a_genuinely_verifiable_chain``
+    below): :func:`verify_git_object_chain` fully passes on it."""
+    blob_sha1 = _git_blob_sha1(raw_bytes)
+    components = path.split("/")
+    chain: list[bytes] = []
+    current_sha = blob_sha1
+    current_mode = "100644"
+    for component in reversed(components):
+        entry_bytes = _tree_entry_bytes(current_mode, component, current_sha)
+        chain.append(entry_bytes)
+        current_sha = _git_object_sha1("tree", entry_bytes)
+        current_mode = "40000"
+    chain.reverse()
+    root_tree_sha = _git_object_sha1("tree", chain[0])
+    commit_content = (
+        f"tree {root_tree_sha}\n"
+        "author Test <test@example.invalid> 1735689600 +0000\n"
+        "committer Test <test@example.invalid> 1735689600 +0000\n\n"
+        "synthetic test commit\n"
+    ).encode()
+    commit_sha = _git_object_sha1("commit", commit_content)
     return GitTreeAttestation(
-        mode="100644",
-        object_type="blob",
-        blob_sha1=blob,
+        commit_sha=commit_sha,
+        commit_object_b64=base64.b64encode(commit_content).decode("ascii"),
         path=path,
-        raw_ls_tree_line=line,
+        path_components=tuple(components),
+        tree_object_chain_b64=tuple(base64.b64encode(t).decode("ascii") for t in chain),
+        mode="100644",
+        blob_sha1=blob_sha1,
         captured_at="2026-01-01T00:00:00+00:00",
     )
+
+
+def test_attestation_helper_produces_a_genuinely_verifiable_chain() -> None:
+    """Proves the test helper above is not merely internally consistent
+    with itself but produces objects :func:`verify_git_object_chain`
+    fully, independently verifies -- otherwise every test using it would
+    only be exercising a mock, not the real offline-verification logic."""
+    for path in ("LICENSE", "tests/example.json", "a/b/c/deep/file.json"):
+        attestation = _attestation_for(b"arbitrary test content", path)
+        assert verify_git_object_chain(attestation) is None
 
 
 def _license_evidence() -> LicenseEvidence:
@@ -144,6 +185,45 @@ def _delta(mint: str, raw_amount: int, decimals: int) -> ExpectedAssetDelta:
     )
 
 
+def _acct(
+    identifier: str,
+    index: int,
+    owner: str,
+    mint: str,
+    pre: int,
+    post: int,
+    decimals: int,
+    fee_added_back: int = 0,
+) -> ExpectedAccountAssetDelta:
+    """``fee_added_back`` mirrors compute_account_level_deltas's own
+    fee-payer convention: pass the transaction's fee for account_index 0's
+    native-SOL row, 0 for every other row."""
+    delta = post - pre + fee_added_back
+    return ExpectedAccountAssetDelta(
+        account_identifier=identifier,
+        account_index=index,
+        owner=owner,
+        mint=mint,
+        pre_raw_amount=pre,
+        post_raw_amount=post,
+        net_raw_delta=delta,
+        decimals=decimals,
+        ui_delta=str(Decimal(delta).scaleb(-decimals)),
+    )
+
+
+# _TOOL_TEST_PAYLOAD's own account-level ground truth for the default
+# (accountKeys[0], fee payer) wallet perspective -- pre/post are the raw
+# meta.preBalances/postBalances entries; the fee payer's own net delta is
+# post-pre with the 5000-lamport fee added back (same convention as
+# argus.parsing.generic_parser.compute_account_level_deltas), matching
+# _EXPECTED_INPUT_AMOUNT_RAW above: 1_000_000_000 - 2_000_000_000 + 5000
+# = -999_995_000.
+_DEFAULT_ACCOUNT_DELTAS = (
+    _acct(_WALLET, 0, _WALLET, "SOL", 2_000_000_000, 1_000_000_000, 9, fee_added_back=5000),
+)
+
+
 def _expectation(
     *,
     classification: str = _EXPECTED_CLASSIFICATION,
@@ -151,6 +231,7 @@ def _expectation(
     wallet_address: str = _WALLET,
     wallet_method: str = "accountKeys[0] -- the transaction's fee payer.",
     asset_deltas: tuple[ExpectedAssetDelta, ...] = (_delta("SOL", -_EXPECTED_INPUT_AMOUNT_RAW, 9),),
+    account_deltas: tuple[ExpectedAccountAssetDelta, ...] = _DEFAULT_ACCOUNT_DELTAS,
     expected_input_mint: str | None = "SOL",
     expected_input_amount_raw: int | None = _EXPECTED_INPUT_AMOUNT_RAW,
     expected_output_mint: str | None = None,
@@ -167,6 +248,7 @@ def _expectation(
         is_copy_eligible=is_copy_eligible,
         wallet_perspective=WalletPerspective(wallet_address=wallet_address, method=wallet_method),
         asset_deltas=asset_deltas,
+        account_deltas=account_deltas,
         expected_input_mint=expected_input_mint,
         expected_input_amount_raw=expected_input_amount_raw,
         expected_output_mint=expected_output_mint,
@@ -189,6 +271,17 @@ def _counterparty_expectation() -> ExpectedOutcome:
         wallet_address=_COUNTERPARTY,
         wallet_method="accountKeys[1] -- not the fee payer.",
         asset_deltas=(_delta("SOL", _EXPECTED_OUTPUT_AMOUNT_RAW_COUNTERPARTY, 9),),
+        account_deltas=(
+            _acct(
+                _COUNTERPARTY,
+                1,
+                _COUNTERPARTY,
+                "SOL",
+                0,
+                _EXPECTED_OUTPUT_AMOUNT_RAW_COUNTERPARTY,
+                9,
+            ),
+        ),
         expected_input_mint=None,
         expected_input_amount_raw=None,
         expected_output_mint="SOL",
@@ -205,7 +298,7 @@ def _import(
     input_path: Path | None = None,
     category: str = "tool_self_test",
     upstream_repo: str = "example-org/example-repo",
-    upstream_commit: str = "a" * 40,
+    upstream_commit: str | None = None,
     upstream_path_note: str = "self-test fixture, not a real upstream capture.",
     upstream_tree_attestation: GitTreeAttestation | None = None,
     upstream_license: LicenseEvidence | None = None,
@@ -219,11 +312,19 @@ def _import(
     resolved_attestation = upstream_tree_attestation or _attestation_for(
         resolved_input.read_bytes(), "tests/example.json"
     )
+    # Defaults to the attestation's own commit_sha so a caller that leaves
+    # both unset always gets a genuinely self-consistent import (Phase 1
+    # remediation round 6, finding #3 binds upstream_commit to the
+    # attestation's commit_sha) -- a test that wants a deliberate mismatch
+    # passes upstream_commit= explicitly.
+    resolved_upstream_commit = (
+        upstream_commit if upstream_commit is not None else resolved_attestation.commit_sha
+    )
     return import_real_chain_fixture(
         input_path=resolved_input,
         category=category,
         upstream_repo=upstream_repo,
-        upstream_commit=upstream_commit,
+        upstream_commit=resolved_upstream_commit,
         upstream_path_note=upstream_path_note,
         upstream_tree_attestation=resolved_attestation,
         upstream_license=upstream_license or _license_evidence(),
@@ -254,7 +355,9 @@ def test_import_validates_and_records_full_provenance(tmp_path: Path) -> None:
     assert record.slot == 123456789
     assert record.transaction_version == "legacy"
     assert record.upstream_repo == "example-org/example-repo"
-    assert record.upstream_commit == "a" * 40
+    # Round 6, finding #3: bound to (and always equal to) the attestation's
+    # own commit_sha -- proven directly here rather than against a literal.
+    assert record.upstream_commit == record.upstream_tree_attestation.commit_sha
     assert record.upstream_license.spdx_id == "MIT"
     assert record.expectation.wallet_perspective.wallet_address == _WALLET
     assert record.imported_at == "2026-01-01T00:00:00+00:00"
@@ -380,6 +483,9 @@ def test_import_rejects_when_observed_disagrees_with_the_expectation(tmp_path: P
         lambda e: dataclasses.replace(e, transaction_failed=True),
         lambda e: dataclasses.replace(e, expected_confidence="0.500"),
         lambda e: dataclasses.replace(e, asset_deltas=(_delta("SOL", -1, 9),)),
+        lambda e: dataclasses.replace(
+            e, account_deltas=(_acct(_WALLET, 0, _WALLET, "SOL", 0, 1, 9),)
+        ),
     ],
     ids=[
         "is_copy_eligible",
@@ -389,6 +495,7 @@ def test_import_rejects_when_observed_disagrees_with_the_expectation(tmp_path: P
         "transaction_failed",
         "expected_confidence",
         "asset_deltas",
+        "account_deltas",
     ],
 )
 def test_import_rejects_a_wrong_expectation_on_any_checked_field(tmp_path: Path, mutate) -> None:
@@ -718,10 +825,10 @@ def test_validate_detects_missing_preserved_license(tmp_path: Path) -> None:
 
 
 def test_validate_detects_a_tampered_upstream_tree_attestation_path(tmp_path: Path) -> None:
-    """The attestation's structured ``path`` field must agree with its
-    own preserved raw ``git ls-tree`` line -- hand-editing just the
-    structured field (leaving the raw line alone) is exactly the kind of
-    partial edit finding #2 requires catching."""
+    """The attestation's ``path`` field must agree with its own
+    ``path_components`` -- hand-editing just the flat ``path`` string
+    (leaving ``path_components``/the tree object chain alone) is exactly
+    the kind of partial edit round 6, finding #2 requires catching."""
     fixtures_dir = tmp_path / "real"
     _import(tmp_path, fixtures_dir=fixtures_dir)
 
@@ -733,10 +840,14 @@ def test_validate_detects_a_tampered_upstream_tree_attestation_path(tmp_path: Pa
     results = validate_real_chain_fixtures(fixtures_dir)
     assert len(results) == 1
     assert results[0].ok is False
-    assert "upstream tree attestation invalid" in results[0].detail
+    assert "upstream tree object chain invalid" in results[0].detail
 
 
 def test_validate_detects_a_tampered_upstream_tree_attestation_blob(tmp_path: Path) -> None:
+    """Hand-editing the declared ``blob_sha1`` alone (leaving the tree
+    object chain, which still resolves to the *real* blob, untouched)
+    must be caught by re-walking the chain and comparing the genuinely
+    resolved blob against the tampered declared value."""
     fixtures_dir = tmp_path / "real"
     _import(tmp_path, fixtures_dir=fixtures_dir)
 
@@ -748,14 +859,92 @@ def test_validate_detects_a_tampered_upstream_tree_attestation_blob(tmp_path: Pa
     results = validate_real_chain_fixtures(fixtures_dir)
     assert len(results) == 1
     assert results[0].ok is False
-    assert "upstream tree attestation invalid" in results[0].detail
+    assert "upstream tree object chain invalid" in results[0].detail
+
+
+def test_validate_detects_a_tampered_commit_object_bytes(tmp_path: Path) -> None:
+    """Tampering the raw ``commit_object_b64`` bytes directly (rather than
+    the derived ``commit_sha``) must be caught by recomputing the commit
+    object's own hash from its content and finding it no longer matches
+    the declared ``commit_sha`` (Phase 1 remediation round 6, finding
+    #2)."""
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    tampered_commit = base64.b64encode(b"tree 0000000000000000000000000000000000000000\n").decode(
+        "ascii"
+    )
+    provenance["tool_self_test"]["upstream_tree_attestation"]["commit_object_b64"] = tampered_commit
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "upstream tree object chain invalid" in results[0].detail
+    assert "commit_sha" in results[0].detail
+
+
+def test_validate_detects_a_tampered_intermediate_tree_object(tmp_path: Path) -> None:
+    """Tampering one tree object in the middle of a multi-component-path
+    chain (not the root, not the leaf) must still be caught -- proving
+    every level of the chain is actually re-walked and re-hashed, not
+    only the endpoints."""
+    fixtures_dir = tmp_path / "real"
+    deep_attestation = _attestation_for(_write_payload(tmp_path).read_bytes(), "a/b/c/deep.json")
+    _import(
+        tmp_path,
+        fixtures_dir=fixtures_dir,
+        upstream_tree_attestation=deep_attestation,
+    )
+    assert len(deep_attestation.tree_object_chain_b64) == 4  # a, b, c, deep.json
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    chain = provenance["tool_self_test"]["upstream_tree_attestation"]["tree_object_chain_b64"]
+    raw = bytearray(base64.b64decode(chain[1]))  # the "b" level, neither root nor leaf
+    raw[0] ^= 0xFF
+    chain[1] = base64.b64encode(bytes(raw)).decode("ascii")
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "upstream tree object chain invalid" in results[0].detail
+
+
+def test_validate_detects_a_tampered_path_component(tmp_path: Path) -> None:
+    """Tampering one entry in ``path_components`` (so it no longer names a
+    real entry inside its corresponding tree object), while leaving the
+    chain length and every other field alone, must be caught -- proving
+    each component name is genuinely looked up inside its tree, not just
+    counted."""
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)  # default path: "tests/example.json"
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    attestation = provenance["tool_self_test"]["upstream_tree_attestation"]
+    assert attestation["path_components"] == ["tests", "example.json"]
+    attestation["path_components"] = ["tests", "a-name-that-does-not-exist-in-the-tree.json"]
+    attestation["path"] = "tests/a-name-that-does-not-exist-in-the-tree.json"
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "upstream tree object chain invalid" in results[0].detail
 
 
 def test_validate_detects_a_tampered_upstream_commit(tmp_path: Path) -> None:
-    """``upstream_commit`` is covered by the evidence chain hash -- a
+    """``upstream_commit`` is bound directly to the attestation's own
+    ``commit_sha`` (round 6, finding #3's record-identity binding) -- a
     hand-edit to just this field, leaving everything else (including the
-    hash itself) alone, must be detected as a whole-record inconsistency
-    rather than silently accepted."""
+    attestation and the evidence chain hash) alone, must be caught by
+    that direct binding check specifically, which runs before -- and is a
+    more precise diagnostic than -- the general evidence-chain-hash
+    re-derivation."""
     fixtures_dir = tmp_path / "real"
     _import(tmp_path, fixtures_dir=fixtures_dir)
 
@@ -767,7 +956,8 @@ def test_validate_detects_a_tampered_upstream_commit(tmp_path: Path) -> None:
     results = validate_real_chain_fixtures(fixtures_dir)
     assert len(results) == 1
     assert results[0].ok is False
-    assert "evidence chain hash mismatch" in results[0].detail
+    assert "does not match" in results[0].detail
+    assert "upstream_commit" in results[0].detail
 
 
 def test_validate_detects_a_tampered_upstream_repo(tmp_path: Path) -> None:
@@ -843,6 +1033,112 @@ def test_validate_detects_tampered_transform_manifest_in_provenance(tmp_path: Pa
     assert "transform manifest diverged" in results[0].detail
 
 
+# --- Phase 1 remediation round 6, finding #3: record-identity binding ----
+# fields (category, chain, signature, slot, transaction_version,
+# upstream_path) must be checked against the rebuilt payload, never
+# merely fed back into the parser as trusted inputs. -----------------------
+
+
+def test_validate_detects_a_tampered_record_category(tmp_path: Path) -> None:
+    """``record.category`` must agree with its own provenance dict key --
+    a hand-edit that changes just the field, leaving the dict key alone,
+    must be caught."""
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["tool_self_test"]["category"] = "a_completely_different_category"
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "does not match its own provenance key" in results[0].detail
+
+
+def test_validate_detects_a_tampered_record_chain(tmp_path: Path) -> None:
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["tool_self_test"]["chain"] = "ethereum"
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "is not 'solana'" in results[0].detail
+
+
+def test_validate_detects_a_tampered_record_signature(tmp_path: Path) -> None:
+    """``record.signature`` must equal the rebuilt payload's own
+    ``transaction.signatures[0]`` -- never merely trusted from
+    provenance.json (Phase 1 remediation round 6, finding #3)."""
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["tool_self_test"]["signature"] = "ACompletelyDifferentSignatureNotReal11111111"
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "does not match the rebuilt payload's own signature" in results[0].detail
+
+
+def test_validate_detects_a_tampered_record_slot(tmp_path: Path) -> None:
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["tool_self_test"]["slot"] = 1
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "does not match the rebuilt payload's own slot" in results[0].detail
+
+
+def test_validate_detects_a_tampered_record_transaction_version(tmp_path: Path) -> None:
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["tool_self_test"]["transaction_version"] = "0"
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "does not match the rebuilt payload's own version" in results[0].detail
+
+
+def test_validate_detects_a_tampered_record_upstream_path(tmp_path: Path) -> None:
+    """``record.upstream_path`` must equal the (already offline-verified)
+    tree attestation's own ``path`` -- a hand-edit to just the
+    record-level field, leaving the attestation alone, must still be
+    caught."""
+    fixtures_dir = tmp_path / "real"
+    _import(tmp_path, fixtures_dir=fixtures_dir)
+
+    provenance_path = fixtures_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["tool_self_test"]["upstream_path"] = "a/completely/different/path.json"
+    provenance_path.write_text(json.dumps(provenance))
+
+    results = validate_real_chain_fixtures(fixtures_dir)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "does not match the offline-verified tree attestation's own path" in results[0].detail
+
+
 def test_validate_detects_a_parser_regression_against_the_independent_expectation(
     tmp_path: Path,
 ) -> None:
@@ -883,7 +1179,6 @@ def test_reimporting_the_same_category_overwrites_its_record(tmp_path: Path) -> 
     second = _import(
         tmp_path,
         input_path=_write_payload(tmp_path, other_payload, name="input2.json"),
-        upstream_commit="b" * 40,
         fixtures_dir=fixtures_dir,
     )
 
@@ -902,7 +1197,7 @@ def test_real_fixtures_directory_currently_has_12_genuinely_imported_fixtures() 
     finding #1) found `0xjeffro/tx-parser` (MPL-2.0) embedding genuine
     captured DEX-swap/DCA transactions, named after the exact program
     instruction each one captures. Round 5 (findings #1/#2/#4) re-imported
-    all ten through the new typed independent-expectation +
+    all ten through the typed independent-expectation +
     cryptographically-bound provenance schema, and round 5's parser
     fail-closed fix (finding #4) reclassifies
     `real_mainnet_dca_close_dual_asset_transfer_in` from TRANSFER_IN to
@@ -911,16 +1206,25 @@ def test_real_fixtures_directory_currently_has_12_genuinely_imported_fixtures() 
     two more real-chain fixtures: `real_mainnet_failed_nft_sale` (a genuine
     failed on-chain transaction, from `milktoastlab/SolanaNFTBot`, MIT,
     extracted from its TypeScript module wrapper via
-    `extract_ts_const_export_default`) and
-    `real_mainnet_orca_increase_liquidity_multi_asset_outflow` (a genuine
-    Orca Whirlpool increaseLiquidity call touching multiple token accounts,
-    from `quellen-sol/ingestooor`, GPL-3.0) -- see
-    `tests/golden/fixtures/real/SEARCH_LOG.md` for the full search log,
-    which required categories each fixture does and does not satisfy, and
-    an honest note that the Orca fixture's own emitted classification is
-    UNKNOWN via the ambiguous-multi-asset-outflow branch, not the
-    LP_ACTION label (only one non-SOL asset is directly wallet-owned in
-    that transaction). This test intentionally targets the real,
+    `extract_ts_const_export_default`) and an LP/multiple-account fixture
+    from `quellen-sol/ingestooor` (GPL-3.0) whose own emitted
+    classification only had one material non-SOL token account. Round 6
+    (findings #2/#3) rewrote `GitTreeAttestation` to an offline-verifiable
+    Git object chain (all 12 fixtures re-imported through it) and, on
+    independent re-review, found round 5's LP/multiple-account fixture
+    (`real_mainnet_orca_increase_liquidity_multi_asset_outflow`,
+    `orca_add_liq.json`) did not actually satisfy the category from its
+    chosen wallet's own perspective -- it is replaced with
+    `real_mainnet_orca_close_position_multi_account`
+    (`orca_remove_liq.json`, same upstream repo/commit, wallet
+    `JC8m5y9D...` -- the transaction's actual signer, not a
+    program-derived vault), which has two genuinely distinct material
+    token accounts (a closing position-NFT account and a separate
+    fungible-token account receiving an inflow), independently proven by
+    the new account-level oracle (`account_deltas`) -- see
+    `tests/golden/fixtures/real/SEARCH_LOG.md` for the full search log
+    and reasoning, and `provenance.json`/`PROVENANCE.md` for every
+    fixture's full evidence. This test intentionally targets the real,
     committed tests/golden/fixtures/real/ directory (not a tmp_path) --
     it is a regression guard on the fixtures' continued internal
     consistency (independently rebuilt from preserved source bytes +
@@ -938,7 +1242,7 @@ def test_real_fixtures_directory_currently_has_12_genuinely_imported_fixtures() 
         "real_mainnet_multi_hop_swap",
         "real_mainnet_partial_sell",
         "real_mainnet_dca_close_dual_asset_transfer_in",
-        "real_mainnet_orca_increase_liquidity_multi_asset_outflow",
+        "real_mainnet_orca_close_position_multi_account",
         "real_mainnet_failed_nft_sale",
     }
     assert all(r.ok for r in results), results

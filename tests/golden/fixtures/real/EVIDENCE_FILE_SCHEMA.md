@@ -2,9 +2,11 @@
 
 Used by `argus fixtures import-real-chain --evidence-file <path>` and
 `argus.golden_fixtures.import_real_chain_fixture_from_evidence_file`
-(Phase 1 remediation round 5, findings #1/#2). The new independent
-expectation and cryptographic provenance-binding schema is too rich for
-individual CLI flags, so it is bundled as one JSON file instead.
+(Phase 1 remediation round 5, findings #1/#2; `upstream_tree_attestation`
+rewritten and `account_deltas` added by round 6, findings #2/#3). The
+independent expectation and cryptographic provenance-binding schema is
+too rich for individual CLI flags, so it is bundled as one JSON file
+instead.
 
 ```json
 {
@@ -14,12 +16,14 @@ individual CLI flags, so it is bundled as one JSON file instead.
   "upstream_path_note": "free-text context: e.g. why this path/commit was chosen, "
                           "what transform the upstream repo's own convention requires",
   "upstream_tree_attestation": {
-    "mode": "100644",
-    "object_type": "blob",
-    "blob_sha1": "<git blob SHA-1>",
+    "commit_sha": "<40-char commit SHA, resolved and self-verified by attest_git_tree>",
+    "commit_object_b64": "<base64 of the raw git commit object's content>",
     "path": "path/at/that/commit.json",
-    "raw_ls_tree_line": "100644 blob <sha>\tpath/at/that/commit.json",
-    "captured_at": "<ISO8601, when `git ls-tree` was actually run>"
+    "path_components": ["path", "at", "that", "commit.json"],
+    "tree_object_chain_b64": ["<base64 raw tree object>", "... one per path component, root-first"],
+    "mode": "100644",
+    "blob_sha1": "<git blob SHA-1 the path resolves to>",
+    "captured_at": "<ISO8601, when attest_git_tree actually walked the repo>"
   },
   "upstream_license": {
     "spdx_id": "MIT",
@@ -43,6 +47,19 @@ individual CLI flags, so it is bundled as one JSON file instead.
         "raw_amount": -1000000000,
         "decimals": 9,
         "ui_amount": "-1.000000000"
+      }
+    ],
+    "account_deltas": [
+      {
+        "account_identifier": "<accountKeys[account_index], or the wallet address for the native-SOL row>",
+        "account_index": 0,
+        "owner": "<the wallet address that owns this account>",
+        "mint": "SOL",
+        "pre_raw_amount": 2000000000,
+        "post_raw_amount": 1000000000,
+        "net_raw_delta": -1000000000,
+        "decimals": 9,
+        "ui_delta": "-1.000000000"
       }
     ],
     "expected_input_mint": "SOL",
@@ -75,3 +92,23 @@ wallet (not just the primary in/out leg), in the same order
 `argus.parsing.generic_parser.compute_asset_deltas` returns them
 (sorted by asset identifier) -- `import_real_chain_fixture` compares
 them field-for-field.
+
+`account_deltas` (Phase 1 remediation round 6, finding #3) must list
+every *account*-level change the transaction produced for the named
+wallet (never aggregated by mint -- two accounts of the same mint moving
+differently must both appear as separate rows), in the same order
+`argus.parsing.generic_parser.compute_account_level_deltas` returns them
+(sorted by ``(account_index, mint)``) -- this is the oracle that actually
+proves a multiple-token-account/LP-style transaction happened, since
+`asset_deltas`'s by-mint aggregation can make two accounts of the same
+mint moving in opposite directions net to zero and disappear entirely.
+
+`upstream_tree_attestation`/the license's own `tree_attestation` must be
+produced by `argus.golden_fixtures.attest_git_tree` against a local clone
+of the upstream repository -- never hand-constructed. The offline
+validator (`verify_git_object_chain`) independently recomputes every
+git object ID from the preserved raw commit/tree object bytes and walks
+`path_components` to confirm the declared path resolves to `blob_sha1`;
+it proves Git object-chain *content* integrity, not that a particular
+remote hostname actually served `commit_sha` -- that acquisition fact is
+inherently online-only and is not claimed as an offline-proven property.

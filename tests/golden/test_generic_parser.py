@@ -191,6 +191,123 @@ def test_compute_asset_deltas_is_deterministically_ordered() -> None:
     assert [d.asset for d in deltas] == sorted(d.asset for d in deltas)
 
 
+# --- Phase 1 remediation round 6, finding #3: compute_account_level_deltas -
+
+
+def _two_accounts_same_mint_payload() -> dict:
+    """Two distinct wallet-owned token accounts of the *same* mint moving
+    in opposite directions by the same magnitude -- by-mint aggregation
+    nets them to exactly zero and the asset vanishes entirely from
+    compute_asset_deltas's output, even though both accounts genuinely,
+    materially changed. This is exactly the account-level evidence a
+    multiple-token-account/LP-style oracle needs and by-mint aggregation
+    alone cannot supply (Phase 1 remediation round 6, finding #3)."""
+    return {
+        "slot": 1,
+        "version": "legacy",
+        "transaction": {
+            "signatures": ["TwoAccountsSameMintSignatureNotReal1111111111111111111111111111111"],
+            "message": {
+                "accountKeys": [WALLET, "OtherPubkeyNotReal11111111111111111111111"],
+                "header": {
+                    "numReadonlySignedAccounts": 0,
+                    "numReadonlyUnsignedAccounts": 1,
+                    "numRequiredSignatures": 1,
+                },
+                "instructions": [],
+                "recentBlockhash": "BlockhashNotReal111111111111111111111111111",
+            },
+        },
+        "meta": {
+            "fee": 5000,
+            "preBalances": [1_000_000_000, 0],
+            "postBalances": [994_995_000, 0],
+            "status": {"Ok": None},
+            "err": None,
+            "preTokenBalances": [
+                {
+                    "accountIndex": 1,
+                    "mint": TOKEN_A_MINT,
+                    "owner": WALLET,
+                    "uiTokenAmount": {"amount": "1000", "decimals": 6},
+                },
+                {
+                    "accountIndex": 2,
+                    "mint": TOKEN_A_MINT,
+                    "owner": WALLET,
+                    "uiTokenAmount": {"amount": "100", "decimals": 6},
+                },
+            ],
+            "postTokenBalances": [
+                {
+                    "accountIndex": 1,
+                    "mint": TOKEN_A_MINT,
+                    "owner": WALLET,
+                    "uiTokenAmount": {"amount": "400", "decimals": 6},
+                },
+                {
+                    "accountIndex": 2,
+                    "mint": TOKEN_A_MINT,
+                    "owner": WALLET,
+                    "uiTokenAmount": {"amount": "700", "decimals": 6},
+                },
+            ],
+        },
+    }
+
+
+def test_by_mint_aggregation_erases_two_same_mint_accounts_netting_to_zero() -> None:
+    """Establishes the defect account_deltas exists to fix: two accounts
+    of the same mint moving oppositely by equal magnitude (-600 and +600)
+    net to a zero by-mint delta and vanish from compute_asset_deltas
+    entirely -- a wallet-level view alone cannot tell this transaction
+    apart from one where nothing happened to that mint at all."""
+    raw = _two_accounts_same_mint_payload()
+    deltas = compute_asset_deltas(raw, WALLET)
+    assert TOKEN_A_MINT not in {d.asset for d in deltas}
+
+
+def test_compute_account_level_deltas_preserves_both_same_mint_accounts() -> None:
+    """The account-level oracle must not make the same mistake: both
+    accounts' genuine, materially-opposite changes must appear as
+    separate rows, never summed away."""
+    from argus.parsing.generic_parser import compute_account_level_deltas
+
+    raw = _two_accounts_same_mint_payload()
+    rows = compute_account_level_deltas(raw, WALLET)
+
+    token_rows = [r for r in rows if r.mint == TOKEN_A_MINT]
+    assert len(token_rows) == 2
+    by_index = {r.account_index: r for r in token_rows}
+    assert by_index[1].net_raw_delta == -600
+    assert by_index[1].pre_raw_amount == 1000
+    assert by_index[1].post_raw_amount == 400
+    assert by_index[1].owner == WALLET
+    assert by_index[2].net_raw_delta == 600
+    assert by_index[2].pre_raw_amount == 100
+    assert by_index[2].post_raw_amount == 700
+    # Both accounts are wallet-owned but distinct -- their identifiers
+    # must differ even though their mint is identical.
+    assert by_index[1].account_identifier != by_index[2].account_identifier
+
+
+def test_compute_account_level_deltas_empty_for_failed_transaction() -> None:
+    from argus.parsing.generic_parser import compute_account_level_deltas
+
+    raw = _load("failed_transaction")
+    assert compute_account_level_deltas(raw, WALLET) == ()
+
+
+def test_compute_account_level_deltas_is_deterministically_ordered() -> None:
+    from argus.parsing.generic_parser import compute_account_level_deltas
+
+    raw = _two_accounts_same_mint_payload()
+    rows = compute_account_level_deltas(raw, WALLET)
+    assert [(r.account_index, r.mint) for r in rows] == sorted(
+        (r.account_index, r.mint) for r in rows
+    )
+
+
 # --- Phase 1 remediation round 5, finding #4: fail-closed v1 eligibility ---
 
 
