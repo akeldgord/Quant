@@ -168,11 +168,24 @@ def cross_validate_one(path: Path, wallet: str) -> dict[str, Any]:
         "slot": raw.get("slot"),
         "block_time": raw.get("blockTime"),
         "wallet": wallet,
+        # Delta-ARITHMETIC agreement only: does an independent, from-scratch
+        # recomputation of net raw balance deltas match what the parser
+        # reports? This says nothing about whether a classification/
+        # eligibility label is semantically correct -- see
+        # matched_swap_program_id/is_copy_eligible for that, validated
+        # separately (Phase 1.5 remediation round 1: these two claims must
+        # never be conflated).
         "independent_deltas": independent,
         "parser_reported_deltas": parser_reported,
-        "agrees": agrees,
+        "delta_arithmetic_agrees": agrees,
         "classification": parsed.classification,
         "confidence": str(parsed.confidence),
+        # The independent semantic evidence basis for is_copy_eligible:
+        # None means no supported trade-venue program was found in this
+        # transaction's own instructions (see
+        # argus.parsing.generic_parser._SUPPORTED_SWAP_PROGRAM_IDS) --
+        # never inferred from the classification/balance shape alone.
+        "matched_swap_program_id": parsed.matched_swap_program_id,
         "is_copy_eligible": parsed.is_copy_eligible,
     }
 
@@ -199,7 +212,17 @@ def main() -> None:
     all_files = [TOKEN_FILE, *WALLET_FILES, *SUPPLEMENTARY_FILES]
     disk_bytes = sum((RAW_DIR / f).stat().st_size for f in all_files)
 
-    disagreements = [r for r in results if not r["agrees"]]
+    # Two DISTINCT validation claims, deliberately never conflated (Phase
+    # 1.5 remediation round 1): (1) delta-arithmetic agreement -- does an
+    # independent recomputation from raw evidence match the parser's own
+    # balance-delta math; (2) semantic eligibility -- is each copy-eligible
+    # row backed by independent, cited instruction-level evidence that a
+    # supported trade venue was actually invoked, not merely a balance
+    # shape that looks like a swap.
+    arithmetic_disagreements = [r for r in results if not r["delta_arithmetic_agrees"]]
+    eligible_rows = [r for r in results if r["is_copy_eligible"]]
+    swap_simple_rows = [r for r in results if r["classification"] == "SWAP_SIMPLE"]
+    swap_simple_but_ineligible = [r for r in swap_simple_rows if not r["is_copy_eligible"]]
 
     report = {
         "candidate_wallet": CANDIDATE_WALLET,
@@ -207,7 +230,18 @@ def main() -> None:
         "token_creator_wallet": TOKEN_CREATOR_WALLET,
         "supplementary_wallet": SUPPLEMENTARY_WALLET,
         "total_transactions_analyzed": len(results),
-        "total_disagreements": len(disagreements),
+        "delta_arithmetic_agreements": len(results) - len(arithmetic_disagreements),
+        "delta_arithmetic_disagreements": len(arithmetic_disagreements),
+        "swap_simple_classifications": len(swap_simple_rows),
+        "copy_eligible_rows": len(eligible_rows),
+        "swap_simple_but_not_copy_eligible": [
+            {
+                "file": r["file"],
+                "signature": r["signature"],
+                "matched_swap_program_id": r["matched_swap_program_id"],
+            }
+            for r in swap_simple_but_ineligible
+        ],
         "elapsed_seconds": elapsed_seconds,
         "raw_evidence_disk_bytes": disk_bytes,
         "rpc_calls_made": 0,
@@ -219,16 +253,26 @@ def main() -> None:
 
     print(f"Analyzed {len(results)} real transactions in {elapsed_seconds:.3f}s")
     print(f"Raw evidence: {disk_bytes} bytes across {len(results)} files")
-    print(f"Disagreements between independent recomputation and parser: {len(disagreements)}")
+    print(
+        f"Delta-arithmetic agreements: {len(results) - len(arithmetic_disagreements)}/"
+        f"{len(results)} (does NOT by itself prove semantic classification/eligibility)"
+    )
+    print(
+        f"SWAP_SIMPLE classifications: {len(swap_simple_rows)}, of which "
+        f"copy-eligible (positive trade-venue evidence found): {len(eligible_rows)}, "
+        f"NOT copy-eligible despite the shape: {len(swap_simple_but_ineligible)}"
+    )
     for r in results:
         print(
             f"  {r['file']:55s} slot={r['slot']:<10} "
-            f"class={r['classification']:15s} agrees={r['agrees']} "
+            f"class={r['classification']:15s} "
+            f"delta_arithmetic_agrees={r['delta_arithmetic_agrees']} "
+            f"matched_swap_program_id={r['matched_swap_program_id']} "
             f"eligible={r['is_copy_eligible']}"
         )
-    if disagreements:
-        print("\nDISAGREEMENTS:")
-        for r in disagreements:
+    if arithmetic_disagreements:
+        print("\nDELTA-ARITHMETIC DISAGREEMENTS:")
+        for r in arithmetic_disagreements:
             print(
                 f"  {r['file']}: independent={r['independent_deltas']} "
                 f"parser={r['parser_reported_deltas']}"

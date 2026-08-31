@@ -4,8 +4,33 @@
   "token_creator_wallet": "6xo262KbDXepWbF3vPTrFXysr5vJwk3mozBXmXk3hmMx",
   "supplementary_wallet": "qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
   "total_transactions_analyzed": 28,
-  "total_disagreements": 0,
-  "elapsed_seconds": 0.005878946999928303,
+  "delta_arithmetic_agreements": 28,
+  "delta_arithmetic_disagreements": 0,
+  "swap_simple_classifications": 8,
+  "copy_eligible_rows": 4,
+  "swap_simple_but_not_copy_eligible": [
+    {
+      "file": "wallet_05_solend_withdraw_all.json",
+      "signature": "4QZbHE9X5fN6nSwhYc1YAB3r1ajMkj3fhPBS3DE17waaz3W3aeGwMAyY6C2TJEUTMzYY7C3fx1jguUKQkC9PtY1D",
+      "matched_swap_program_id": null
+    },
+    {
+      "file": "suppl_03_flash_swap2.json",
+      "signature": "4LVJWC9NktubjCZF1Ev2tR28bS5bQNTh7DJAnEdtGDdpytrYU1StUXW3eqYwkmUbEQzyvbC4bmk26m33oczSou3e",
+      "matched_swap_program_id": null
+    },
+    {
+      "file": "suppl_09_xstep_full_stake_ix.json",
+      "signature": "3ZuwG45yBvuAFuQR1kCkhpuEc1D43v7SPCW37Uj1KknoiXA2VFMRteZ9CKuiv6tpyXHZW8VrX1WPkdJCxmsi1pzo",
+      "matched_swap_program_id": null
+    },
+    {
+      "file": "suppl_10_titan_swap_with_fees.json",
+      "signature": "5jvAd6i4HQisk4JDw5Ljcy2rwbwsR2joVKbWkrppaYHMLF882dVuNhHqpNv4vfp3Ps11nnEZLWWcXot7acuwQre4",
+      "matched_swap_program_id": null
+    }
+  ],
+  "elapsed_seconds": 0.006466409000040585,
   "raw_evidence_disk_bytes": 926336,
   "rpc_calls_made": 0,
   "provider_credits_consumed": 0,
@@ -24,9 +49,10 @@
         "SOL": -1036388800,
         "5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump": 34612903225806
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
+      "matched_swap_program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
       "is_copy_eligible": true,
       "role": "token_creator_initial_buy"
     },
@@ -42,9 +68,10 @@
       "parser_reported_deltas": {
         "StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT": 58700000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_IN",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -62,9 +89,10 @@
         "SOL": -12994,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -80,9 +108,10 @@
       "parser_reported_deltas": {
         "SOL": 9966082
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_IN",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -98,9 +127,10 @@
       "parser_reported_deltas": {
         "SOL": -10024814
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -118,10 +148,11 @@
         "SOL": -13775,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 15017725
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
-      "is_copy_eligible": true,
+      "matched_swap_program_id": null,
+      "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
     {
@@ -138,9 +169,10 @@
         "SOL": -9947080,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -156,9 +188,10 @@
       "parser_reported_deltas": {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -5000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -174,9 +207,10 @@
       "parser_reported_deltas": {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -192,9 +226,10 @@
       "parser_reported_deltas": {
         "SOL": -1392000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -210,9 +245,10 @@
       "parser_reported_deltas": {
         "SOL": -1392000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -230,9 +266,10 @@
         "SOL": 1392000,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 23005195
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -250,9 +287,10 @@
         "SOL": -61262740,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -999974
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -270,9 +308,10 @@
         "SOL": 2032,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 243
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -290,9 +329,10 @@
         "SOL": 67623796,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 264812
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "candidate_wallet_history"
     },
@@ -308,9 +348,10 @@
       "parser_reported_deltas": {
         "57XsTY7v5EL6TZdpA5vBtDT7VjBT81ty5iGaaMjq92Lo": -1000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -326,9 +367,10 @@
       "parser_reported_deltas": {
         "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK": -10000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -346,10 +388,11 @@
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000,
         "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK": 8951
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
-      "is_copy_eligible": true,
+      "matched_swap_program_id": null,
+      "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
     {
@@ -364,9 +407,10 @@
       "parser_reported_deltas": {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -384,9 +428,10 @@
         "SOL": -2024869,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -330597
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -404,9 +449,10 @@
         "SOL": -24165120,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "UNKNOWN",
       "confidence": "0.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -422,9 +468,10 @@
       "parser_reported_deltas": {
         "SOL": 2039280
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_IN",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -442,9 +489,10 @@
         "xStpgUCss9piqeFUk2iLVcvJEGhAdJxJQuwLkXP555G": -1000000000,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 121276
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
+      "matched_swap_program_id": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
       "is_copy_eligible": true,
       "role": "supplementary_cross_validation"
     },
@@ -462,10 +510,11 @@
         "xStpgUCss9piqeFUk2iLVcvJEGhAdJxJQuwLkXP555G": 638253374,
         "StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT": -1000000000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
-      "is_copy_eligible": true,
+      "matched_swap_program_id": null,
+      "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
     {
@@ -482,10 +531,11 @@
         "SOL": 43509,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -10000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
-      "is_copy_eligible": true,
+      "matched_swap_program_id": null,
+      "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
     {
@@ -502,9 +552,10 @@
         "SOL": 4578,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
+      "matched_swap_program_id": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
       "is_copy_eligible": true,
       "role": "supplementary_cross_validation"
     },
@@ -520,9 +571,10 @@
       "parser_reported_deltas": {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "TRANSFER_OUT",
       "confidence": "1.000",
+      "matched_swap_program_id": null,
       "is_copy_eligible": false,
       "role": "supplementary_cross_validation"
     },
@@ -540,9 +592,10 @@
         "SOL": 7371,
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": -1000
       },
-      "agrees": true,
+      "delta_arithmetic_agrees": true,
       "classification": "SWAP_SIMPLE",
       "confidence": "1.000",
+      "matched_swap_program_id": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
       "is_copy_eligible": true,
       "role": "supplementary_cross_validation"
     }

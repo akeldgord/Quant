@@ -351,6 +351,8 @@ def test_no_ambiguous_or_ineligible_classification_ever_reports_eligible() -> No
         "transfer_out",  # TRANSFER_OUT
         "token_create",  # TOKEN_CREATE
         "nft_purchase_decimals_zero",  # SWAP_SIMPLE but decimals == 0
+        "one_for_one_unsupported_program",  # SWAP_SIMPLE but no positive swap-venue evidence
+        "one_for_one_no_instruction_evidence",  # SWAP_SIMPLE but no instructions at all
     ]
     for name in never_eligible:
         result = _parse(name)
@@ -373,6 +375,8 @@ def test_no_ambiguous_or_ineligible_classification_ever_reports_eligible() -> No
         "token_create",
         "ambiguous_multi_asset_dual_inflow",
         "nft_purchase_decimals_zero",
+        "one_for_one_unsupported_program",
+        "one_for_one_no_instruction_evidence",
     ],
 )
 def test_all_fixtures_parse_without_raising(name: str) -> None:
@@ -403,3 +407,112 @@ def test_all_seven_classifications_are_exercised_somewhere() -> None:
         "LP_ACTION",
         "UNKNOWN",
     }
+
+
+# ---------------------------------------------------------------------
+# Phase 1.5 remediation round 1 -- positive semantic proof gate for
+# automatic copy eligibility. A one-negative/one-positive balance shape
+# is no longer sufficient by itself: SWAP_SIMPLE additionally requires
+# positive instruction-level evidence that the transaction actually
+# routed through a program independently verified to be a real trade
+# venue (argus.parsing.generic_parser._SUPPORTED_SWAP_PROGRAM_IDS).
+# ---------------------------------------------------------------------
+
+PHASE_1_5_EVIDENCE_DIR = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "phase_1_5" / "evidence" / "raw"
+)
+
+
+def _load_phase_1_5_evidence(filename: str) -> dict:
+    data = json.loads((PHASE_1_5_EVIDENCE_DIR / filename).read_text())
+    return data[0] if isinstance(data, list) else data.get("result", data)
+
+
+def test_authentic_solend_withdrawal_is_not_copy_eligible() -> None:
+    """The exact SPEC_BLOCKING false positive named by
+    argus-phase-1-5-remediation-001: a real Solend `Withdraw Obligation
+    Collateral and Redeem Reserve Collateral` transaction has a clean
+    one-negative/one-positive balance shape (so the balance-delta
+    classifier correctly still calls it SWAP_SIMPLE-shaped) but its only
+    instruction invokes the real Solend program
+    (So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo), which is not a
+    supported trade venue -- it must never be copy eligible."""
+    raw = _load_phase_1_5_evidence("wallet_05_solend_withdraw_all.json")
+    result = parse_transaction(
+        raw,
+        wallet_address="JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ",
+        slot=raw["slot"],
+        block_time=None,
+    )
+    assert result.classification == "SWAP_SIMPLE"
+    assert result.is_copy_eligible is False
+    assert result.matched_swap_program_id is None
+
+
+def test_authentic_xstep_stake_is_not_copy_eligible() -> None:
+    """The second SPEC_BLOCKING false positive named by
+    argus-phase-1-5-remediation-001: a real xStep `Stake` transaction has
+    the same clean one-for-one balance shape but is a staking deposit,
+    not a swap -- must never be copy eligible."""
+    raw = _load_phase_1_5_evidence("suppl_09_xstep_full_stake_ix.json")
+    result = parse_transaction(
+        raw,
+        wallet_address="qUeL7JzC52V1DvvPkqnMd74QjThWtSJY5G1PkKv1ur7",
+        slot=raw["slot"],
+        block_time=None,
+    )
+    assert result.classification == "SWAP_SIMPLE"
+    assert result.is_copy_eligible is False
+    assert result.matched_swap_program_id is None
+
+
+def test_one_for_one_unsupported_program_is_not_copy_eligible() -> None:
+    """A synthetic one-negative/one-positive transaction whose only
+    instruction invokes a program absent from the supported-swap-venue
+    registry must never be copy eligible -- proving the gate is a
+    positive allowlist, not a Solend/xStep-specific denylist (required
+    test #3: an unknown/unsupported program, not just the two named
+    fixtures)."""
+    result = _parse("one_for_one_unsupported_program")
+    assert result.classification == "SWAP_SIMPLE"
+    assert result.is_copy_eligible is False
+    assert result.matched_swap_program_id is None
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_program"),
+    [
+        ("sol_to_token", "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+        ("token_to_sol", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"),
+        ("token_to_usdc", "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+        ("partial_sell", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"),
+    ],
+)
+def test_genuine_swap_fixtures_remain_eligible_with_positive_evidence(
+    fixture_name: str, expected_program: str
+) -> None:
+    """Known genuine swap/trade fixtures remain copy eligible only
+    because their canonical raw evidence satisfies the positive semantic
+    gate -- not merely because their balance shape looks like a swap
+    (required test #4)."""
+    result = _parse(fixture_name)
+    assert result.classification == "SWAP_SIMPLE"
+    assert result.matched_swap_program_id == expected_program
+    assert result.is_copy_eligible is True
+
+
+def test_reparse_of_identical_canonical_input_is_deterministic() -> None:
+    """Reparsing the exact same raw evidence under the same parser
+    version twice must produce identical output, including the new
+    matched_swap_program_id/is_copy_eligible fields -- no hidden
+    nondeterminism (e.g. set iteration order) in the positive-evidence
+    lookup (required test #6)."""
+    raw = _load("sol_to_token")
+    first = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    second = parse_transaction(raw, wallet_address=WALLET, slot=raw["slot"], block_time=None)
+    assert first == second
+    assert (
+        first.matched_swap_program_id
+        == second.matched_swap_program_id
+        == ("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")
+    )

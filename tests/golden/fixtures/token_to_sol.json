@@ -42,6 +42,13 @@
       "accountKeys": [
         "GoLDeN1WaLLeTFixTuReAddreSSNoTReaL11111111",
         "CounterPartyAccounTFixTuReNoTReaL111111111"
+      ],
+      "instructions": [
+        {
+          "accounts": [],
+          "data": "",
+          "programId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+        }
       ]
     },
     "signatures": [

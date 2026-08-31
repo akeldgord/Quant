@@ -659,7 +659,7 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
                 parse_transaction(
                     stored_row.raw_payload, wallet_address=wallet, slot=1, block_time=None
                 ),
-                parser_version="generic_balance_delta_v2",
+                parser_version="generic_balance_delta_v9",
             )
             swap_recorder = SqlSwapRecorder(session)
             added_v2 = await swap_recorder.record(
@@ -679,7 +679,7 @@ async def test_reparse_under_new_parser_version_preserves_prior_result(admin_eng
                 .all()
             )
             versions = {r.parser_version for r in rows}
-            assert versions == {PARSER_VERSION, "generic_balance_delta_v2"}
+            assert versions == {PARSER_VERSION, "generic_balance_delta_v9"}
             assert len(rows) == 2  # the v1 result was never overwritten or removed
 
             # Re-running the *same* version again is still idempotent even

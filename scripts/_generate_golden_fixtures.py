@@ -28,9 +28,27 @@ TOKEN_C_MINT = "TokenCFixtureMintAddressNotReal1111111111"
 NEW_TOKEN_MINT = "NewlyCreatedTokenMintFixtureNotReal111111"
 NFT_MINT = "NonFungibleFixtureMintAddressNotReal11111"
 
+# Phase 1.5 remediation round 1: real, independently-verified swap-venue
+# program IDs (see argus.parsing.generic_parser._SUPPORTED_SWAP_PROGRAM_IDS)
+# used to give the synthetic "known genuine swap" fixtures below the same
+# positive instruction-level evidence a real swap transaction actually
+# carries -- a fixture claiming to be a genuine, copy-eligible swap must
+# now demonstrate that under the same rule production data does.
+JUPITER_V6_PROGRAM = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+RAYDIUM_LP_V4_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+
 
 def _account_keys(*extra: str) -> list[str]:
     return [WALLET, *extra]
+
+
+def _swap_instruction(program_id: str) -> list[dict]:
+    """A single top-level instruction invoking `program_id`, with no
+    accounts/data content -- sufficient to positively identify the
+    supported swap venue this fixture's raw evidence claims to have used,
+    without fabricating opaque instruction data this generator has no way
+    to make realistic."""
+    return [{"programId": program_id, "accounts": [], "data": ""}]
 
 
 def _tx(
@@ -45,13 +63,17 @@ def _tx(
     pre_token_balances: list[dict],
     post_token_balances: list[dict],
     err: dict | None = None,
+    instructions: list[dict] | None = None,
 ) -> dict:
+    message: dict = {"accountKeys": account_keys}
+    if instructions is not None:
+        message["instructions"] = instructions
     return {
         "slot": slot,
         "blockTime": block_time,
         "transaction": {
             "signatures": [signature],
-            "message": {"accountKeys": account_keys},
+            "message": message,
         },
         "meta": {
             "err": err,
@@ -90,6 +112,7 @@ FIXTURES["sol_to_token"] = _tx(
     fee=5000,
     pre_token_balances=[],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "500000000", 6)],
+    instructions=_swap_instruction(JUPITER_V6_PROGRAM),
 )
 
 # 2. token to SOL: wallet spends 500 of TOKEN_A, receives ~1.0 SOL.
@@ -103,6 +126,7 @@ FIXTURES["token_to_sol"] = _tx(
     fee=5000,
     pre_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "500000000", 6)],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "0", 6)],
+    instructions=_swap_instruction(RAYDIUM_LP_V4_PROGRAM),
 )
 
 # 3. token to USDC: wallet spends 1000 of TOKEN_B, receives 250 USDC.
@@ -119,6 +143,7 @@ FIXTURES["token_to_usdc"] = _tx(
         _tok(0, TOKEN_B_MINT, WALLET, "0", 6),
         _tok(0, USDC_MINT, WALLET, "250000000", 6),
     ],
+    instructions=_swap_instruction(JUPITER_V6_PROGRAM),
 )
 
 # 4. multi-hop swap: wallet spends SOL, TOKEN_A decreases too (routed through an
@@ -164,6 +189,7 @@ FIXTURES["partial_sell"] = _tx(
     fee=5000,
     pre_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "1000000000", 6)],
     post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "700000000", 6)],
+    instructions=_swap_instruction(RAYDIUM_LP_V4_PROGRAM),
 )
 
 # 7. multiple token accounts (LP add): wallet gives up TOKEN_A and TOKEN_B
@@ -277,6 +303,47 @@ FIXTURES["nft_purchase_decimals_zero"] = _tx(
     fee=5000,
     pre_token_balances=[],
     post_token_balances=[_tok(0, NFT_MINT, WALLET, "1", 0)],
+)
+
+# 14. Phase 1.5 remediation round 1 -- the exact false-positive shape the
+#     positive semantic proof gate exists to close: a clean one-asset-out/
+#     one-asset-in balance delta (identical in shape to #1-#3 above) whose
+#     only instruction invokes a program that is NOT in
+#     _SUPPORTED_SWAP_PROGRAM_IDS (a fictitious "lending market" program,
+#     standing in for a real Solend/xStep-shaped non-trade action). Must
+#     stay SWAP_SIMPLE (the balance shape genuinely is a clean one-for-one
+#     move -- the classifier has no reason to doubt that) but must never
+#     be copy eligible without positive trade-venue evidence.
+FIXTURES["one_for_one_unsupported_program"] = _tx(
+    signature="golden-unsupported-program-000000000000000000",
+    slot=100_000_014,
+    block_time=1_735_000_014,
+    account_keys=_account_keys(COUNTERPARTY),
+    pre_balances=[3_000_000_000, 1_000_000_000],
+    post_balances=[1_999_995_000, 1_000_000_000],
+    fee=5000,
+    pre_token_balances=[],
+    post_token_balances=[_tok(0, TOKEN_A_MINT, WALLET, "500000000", 6)],
+    instructions=_swap_instruction("FictitiousLendingMarketProgramNotARealDexNotReal11"),
+)
+
+# 15. Same false-positive shape as #14, but with no `instructions` field at
+#     all (the exact raw shape every synthetic fixture above #1-#13 used
+#     to have, and the shape v1's defect actually manifested on with real
+#     Solend/xStep evidence, which likewise offers no top-level swap-venue
+#     instruction the wallet's own action is the primary one). Proves the
+#     gate fails closed on *absence* of evidence, not only on a
+#     *mismatched* program.
+FIXTURES["one_for_one_no_instruction_evidence"] = _tx(
+    signature="golden-no-instruction-evidence-0000000000000",
+    slot=100_000_015,
+    block_time=1_735_000_015,
+    account_keys=_account_keys(COUNTERPARTY),
+    pre_balances=[3_000_000_000, 1_000_000_000],
+    post_balances=[1_999_995_000, 1_000_000_000],
+    fee=5000,
+    pre_token_balances=[],
+    post_token_balances=[_tok(0, TOKEN_B_MINT, WALLET, "500000000", 6)],
 )
 
 

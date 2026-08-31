@@ -1382,3 +1382,100 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
 - git_commit: f334f70908e9744940571f7caffd29c515eb0dac (last code commit of
   this spike; a final docs-only commit follows for this log entry, the
   checkpoint, the bundle, and the handoff).
+
+### 2026-08-31 -- Phase 1.5 remediation round 1: false copy-eligibility gate (argus-phase-1-5-remediation-001)
+- requirement_id: MASTER_SPEC.md section 21 (no automatic copy trade for
+  ambiguous interpretations), section 108 (evidence accuracy), section
+  109 (this log)
+- decision: An independent orchestrator audit rejected the Phase 1.5
+  submission as `FAIL_REMEDIATION_REQUIRED` on one SPEC_BLOCKING/
+  SAFETY_OR_INTEGRITY_BLOCKING finding: two authentic non-trade
+  transactions -- a real Solend `Withdraw Obligation Collateral and
+  Redeem Reserve Collateral`, a real xStep `Stake` -- were reported
+  `SWAP_SIMPLE`/`is_copy_eligible=true` solely because each has a clean
+  one-negative/one-positive balance shape. Confirmed directly (via `git
+  stash` against only `src/argus/parsing/generic_parser.py`) that the
+  pre-fix parser genuinely returned `is_copy_eligible=True` for the real
+  Solend transaction before writing any fix, rather than assuming the
+  audit's claim. Implemented a deterministic positive semantic proof
+  gate: `_SUPPORTED_SWAP_PROGRAM_IDS`, a centrally versioned registry of
+  exactly 4 program IDs (Jupiter Aggregator V6, Raydium Liquidity Pool
+  V4, Orca Whirlpool, pump.fun bonding curve), each independently
+  extracted from and cross-checked against this project's own
+  already-hand-reviewed permanent golden-fixture source bytes (not
+  trusted from memory) before being added. `ParsedTransaction.
+  is_copy_eligible` now additionally requires
+  `matched_swap_program_id is not None` -- positive instruction-level
+  evidence (handling both raw-RPC instruction encodings this project's
+  own real evidence actually uses: index-based `programIdIndex` and
+  `jsonParsed`-style direct `programId`) that the transaction's own
+  instructions actually invoked a registered trade venue. This is a
+  narrow allowlist, deliberately not a Solend/xStep denylist: an
+  unmatched program is never treated as disproven, so the same defect
+  class cannot recur for the next unknown lending/staking/LP/redemption
+  program without a denylist entry being added ad hoc. `PARSER_VERSION`
+  bumped `_v1` -> `_v2` since observable eligibility output changed for
+  real evidence. Updating the 4 synthetic "known genuine swap" golden
+  fixtures (`sol_to_token`, `token_to_sol`, `token_to_usdc`,
+  `partial_sell`) to carry the same positive instruction evidence a real
+  swap transaction would was itself required by the fix, not optional:
+  under the new rule their prior bare balance-shape claim to being a
+  "genuine swap" no longer held any more weight than the real evidence
+  it needed to. Reran the Phase 1.5 analysis under the corrected parser
+  and restructured its evidence to report delta-arithmetic agreement
+  (28/28, unchanged) strictly separately from semantic eligibility
+  validation (4/28 copy-eligible, each with its independently cited
+  program) so the two claims are never conflated in any future reading
+  of this evidence -- the instruction's own explicit requirement.
+  `HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS` is unchanged as a
+  disposition value, now resting on a corrected foundation rather than
+  a false one.
+- lesson: a balance-delta-only parser's classification and its
+  eligibility-for-automated-action gate are two different claims with
+  two different evidentiary bars -- "the shape looks like a swap" is
+  sufficient for the former (useful research signal, MASTER_SPEC section
+  21's own design) but was wrongly treated as sufficient for the latter
+  too. The fix generalizes exactly as far as the evidence supports (4
+  independently-verified programs) and no further: two other genuinely
+  swap-shaped Phase 1.5 transactions (Flash, Titan) remain honestly
+  ineligible this round for lack of the same positive verification,
+  rather than being waved through to make the "genuine swaps stay
+  eligible" story look cleaner than the evidence actually allows.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-5-remediation-001` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: b68e37393370c7f9f3eb8860fecdaaa3f9c28696`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_5_FALSE_COPY_ELIGIBILITY_ONLY`,
+  `AUTHORIZED_PHASE: 1.5`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: Extended `src/argus/parsing/generic_parser.py`
+  (`_SUPPORTED_SWAP_PROGRAM_IDS`, `_instruction_program_ids()`,
+  `_matched_swap_program_id()`, `ParsedTransaction.
+  matched_swap_program_id`, `PARSER_VERSION` bump). Extended `scripts/
+  _generate_golden_fixtures.py` (positive-instruction-evidence helper;
+  2 new adversarial fixtures: `one_for_one_unsupported_program`,
+  `one_for_one_no_instruction_evidence`) and regenerated 4 existing
+  synthetic fixture files. Extended `scripts/phase_1_5_feasibility.py`
+  and reran `orchestration/phase_1_5/evidence/analysis_results.json`
+  under the corrected parser. 8 new tests in `tests/golden/
+  test_generic_parser.py` (including 2 that load the actual real
+  Solend/xStep evidence files directly, not synthetic stand-ins) and 2
+  new tests in `tests/phase_1_5/test_historical_feasibility.py`. Fixed
+  2 incidental version-string collisions in `tests/unit/
+  test_reconciliation.py` and `tests/replay/test_replay.py` caused by
+  the `PARSER_VERSION` bump (mechanical renames only, no logic change).
+  No `src/argus` schema/persistence change; no existing golden/real-
+  chain fixture's committed bytes changed (`argus fixtures
+  validate-real-chain` still reports all 12 `ok`). 563 tests passing,
+  ruff clean, mypy clean.
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `1`
+  -- this remediation approves no phase.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified; no
+  Phase 2 work was started. `orchestration/checkpoints/phase_1_5.md`
+  and `orchestration/bundles/phase_1_5.txt` are preserved unmodified as
+  immutable history.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT (last code commit of
+  this remediation round; a final docs-only commit follows for this log
+  entry, the checkpoint, the bundle, and the handoff).

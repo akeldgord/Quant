@@ -46,14 +46,19 @@ def test_at_least_20_real_transactions_are_available_for_cross_validation() -> N
 
 
 def test_independent_recomputation_agrees_with_the_parser_for_every_transaction() -> None:
-    """The core Test C assertion: an independently-written, from-scratch
-    recomputation of each wallet's net raw deltas directly from
-    meta.preBalances/postBalances/preTokenBalances/postTokenBalances
-    (never calling into argus.parsing) must equal what
+    """The core Test C delta-ARITHMETIC assertion only: an independently-
+    written, from-scratch recomputation of each wallet's net raw deltas
+    directly from meta.preBalances/postBalances/preTokenBalances/
+    postTokenBalances (never calling into argus.parsing) must equal what
     compute_account_level_deltas() actually reports, for every one of the
-    real transactions gathered for this spike."""
+    real transactions gathered for this spike. This proves the balance-
+    delta math is correct -- it does NOT by itself prove any row's
+    semantic classification or copy-eligibility (Phase 1.5 remediation
+    round 1: see test_solend_and_xstep_false_positives_are_now_ineligible
+    and test_every_copy_eligible_row_has_independent_semantic_evidence for
+    that separate claim)."""
     results = _all_results()
-    disagreements = [r for r in results if not r["agrees"]]
+    disagreements = [r for r in results if not r["delta_arithmetic_agrees"]]
     assert disagreements == [], disagreements
 
 
@@ -61,11 +66,49 @@ def test_token_creator_initial_buy_is_a_real_recoverable_early_buyer_event() -> 
     """Test A's one concrete recovered data point: the pump.fun token's
     own creation transaction bundles the creator's initial dev-buy,
     independently verified here as a genuine SWAP_SIMPLE inflow of the
-    newly-created mint, not merely asserted in prose."""
+    newly-created mint, backed by positive instruction-level evidence
+    (the real pump.fun bonding-curve program), not merely a balance shape
+    -- not merely asserted in prose."""
     result = spike.cross_validate_one(spike.RAW_DIR / spike.TOKEN_FILE, spike.TOKEN_CREATOR_WALLET)
     assert result["classification"] == "SWAP_SIMPLE"
     assert spike.TOKEN_MINT in result["parser_reported_deltas"]
     assert result["parser_reported_deltas"][spike.TOKEN_MINT] > 0
+    assert result["matched_swap_program_id"] == "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+    assert result["is_copy_eligible"] is True
+
+
+def test_solend_and_xstep_false_positives_are_now_ineligible() -> None:
+    """The exact SPEC_BLOCKING finding from argus-phase-1-5-remediation-001:
+    the Solend withdrawal/redemption and xStep stake fixtures have the
+    same clean one-negative/one-positive balance shape as a genuine swap
+    (so the parser still, correctly, reports SWAP_SIMPLE as its balance-
+    shape research classification) but neither transaction's own
+    instructions invoke a supported trade-venue program -- both must be
+    ineligible."""
+    solend = spike.cross_validate_one(
+        spike.RAW_DIR / "wallet_05_solend_withdraw_all.json", spike.CANDIDATE_WALLET
+    )
+    xstep = spike.cross_validate_one(
+        spike.RAW_DIR / "suppl_09_xstep_full_stake_ix.json", spike.SUPPLEMENTARY_WALLET
+    )
+    for result in (solend, xstep):
+        assert result["classification"] == "SWAP_SIMPLE"
+        assert result["matched_swap_program_id"] is None
+        assert result["is_copy_eligible"] is False
+
+
+def test_every_copy_eligible_row_has_independent_semantic_evidence() -> None:
+    """Required test #7: every row Phase 1.5 reports as copy eligible must
+    have an independently stated semantic expectation derived from raw
+    instruction evidence (matched_swap_program_id), not from the parser's
+    classification/confidence output alone."""
+    from argus.parsing.generic_parser import _SUPPORTED_SWAP_PROGRAM_IDS
+
+    results = _all_results()
+    eligible = [r for r in results if r["is_copy_eligible"]]
+    assert eligible, "expected at least one genuinely eligible row to check"
+    for r in eligible:
+        assert r["matched_swap_program_id"] in _SUPPORTED_SWAP_PROGRAM_IDS, r
 
 
 def test_candidate_wallet_history_spans_multiple_required_dimensions() -> None:

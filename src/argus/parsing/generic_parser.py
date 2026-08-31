@@ -60,8 +60,29 @@ genuine fungible-asset trade, only observe a shape consistent with one:
   never a fungible copy-trade signal.
 
 Only ``SWAP_SIMPLE`` with both legs having nonzero decimals, at or above
-the confidence floor, is copy-eligible in v1 (see
-``ParsedTransaction.is_copy_eligible``).
+the confidence floor, is copy-eligible -- and, since v2 (Phase 1.5
+remediation round 1, positive semantic proof gate), only when canonical
+instruction-level evidence positively identifies the transaction as
+having actually routed through a supported trade venue (see
+``_SUPPORTED_SWAP_PROGRAM_IDS``/``_matched_swap_program_id()`` and
+``ParsedTransaction.is_copy_eligible``). Balance shape alone (one asset
+given up, one received) is deliberately insufficient: many genuine,
+non-trade DeFi actions -- a lending-market withdrawal/redemption, a
+staking deposit, a vault claim -- produce exactly that same one-in/
+one-out shape without being a swap at all. v1 treated any such shape as
+a confident ``SWAP_SIMPLE`` regardless of *what instruction actually
+executed*; v2 requires positive evidence that a top-level or inner
+instruction actually invoked a program this module has independently
+verified is a real swap/trade venue (each entry in
+``_SUPPORTED_SWAP_PROGRAM_IDS`` is cited against a real, previously
+hand-verified mainnet transaction already committed in this project's
+own golden-fixture evidence -- never trusted from memory alone). This is
+a narrow allowlist/proof gate, not a full per-program instruction
+parser: an unmatched program never becomes ineligible by name (there is
+no denylist), it simply lacks the positive evidence required to promote
+a balance-shape-only guess into an automatic copy signal, and correctly
+stays research-only (``is_copy_eligible = False``) until a specific
+program is added to the registry with cited, verified evidence.
 """
 
 from __future__ import annotations
@@ -73,7 +94,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Final, Literal
 
-PARSER_VERSION: Final[str] = "generic_balance_delta_v1"
+PARSER_VERSION: Final[str] = "generic_balance_delta_v2"
 
 # Phase 1 remediation round 3, finding #5: a reproducible content hash of
 # this exact algorithm's source, computed once at import time. Distinct
@@ -112,6 +133,80 @@ Classification = Literal[
 # absent a separate, deterministic, fixture-demonstrated proof rule.
 _COPY_ELIGIBLE_CLASSIFICATIONS: Final[frozenset[str]] = frozenset({"SWAP_SIMPLE"})
 _MIN_COPY_ELIGIBLE_CONFIDENCE: Final[Decimal] = Decimal("0.500")
+
+# Phase 1.5 remediation round 1 -- the positive semantic proof gate's
+# supported-trade-venue registry. Every program ID below is independently
+# verified against a real mainnet transaction already committed as
+# hand-reviewed evidence in this project's own permanent golden-fixture
+# corpus (tests/golden/fixtures/real/), never trusted from memory alone:
+# each transaction's `ExpectedOutcome` was independently derived from raw
+# preBalances/postBalances by a human reviewer (not by this parser) in an
+# earlier round, confirming the transaction really is the swap it claims
+# to be, and the program ID below is the exact top-level or inner
+# instruction program that transaction actually invoked.
+#
+# This is a narrow ALLOWLIST, not a protocol parser: a program absent from
+# this set is never treated as *disproven* -- it simply supplies no
+# positive evidence, so a transaction that only invokes unlisted programs
+# correctly stays research-only (never copy-eligible) rather than being
+# silently promoted on balance shape alone. Extending coverage requires
+# adding a new, similarly cited entry here, not a denylist entry for the
+# next unsupported program encountered.
+_SUPPORTED_SWAP_PROGRAM_IDS: Final[dict[str, str]] = {
+    # Jupiter Aggregator V6 -- real_mainnet_token_to_usdc_swap (SWAP_SIMPLE,
+    # eligible) and real_mainnet_multi_hop_swap (SWAP_COMPLEX).
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "jupiter_aggregator_v6",
+    # Raydium Liquidity Pool V4 -- real_mainnet_partial_sell and
+    # real_mainnet_token_to_sol_swap (both SWAP_SIMPLE, eligible).
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": "raydium_liquidity_pool_v4",
+    # Orca Whirlpool -- real_mainnet_orca_close_position_multi_account
+    # (LP_ACTION; the same program also backs genuine Orca swap paths).
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "orca_whirlpool",
+    # pump.fun bonding-curve program -- real_mainnet_sol_to_token_swap
+    # (SWAP_SIMPLE, eligible).
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": "pumpfun_bonding_curve",
+}
+
+
+def _instruction_program_ids(raw: dict[str, Any]) -> set[str]:
+    """Every program ID invoked by a top-level or inner instruction in
+    this transaction, deterministically, from canonical raw evidence
+    already available to the parser. Handles both raw RPC instruction
+    encodings seen in this project's real-chain evidence: index-based
+    (``programIdIndex`` resolved against ``accountKeys``) and
+    ``jsonParsed``-style (``programId`` given directly as a pubkey
+    string) -- never assumes only one shape."""
+    keys = _account_keys(raw)
+    program_ids: set[str] = set()
+
+    def _collect(instructions: list[dict[str, Any]] | None) -> None:
+        for ix in instructions or []:
+            if not isinstance(ix, dict):
+                continue
+            program_id = ix.get("programId")
+            if isinstance(program_id, str) and program_id:
+                program_ids.add(program_id)
+                continue
+            idx = ix.get("programIdIndex")
+            if isinstance(idx, int) and 0 <= idx < len(keys):
+                program_ids.add(keys[idx])
+
+    _collect(raw["transaction"]["message"].get("instructions"))
+    for group in raw.get("meta", {}).get("innerInstructions") or []:
+        if isinstance(group, dict):
+            _collect(group.get("instructions"))
+
+    return program_ids
+
+
+def _matched_swap_program_id(raw: dict[str, Any]) -> str | None:
+    """The first ``_SUPPORTED_SWAP_PROGRAM_IDS`` entry this transaction's
+    instructions positively demonstrate were invoked, or ``None`` if no
+    supported trade venue was found -- the sole source of positive
+    semantic evidence :class:`ParsedTransaction.is_copy_eligible` requires
+    in addition to balance shape."""
+    matched = _instruction_program_ids(raw) & _SUPPORTED_SWAP_PROGRAM_IDS.keys()
+    return min(matched) if matched else None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -173,15 +268,37 @@ class ParsedTransaction:
 
     network_fee_raw: int
 
+    # Phase 1.5 remediation round 1: the exact _SUPPORTED_SWAP_PROGRAM_IDS
+    # entry this transaction's own instructions positively demonstrated
+    # were invoked, or None if no supported trade venue was found. Always
+    # computed from raw evidence at parse time (never inferred from
+    # classification); defaults to None so existing direct-construction
+    # call sites for non-swap classifications remain valid.
+    matched_swap_program_id: str | None = None
+
     @property
     def is_copy_eligible(self) -> bool:
         """Mechanical gate: an ambiguous/UNKNOWN, low-confidence, or
         decimals-zero (non-fungible/NFT-shaped) leg can never create a
         live-copy signal, regardless of what any downstream code does or
-        forgets to check (Phase 1 remediation round 5, finding #4)."""
+        forgets to check (Phase 1 remediation round 5, finding #4).
+
+        Phase 1.5 remediation round 1: balance shape alone (exactly one
+        asset given up, one received) is no longer sufficient by itself.
+        A lending withdrawal/redemption, a staking deposit, or any other
+        genuine non-trade DeFi action can produce the identical one-in/
+        one-out shape without being a swap -- so SWAP_SIMPLE additionally
+        requires positive instruction-level evidence
+        (``matched_swap_program_id is not None``) that this specific
+        transaction actually routed through a program independently
+        verified to be a real trade venue. Unmatched/unsupported programs
+        preserve their research classification but are never
+        automatically copy eligible."""
         if self.classification not in _COPY_ELIGIBLE_CLASSIFICATIONS:
             return False
         if self.confidence < _MIN_COPY_ELIGIBLE_CONFIDENCE:
+            return False
+        if self.matched_swap_program_id is None:
             return False
         # A one-for-one balance-delta shape looks identical whether the
         # asset received is a fungible token or a single non-fungible
@@ -439,6 +556,7 @@ def parse_transaction(
     account_keys = _account_keys(raw)
     is_fee_payer = bool(account_keys) and account_keys[0] == wallet_address
     network_fee_raw = fee if is_fee_payer else 0
+    matched_swap_program_id = _matched_swap_program_id(raw)
 
     def _result(
         classification: Classification,
@@ -481,6 +599,7 @@ def parse_transaction(
             ),
             output_decimals=(_decimals(output_asset) if output_asset is not None else None),
             network_fee_raw=network_fee_raw,
+            matched_swap_program_id=matched_swap_program_id,
         )
 
     if meta.get("err") is not None:
