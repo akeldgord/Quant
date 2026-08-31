@@ -1692,6 +1692,28 @@ def tick(config: WatcherConfig, claude_runner: Runner = subprocess.run) -> Watch
             + (f": {final_parsed.reason}" if not final_parsed.ok else ""),
         )
 
+    # Explicit belt-and-suspenders snapshot: the working-tree bytes Claude is
+    # about to read must hash to exactly the committed blob at head_before,
+    # not merely "the porcelain status line was empty" -- redundant with the
+    # dirty-worktree re-check above for any ordinary edit, but verified
+    # directly per the instruction's explicit requirement.
+    final_instructions_blob = git_blob_at(
+        config.repo_root, head_before, INSTRUCTIONS_RELPATH.as_posix()
+    )
+    final_instructions_working_hash = git_hash_object(
+        config.repo_root, INSTRUCTIONS_RELPATH.as_posix()
+    )
+    if (
+        final_instructions_blob is None
+        or final_instructions_working_hash is None
+        or final_instructions_blob != final_instructions_working_hash
+    ):
+        return _revert_to_idle(
+            "RUN_FAILED",
+            "working-tree ORCHESTRATOR_INSTRUCTIONS.md hash does not match the committed HEAD "
+            "blob at the final pre-launch barrier",
+        )
+
     final_target_check = verify_target_commit(config.repo_root, instructions.target_commit)
     if not final_target_check.ok:
         return _revert_to_idle(
