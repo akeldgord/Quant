@@ -20,6 +20,7 @@ import json
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Any, Protocol, TypeGuard
 
 import httpx
@@ -52,12 +53,47 @@ def _is_strict_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_strict_nonneg_int(value: Any) -> TypeGuard[int]:
+    """As :func:`_is_strict_int`, plus rejecting negative values -- every
+    slot/fee/balance/decimals field this client validates is a Solana
+    concept with no legitimate negative value (Phase 1 remediation round
+    5, finding #5)."""
+    return _is_strict_int(value) and value >= 0
+
+
+# SPL token decimals is stored on-chain as a single unsigned byte
+# (Solana's Mint account layout) -- any larger value is definitionally
+# impossible, not merely implausible.
+_MAX_TOKEN_DECIMALS = 255
+
+
 def _is_valid_tx_err(value: Any) -> bool:
     """A Solana ``TransactionError`` is either ``null`` (success), a bare
     string variant (e.g. ``"AccountInUse"``), or an object variant (e.g.
     ``{"InstructionError": [...]}"``) -- never a number, bool, or list at
     the top level."""
     return value is None or isinstance(value, str | dict)
+
+
+def _resolved_account_keys(value: Any) -> list[str] | None:
+    """``transaction.message.accountKeys`` is either a bare list of
+    base58 pubkey strings, or (``jsonParsed``/versioned-transaction
+    encodings) a list of ``{"pubkey": str, ...}`` objects -- the same two
+    shapes :func:`argus.parsing.generic_parser._account_keys` and
+    :func:`argus.golden_fixtures._account_keys` already accept. Returns
+    the resolved pubkey strings, or ``None`` if the shape is invalid
+    (Phase 1 remediation round 5, finding #5)."""
+    if not isinstance(value, list):
+        return None
+    resolved: list[str] = []
+    for key in value:
+        if isinstance(key, str):
+            resolved.append(key)
+        elif isinstance(key, dict) and isinstance(key.get("pubkey"), str):
+            resolved.append(key["pubkey"])
+        else:
+            return None
+    return resolved
 
 
 class HeliusRpcError(ProviderResponseError):
@@ -148,6 +184,63 @@ class HeliusRpcClient:
         )
 
     async def get_transaction(self, signature: str) -> dict[str, Any]:
+        def _validate_token_balances(key: str, num_accounts: int, meta: dict[str, Any]) -> None:
+            # Phase 1 remediation round 5, finding #5: preTokenBalances/
+            # postTokenBalances are optional keys (a transaction that
+            # never touches an SPL token account legitimately omits or
+            # empties them), but when present every entry is fully
+            # validated -- never trusted as opaque pass-through data, the
+            # same discipline every other field on this response gets.
+            entries = meta.get(key)
+            if entries is None:
+                return
+            if not isinstance(entries, list):
+                raise HeliusRpcError(
+                    f"getTransaction: 'meta.{key}' is not a list: {entries!r}",
+                    usage_status="contract_error",
+                )
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{key}' entry is not an object: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                account_index = entry.get("accountIndex")
+                if not _is_strict_nonneg_int(account_index) or account_index >= num_accounts:
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{key}' entry has an out-of-range or invalid "
+                        f"accountIndex (accountKeys has {num_accounts} entries): {entry!r}",
+                        usage_status="contract_error",
+                    )
+                mint = entry.get("mint")
+                owner = entry.get("owner")
+                if not isinstance(mint, str) or not isinstance(owner, str):
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{key}' entry is missing a string 'mint'/'owner': "
+                        f"{entry!r}",
+                        usage_status="contract_error",
+                    )
+                ui_token_amount = entry.get("uiTokenAmount")
+                if not isinstance(ui_token_amount, dict):
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{key}' entry is missing 'uiTokenAmount': {entry!r}",
+                        usage_status="contract_error",
+                    )
+                amount = ui_token_amount.get("amount")
+                if not isinstance(amount, str) or not amount.isdigit():
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{key}' entry 'uiTokenAmount.amount' is not a "
+                        f"nonnegative decimal string: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                decimals = ui_token_amount.get("decimals")
+                if not _is_strict_nonneg_int(decimals) or decimals > _MAX_TOKEN_DECIMALS:
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{key}' entry 'uiTokenAmount.decimals' is out of "
+                        f"bounds (0-{_MAX_TOKEN_DECIMALS}): {entry!r}",
+                        usage_status="contract_error",
+                    )
+
         def _validate(result: Any) -> dict[str, Any]:
             if not isinstance(result, dict) or "meta" not in result or "transaction" not in result:
                 raise HeliusRpcError(
@@ -159,11 +252,6 @@ class HeliusRpcClient:
             if not isinstance(meta, dict):
                 raise HeliusRpcError(
                     f"getTransaction: 'meta' is not an object: {meta!r}",
-                    usage_status="contract_error",
-                )
-            if "err" in meta and not _is_valid_tx_err(meta["err"]):
-                raise HeliusRpcError(
-                    f"getTransaction: 'meta.err' has an invalid type: {meta['err']!r}",
                     usage_status="contract_error",
                 )
             transaction = result["transaction"]
@@ -178,15 +266,80 @@ class HeliusRpcClient:
                     f"getTransaction: 'transaction.message' is not an object: {message!r}",
                     usage_status="contract_error",
                 )
-            signatures = transaction.get("signatures")
-            if not isinstance(signatures, list) or not all(
-                isinstance(sig, str) for sig in signatures
-            ):
+            account_keys = _resolved_account_keys(message.get("accountKeys"))
+            if account_keys is None:
                 raise HeliusRpcError(
-                    "getTransaction: 'transaction.signatures' is not a list of strings: "
-                    f"{signatures!r}",
+                    "getTransaction: 'transaction.message.accountKeys' is not a list of pubkey "
+                    f"strings/objects: {message.get('accountKeys')!r}",
                     usage_status="contract_error",
                 )
+            signatures = transaction.get("signatures")
+            if (
+                not isinstance(signatures, list)
+                or not signatures
+                or not all(isinstance(sig, str) for sig in signatures)
+            ):
+                raise HeliusRpcError(
+                    "getTransaction: 'transaction.signatures' is not a non-empty list of "
+                    f"strings: {signatures!r}",
+                    usage_status="contract_error",
+                )
+
+            # Phase 1 remediation round 5, finding #5: deepen validation
+            # beyond the structural shape checks above -- meta.err is
+            # required (never merely validated-if-present), meta.fee and
+            # the balance arrays must be genuinely well-formed integers
+            # coherent with accountKeys' length, the top-level slot is
+            # required, and any present token-balance entries are fully
+            # validated field-by-field.
+            if "err" not in meta:
+                raise HeliusRpcError(
+                    f"getTransaction: 'meta.err' is required but missing: {meta!r}",
+                    usage_status="contract_error",
+                )
+            if not _is_valid_tx_err(meta["err"]):
+                raise HeliusRpcError(
+                    f"getTransaction: 'meta.err' has an invalid type: {meta['err']!r}",
+                    usage_status="contract_error",
+                )
+            fee = meta.get("fee")
+            if not _is_strict_nonneg_int(fee):
+                raise HeliusRpcError(
+                    f"getTransaction: 'meta.fee' is not a strict nonnegative integer: {fee!r}",
+                    usage_status="contract_error",
+                )
+            num_accounts = len(account_keys)
+            for balances_key in ("preBalances", "postBalances"):
+                balances = meta.get(balances_key)
+                if not isinstance(balances, list) or not all(
+                    _is_strict_nonneg_int(v) for v in balances
+                ):
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{balances_key}' is not a list of strict "
+                        f"nonnegative integers: {balances!r}",
+                        usage_status="contract_error",
+                    )
+                if len(balances) != num_accounts:
+                    raise HeliusRpcError(
+                        f"getTransaction: 'meta.{balances_key}' has {len(balances)} entries, "
+                        f"which does not match accountKeys' {num_accounts} entries",
+                        usage_status="contract_error",
+                    )
+            slot = result.get("slot")
+            if not _is_strict_nonneg_int(slot):
+                raise HeliusRpcError(
+                    f"getTransaction: 'slot' is not a strict nonnegative integer: {slot!r}",
+                    usage_status="contract_error",
+                )
+            block_time = result.get("blockTime")
+            if block_time is not None and not _is_strict_nonneg_int(block_time):
+                raise HeliusRpcError(
+                    "getTransaction: 'blockTime' is not null or a strict nonnegative integer: "
+                    f"{block_time!r}",
+                    usage_status="contract_error",
+                )
+            _validate_token_balances("preTokenBalances", num_accounts, meta)
+            _validate_token_balances("postTokenBalances", num_accounts, meta)
             return result
 
         return await self._rpc(
@@ -297,9 +450,10 @@ class HeliusRpcClient:
                         usage_status="contract_error",
                     )
                 slot = entry.get("slot")
-                if slot is not None and not _is_strict_int(slot):
+                if slot is not None and not _is_strict_nonneg_int(slot):
                     raise HeliusRpcError(
-                        f"getSignatureStatuses: 'slot' has an invalid type: {entry!r}",
+                        f"getSignatureStatuses: 'slot' is not null or a strict nonnegative "
+                        f"integer: {entry!r}",
                         usage_status="contract_error",
                     )
                 err = entry.get("err")
@@ -329,10 +483,11 @@ class HeliusRpcClient:
             if (
                 not isinstance(result, dict)
                 or "value" not in result
-                or not isinstance(result["value"], int)
+                or not _is_strict_nonneg_int(result["value"])
             ):
                 raise HeliusRpcError(
-                    f"getBalance: malformed response, expected {{'value': int}}: {result!r}",
+                    "getBalance: malformed response, expected {'value': strict nonnegative "
+                    f"int}}: {result!r}",
                     usage_status="contract_error",
                 )
             value: int = result["value"]
@@ -373,17 +528,30 @@ class HeliusRpcClient:
                     f"getTokenAccountsByOwner: missing 'mint'/'owner'/'tokenAmount': {entry!r}",
                     usage_status="contract_error",
                 )
+            # Phase 1 remediation round 5, finding #5: an entry whose own
+            # reported owner does not match the wallet this call was made
+            # *for* is never silently trusted -- this endpoint's whole
+            # contract is "token accounts owned by wallet_address", so a
+            # mismatch is a genuine, fail-closed contract violation, not
+            # a value to pass through and let a caller misattribute.
+            if owner != wallet_address:
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: entry's 'owner' ({owner!r}) does not match the "
+                    f"requested wallet_address ({wallet_address!r}): {entry!r}",
+                    usage_status="contract_error",
+                )
             amount_str = token_amount.get("amount")
             decimals = token_amount.get("decimals")
             if not isinstance(amount_str, str) or not amount_str.isdigit():
                 raise HeliusRpcError(
-                    f"getTokenAccountsByOwner: 'tokenAmount.amount' is not a numeric "
-                    f"string: {entry!r}",
+                    f"getTokenAccountsByOwner: 'tokenAmount.amount' is not a nonnegative "
+                    f"decimal string: {entry!r}",
                     usage_status="contract_error",
                 )
-            if not _is_strict_int(decimals):
+            if not _is_strict_nonneg_int(decimals) or decimals > _MAX_TOKEN_DECIMALS:
                 raise HeliusRpcError(
-                    f"getTokenAccountsByOwner: 'tokenAmount.decimals' is not an integer: {entry!r}",
+                    "getTokenAccountsByOwner: 'tokenAmount.decimals' is not a nonnegative "
+                    f"integer within bounds (0-{_MAX_TOKEN_DECIMALS}): {entry!r}",
                     usage_status="contract_error",
                 )
             return TokenAccountInfo(
@@ -392,7 +560,11 @@ class HeliusRpcClient:
                 owner=owner,
                 amount_raw=int(amount_str),
                 decimals=decimals,
-                raw=entry,
+                # An immutable snapshot, never the same live dict a
+                # caller elsewhere could still hold a mutable reference
+                # to -- TokenAccountInfo's whole point is to be a
+                # canonical, immutable typed model (finding #5).
+                raw=MappingProxyType(entry),
             )
 
         def _validate(result: Any) -> list[TokenAccountInfo]:
@@ -416,9 +588,10 @@ class HeliusRpcClient:
 
     async def get_slot(self) -> int:
         def _validate(result: Any) -> int:
-            if not isinstance(result, int):
+            if not _is_strict_nonneg_int(result):
                 raise HeliusRpcError(
-                    f"getSlot: expected an integer, got {result!r}", usage_status="contract_error"
+                    f"getSlot: expected a strict nonnegative integer, got {result!r}",
+                    usage_status="contract_error",
                 )
             return result
 
