@@ -7,118 +7,103 @@ approval, clarification, or change-control decision.
 
 ---
 
-INSTRUCTION_ID: argus-phase-1-5-001
-ISSUED_AT: 2026-08-31T20:46:38Z
-TARGET_COMMIT: 2fbc566af74832bc6523648f60ba8cb60d98eb31
-AUTHORIZED_ACTION: EXECUTE_PHASE_1_5_HISTORICAL_DATA_FEASIBILITY_SPIKE_ONLY
+INSTRUCTION_ID: argus-phase-1-5-remediation-001
+ISSUED_AT: 2026-08-31T21:59:13Z
+TARGET_COMMIT: b68e37393370c7f9f3eb8860fecdaaa3f9c28696
+AUTHORIZED_ACTION: REMEDIATE_PHASE_1_5_FALSE_COPY_ELIGIBILITY_ONLY
 AUTHORIZED_PHASE: 1.5
-APPROVES_PHASE: 1
+APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
 ## Independent audit disposition
 
-### Phase 1 decision
+### Predecessor phases
 
-Phase 1 is **ORCHESTRATOR APPROVED** at TARGET_COMMIT
+Phase 0 remains orchestrator-approved with disposition:
+
+`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`
+
+Phase 1 remains orchestrator-approved at
 `2fbc566af74832bc6523648f60ba8cb60d98eb31` with disposition:
 
 `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`
 
-The approval is based on an independent audit against the frozen Phase 1 gate
-in `MASTER_SPEC.md`, not on the implementation agent's PASS claim alone.
-The audited implementation contains the required provider adapters, continuously
-running ingestion composition, per-wallet subscriptions, persistent watermarks,
-fast-path plus truth-path reconciliation, stream-gap handling, provider probes
-and usage accounting, streaming accounting, central request prioritization,
-immutable canonical chain evidence, deterministic generic parsing, required
-golden fixture coverage, and no signing/private-key execution path. The
-required disconnect/A/B/reconnect reconciliation behavior is exercised through
-real persistence integration tests and produces A exactly once and B exactly
-once. The completed round-6 evidence reports 547/547 repository tests passing,
-86% overall coverage, Ruff and mypy clean, real PostgreSQL-16 integration and
-migration checks, and all nine required real-chain golden-fixture categories
-independently validated.
-
-This approval does **not** convert environmental checks that were never run into
-PASS:
+The following environmental checks remain deferred and mandatory before live
+readiness, but do not block this remediation:
 
 - `LIVE_HELIUS_RPC_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
 - `LIVE_HELIUS_WSS_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
 - `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
 
-The implementation sandbox lacks the required live Helius credential/general
-chain-data egress and cannot pull the PostgreSQL-17 Docker image. PostgreSQL-16
-and fake/injected transport evidence must continue to be labeled honestly.
-These deferred checks remain mandatory before ARGUS can be declared live-ready;
-they do **not** block the Phase 1.5 historical feasibility spike.
+### Phase 1.5 decision
 
-No live trade, mainnet canary, transaction broadcast, signing, private-key or
-seed access, credential entry/disclosure, paid-provider upgrade, live arming,
-threshold relaxation, or phase skip is approved by this instruction.
+The Phase 1.5 submission at TARGET_COMMIT was independently audited against the
+frozen Phase 1.5 gate. The feasibility evidence otherwise supports
+`HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS`: the submission uses real
+historical Solana identities and preserved raw transactions, reports the severe
+early-buyer and candidate-wallet coverage limitations honestly, checks 28
+account-level balance-delta interpretations, and records measured local resource
+usage plus transparent scaling assumptions.
 
-### Round-6 commit-trailer disposition
+Phase 1.5 is **NOT APPROVED** yet. Its current disposition is:
 
-The round-6 checkpoint disclosed that three round-6 commits contain the correct
-text `ARGUS-INSTRUCTION-ID: argus-phase-1-remediation-006`, but placed it in a
-paragraph that `git interpret-trailers --parse` does not recognize as the final
-Git trailer block because a later `Co-Authored-By`/`Claude-Session` paragraph
-follows it. This violates the existing orchestration trailer-format contract.
+`FAIL_REMEDIATION_REQUIRED`
 
-The orchestrator independently reviewed the run commit range, ancestry, changed
-paths, handoff, checkpoint, implementation, and representative affected commits.
-The affected commits are within the authorized round-6 scope and the defect is
-one of trailer formatting, not evidence that unauthorized Phase 1.5/live work
-was introduced. Therefore:
+Phase 2 and all later phases remain blocked.
 
-- **Do not rewrite or force-push shared history solely to repair these already-
-  pushed trailer blocks.** This completed run receives a one-time manual
-  orchestrator waiver after independent review.
-- This waiver does not weaken the protocol prospectively. Every commit made
-  under this and later watcher-launched instructions MUST carry exactly one
-  real terminal Git trailer recognized by `git interpret-trailers --parse`.
-- To avoid ambiguity, use the following as the **sole final paragraph** of every
-  implementation-agent commit in this run:
+This is the single consolidated Phase 1.5 remediation pass contemplated by the
+frozen-gate policy. The remediation is limited to the concrete blocker below.
+Do not add unrelated hardening, new providers, new historical-data architecture,
+or Phase 2 work.
 
-  `ARGUS-INSTRUCTION-ID: argus-phase-1-5-001`
+## Frozen finding classification
 
-- Do not put `Co-Authored-By`, `Claude-Session`, or any other paragraph after
-  that terminal trailer. If such metadata is desired, place it earlier in the
-  message body so the ARGUS trailer remains the final trailer block.
-- Do not alter historical checkpoint rows to hide or erase the disclosed defect.
+### SPEC_BLOCKING and SAFETY_OR_INTEGRITY_BLOCKING
 
-## Audit policy for this phase — frozen gate, no moving goalposts
+The audited production parser marks at least two authentic non-trade position
+operations as `SWAP_SIMPLE` with confidence 1.0 and
+`is_copy_eligible = true` solely because each transaction has one negative and
+one positive asset delta:
 
-This is a **feasibility spike**, not a production historical-data build.
-The blocking acceptance contract for Phase 1.5 is frozen now and consists of:
+1. `wallet_05_solend_withdraw_all.json` contains Solend
+   `Withdraw Obligation Collateral and Redeem Reserve Collateral` instruction
+   evidence.
+2. `suppl_09_xstep_full_stake_ix.json` contains xStep `Stake` instruction
+   evidence.
 
-1. The Phase 1.5 requirements in `MASTER_SPEC.md`.
-2. Existing cross-phase invariants already applicable to this work, especially
-   point-in-time truth, immutable evidence, reproducibility, free-first cost
-   control, no secret leakage, and no live/signing authority.
-3. The explicit evidence/checkpoint requirements in this instruction.
+These are not swaps. Treating a lending withdrawal/redemption or staking
+operation as an automatically copy-eligible swap violates MASTER_SPEC section
+21's requirement that ambiguous interpretations produce no automatic copy
+trade. It also creates materially false historical trade signals and a direct
+future copy-safety risk. A one-out/one-in balance shape is not positive evidence
+that a swap occurred.
 
-Do not expand the phase into Phase 2 architecture, production-scale historical
-archaeology, a new provenance framework, extra provider hardening, or unrelated
-watcher/security redesign.
+The Phase 1.5 cross-validation currently verifies account-level delta arithmetic
+only. It does not independently verify the semantic classification or copy
+eligibility of every row, so it cannot rebut these false positives.
 
-If a useful improvement is discovered that is not required to answer the
-Phase 1.5 feasibility question and does not represent a concrete safety or
-research-integrity failure in this phase, classify it as `HARDENING_BACKLOG`,
-document it, and continue. It MUST NOT become a new Phase 1.5 blocking
-criterion.
+### HARDENING_BACKLOG / permitted limitations
 
-The expected process is one implementation submission and, if genuinely
-necessary, at most one consolidated remediation pass. Do not self-create new
-acceptance criteria after seeing results.
+The following do not block this remediation or Phase 1.5 approval:
 
-## Mandatory session start
+- incomplete early-buyer recovery;
+- incomplete candidate-wallet history and the isolated-fixture nature of the
+  available historical sample;
+- high `UNKNOWN` rate for position events that already fail closed;
+- lack of live Helius or BigQuery acquisition measurements;
+- broader per-protocol semantic coverage beyond the positive evidence needed
+  for currently supported copy-eligible swaps;
+- production-scale historical archaeology.
 
-Before changing code or running the feasibility study:
+Keep these items accurately documented as limitations, deferrals, or backlog.
+Do not turn them into mandatory work in this remediation.
 
-1. Run:
-   - `git status --porcelain`
-   - `git pull --ff-only`
-   - `git log -5 --oneline`
+## Mandatory session start and change-control checks
+
+Before changing code:
+
+1. Run `git status --porcelain`, `git pull --ff-only`, and
+   `git log -5 --oneline`.
 2. Read, in this exact order:
    - `MASTER_SPEC.md`
    - `docs/BUILD_STATE.md`
@@ -126,283 +111,171 @@ Before changing code or running the feasibility study:
    - `orchestration/PROTOCOL.md`
    - `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
    - `orchestration/AGENT_HANDOFF.md`
-3. Verify this ACTIVE instruction was introduced by exactly one commit that
-   touches only `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` and whose parent
-   is exactly TARGET_COMMIT
-   `2fbc566af74832bc6523648f60ba8cb60d98eb31`.
-4. Verify the worktree is clean and local HEAD equals freshly fetched remote
+   - `orchestration/checkpoints/phase_1_5.md`
+   - `orchestration/bundles/phase_1_5.txt`
+3. Verify this instruction commit touches only
+   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` and its parent is exactly
+   TARGET_COMMIT `b68e37393370c7f9f3eb8860fecdaaa3f9c28696`.
+4. Verify the worktree is clean and local HEAD equals a freshly fetched remote
    branch HEAD.
-5. Verify pre-advance BUILD_STATE still represents completed Phase 1 awaiting
-   orchestrator review: `current_phase: 1`, `last_completed_phase: 1`, and
-   `awaiting_orchestrator_review: true`.
-6. This instruction explicitly approves Phase 1. Update durable build state in
-   the ordinary append-only/change-controlled manner as Phase 1.5 begins:
-   `last_orchestrator_approved_phase` becomes `1`, and the approved Phase-1
-   implementation commit is TARGET_COMMIT above. Do not mark Phase 1.5
-   orchestrator-approved.
-7. If the watcher/local orchestration state reports a genuine terminal
-   `QUARANTINED` trust state, do not bypass it in code. Stop and report the
-   exact state for human/orchestrator review. An ordinary prior failed run is
-   not permission to rewrite history.
-
-## Phase 1.5 mission
-
-Execute exactly the MASTER_SPEC Phase 1.5 historical-data feasibility spike.
-
-Goal:
-
-Prove whether ARGUS's free-first data architecture can reconstruct the
-historical evidence needed for later token/wallet archaeology **before** a
-large historical pipeline is built.
-
-This phase answers feasibility, completeness limitations, and scaling cost. It
-does not build Phase 2 discovery and does not optimize a trading strategy.
-
-## Required inputs
-
-Attempt to establish automatically, from existing authenticated repository
-evidence and/or reachable free/public sources:
-
-- **1 verified historical token**, and
-- **1 verified candidate wallet** associated with usable historical on-chain
-  evidence.
-
-Rules:
+5. Verify durable state still has Phase 1 as the last orchestrator-approved
+   phase and Phase 1.5 awaiting review. Do not mark Phase 1.5 approved.
+6. If any target, ancestry, branch, instruction-ID, or trust-state check fails,
+   fail closed and report it. Do not bypass watcher or protocol checks.
+
+## Required remediation
+
+Implement a deterministic **positive semantic proof gate** for automatic copy
+eligibility.
+
+Required behavior:
+
+1. Balance shape alone is insufficient. A transaction with exactly one negative
+   and one positive asset delta MUST NOT be copy eligible unless independent
+   transaction evidence positively identifies a supported trade/swap path.
+2. Determine positive evidence from canonical raw transaction material already
+   available to the parser, including top-level and inner program identities
+   and deterministic instruction/log discriminators as appropriate.
+3. Centralize and version the supported trade-evidence policy or registry so the
+   eligibility decision is auditable and deterministic. Unknown, unsupported,
+   or unmatched semantics must preserve their research evidence but fail closed
+   with `is_copy_eligible = false`.
+4. Do not implement only a negative denylist for Solend and xStep. That would
+   leave the same defect for the next unknown lending, staking, LP, redemption,
+   or position program.
+5. Do not build full protocol parsers for every Solana program. This remediation
+   requires a narrow positive allowlist/proof gate for copy eligibility, not a
+   production historical parser expansion.
+6. Genuine supported swap fixtures may remain copy eligible only when the
+   positive semantic gate proves a supported trade path and all existing
+   confidence/decimal/ambiguity conditions also pass.
+7. The Solend withdrawal/redemption and xStep stake fixtures MUST be ineligible.
+   Their research classification may remain an explicitly documented,
+   unverified balance-shape classification, or may become `UNKNOWN`; either is
+   acceptable if deterministic and never copy eligible.
+8. Bump the parser/versioned build identity because observable parser eligibility
+   output changes. Preserve immutable raw evidence, append-only derived-output
+   semantics, and deterministic reparse behavior. Do not rewrite historical raw
+   evidence.
+9. Do not weaken confidence thresholds, ambiguity handling, decimal checks,
+   provider gates, or any other existing safety control.
+
+## Required tests
+
+Add prospective regression tests that fail before the fix and pass after it.
+At minimum prove:
+
+1. The authentic Solend withdrawal/redemption fixture is not copy eligible.
+2. The authentic xStep stake fixture is not copy eligible.
+3. A one-negative/one-positive transaction from an unknown or unsupported
+   program is not copy eligible.
+4. Known genuine swap/trade golden fixtures remain eligible only when their
+   canonical raw evidence satisfies the positive semantic gate.
+5. Existing ambiguous, failed, NFT, LP/position, incomplete-decimal, or
+   otherwise ineligible cases remain ineligible.
+6. Reparse of identical canonical input under the new parser version is
+   deterministic.
+7. Every row that Phase 1.5 reports as copy eligible has an independently stated
+   semantic expectation derived from raw logs/program/instruction evidence, not
+   from the parser's own output.
+
+The tests must exercise production parser and eligibility code. Mocks may test
+boundaries but cannot be the only proof for the two authentic false-positive
+fixtures or for retained genuine-swap eligibility.
+
+## Evidence corrections and rerun
+
+Rerun the Phase 1.5 analysis under the corrected parser and update the new
+remediation evidence so that:
+
+- account-level balance-delta agreement is reported separately from semantic
+  classification/eligibility validation;
+- no text claims that 28 balance-delta agreements prove 28 semantic
+  classifications;
+- each copy-eligible row lists the independent raw semantic evidence supporting
+  eligibility;
+- the Solend withdrawal/redemption and xStep stake are explicitly shown as
+  ineligible;
+- Test A, Test B, Test D, the real input identities, and the honest historical
+  limitations are preserved unless a reproducible rerun changes a measured
+  value;
+- the conclusion remains exactly one MASTER_SPEC value. If no additional
+  blocking defect is introduced and the false eligibility is fixed, the
+  expected conclusion is
+  `HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS`.
+
+Do not claim that the Phase 1.5 sample proves full historical completeness or
+production-scale cost. Do not use live credentials or paid services to improve
+the result.
+
+## Mandatory validation
+
+Before handoff, run and record the exact commands and results for:
+
+1. targeted tests for the positive semantic eligibility gate;
+2. all Phase 1 parser/golden-fixture tests;
+3. all Phase 1.5 tests and the rerun analysis;
+4. the full repository test suite;
+5. Ruff lint and format checks;
+6. mypy;
+7. the tracked-file secret scan;
+8. migration/integration checks only if the authorized implementation changes
+   persistent schema or persistence behavior; no schema change is requested.
 
-- Use real Solana identities/evidence. Synthetic fixtures do not satisfy the
-  two required Phase 1.5 inputs.
-- Prefer already-preserved authentic evidence or free/public sources before
-  introducing any new dependency.
-- Do not enable or require a paid provider.
-- Do not request or access private keys, seed phrases, signing credentials, or
-  live-arm material.
-- A normal provider/API credential may not be entered or disclosed by the
-  implementation agent. If an optional source is unavailable without a local
-  operator credential, report that fact and evaluate other free paths.
-- Do not silently claim a token or wallet is verified when identity/provenance
-  cannot actually be established.
-
-If the required token and wallet **cannot** be established automatically, do
-not invent substitutes and do not turn this into an open-ended search project.
-Produce the exact required result:
-
-`BOOTSTRAP_TOKEN_INPUT_REQUIRED`
+Report environmental skips and failures honestly. Do not represent a missing
+credential, unavailable PG17 image, or unavailable live provider as a test PASS.
 
-Then create the Phase 1.5 checkpoint/bundle/handoff with the evidence showing
-what was attempted and **STOP**. This is a spec-defined blocked-input outcome,
-not permission to begin Phase 2 or manufacture data.
-
-## Test A — Early-buyer reconstruction
-
-For the verified historical token, attempt to recover early meaningful buyers
-using the free-first historical data paths actually available.
+## Required checkpoint, bundle, and handoff
 
-Report at minimum exactly what MASTER_SPEC requires:
+Create new immutable evidence files:
 
-- provider/source
-- venue
-- time range
-- transactions inspected
-- buyers recovered
-- earliest recovered activity
-- known gaps
-- estimated completeness
+- `orchestration/checkpoints/phase_1_5_remediation_1.md`
+- `orchestration/bundles/phase_1_5_remediation_1.txt`
 
-Important interpretation rules:
-
-- `estimated completeness` must be evidence-based and may be qualitative or a
-  bounded estimate when the available source cannot support a defensible exact
-  percentage. Do not manufacture precision.
-- Preserve failures, missing ranges, provider truncation, and ambiguous events
-  as explicit evidence rather than dropping them.
-- The purpose is to determine whether the path is usable, not to maximize the
-  recovered-buyer count.
-
-## Test B — Candidate-wallet historical reconstruction
+Do not overwrite prior checkpoints or bundles.
 
-For the verified candidate wallet, attempt to reconstruct the MASTER_SPEC
-required history dimensions:
+The new checkpoint must include:
 
-- wallet-level signatures
-- token-account activity
-- swaps
-- transfers
-- position events
-- ambiguous events
+1. exact instruction ID, target commit, implementation commits, and final commit;
+2. the frozen finding classification above and its disposition;
+3. implementation design and exact positive semantic evidence policy;
+4. before/after results for both authentic false-positive fixtures;
+5. the complete copy-eligible-row semantic oracle and raw evidence basis;
+6. corrected separation of delta arithmetic validation from semantic validation;
+7. rerun Tests A-D and exact `HISTORICAL_DATA_PATH` conclusion;
+8. all commands and results, including full-suite counts and skips;
+9. parser version/build identity and deterministic reparse evidence;
+10. remaining limitations, environmental deferrals, and
+    `HARDENING_BACKLOG`;
+11. secret/security state;
+12. deviations, if any;
+13. explicit STOP pending independent orchestrator audit.
 
-Use the existing deterministic Phase 1 parser and canonical raw evidence where
-applicable rather than creating a separate ad-hoc interpretation path solely
-for this spike.
+Update `docs/BUILD_STATE.md`, append `docs/DECISION_LOG.md`, and replace
+`orchestration/AGENT_HANDOFF.md` with a new handoff. The handoff must use a new
+`HANDOFF_ID` and exactly:
 
-Report:
+`LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-1-5-remediation-001`
 
-- what source(s) were queried/read;
-- the time range actually observed;
-- counts by major reconstructed event type;
-- gaps/truncation/retention limitations;
-- which required history dimensions are complete, partial, unavailable, or
-  ambiguous under the tested source path.
+Phase 1.5 may be implementation-agent-complete and awaiting review, but
+`last_orchestrator_approved_phase` MUST remain `1`.
 
-Do not infer missing history as zero activity.
+Every implementation-agent commit in this run must carry exactly one real
+terminal Git trailer recognized by `git interpret-trailers --parse`. Use this
+as the sole final paragraph:
 
-## Test C — Cross-validation
+`ARGUS-INSTRUCTION-ID: argus-phase-1-5-remediation-001`
 
-Validate **at least 20 concrete historical interpretations** against raw
-transaction evidence or an independent source, as required by MASTER_SPEC.
+Do not put `Co-Authored-By`, `Claude-Session`, or any other paragraph after
+that terminal trailer.
 
-A concrete interpretation is one specific reconstructed transaction/event
-claim (for example a swap, transfer, token-account event, or ambiguous event)
-whose underlying evidence can be independently checked. Do not inflate the
-count by treating many fields from one record as 20 separate interpretations.
+Push all authorized work, verify remote/local HEAD agreement and a clean
+worktree, then STOP. Do not modify this instruction file, self-authorize Phase
+1.5, begin Phase 2, or perform any other phase.
 
-For each checked interpretation preserve enough evidence to answer:
+## Prohibitions preserved
 
-- what ARGUS interpreted;
-- what evidence/source was used to check it;
-- whether it agreed, disagreed, or remained ambiguous;
-- reason for any disagreement/ambiguity.
-
-If fewer than 20 independently checkable interpretations exist for the chosen
-input/source path, report the actual number and treat the required Test C as
-not satisfied; do not duplicate observations to reach 20.
-
-## Test D — Cost and scaling feasibility
-
-Measure/report the actual resources consumed by this spike:
-
-- RPC calls
-- provider credits
-- archive bytes
-- BigQuery bytes, if any
-- elapsed processing time
-- disk usage
-
-Then provide a transparent scaling estimate for:
-
-- 100 wallets
-- 1,000 wallets
-
-Scaling estimates must state the assumption used. Linear extrapolation is
-acceptable as a simple feasibility estimate if clearly labeled and if the
-known provider/source behavior does not make that assumption obviously false.
-
-If BigQuery is used at all, retain the existing MASTER_SPEC BigQuery cost rule:
-perform a dry run first, record estimated bytes, enforce the configured maximum
-bytes billed, and never make unrestricted `SELECT *` queries against large
-historical tables. Do not incur paid BigQuery usage without explicit human/
-orchestrator approval.
-
-## Required Phase 1.5 conclusion
-
-After Tests A-D, record **exactly one** of:
-
-- `HISTORICAL_DATA_PATH = PASS`
-- `HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS`
-- `HISTORICAL_DATA_PATH = FAIL`
-
-Interpret them as follows without changing the MASTER_SPEC gate:
-
-- `PASS`: the tested free-first path reconstructs the required evidence well
-  enough to justify proceeding to later historical archaeology, with no
-  material feasibility limitation found in this spike.
-- `PASS_WITH_LIMITATIONS`: the path is usable enough to proceed, but concrete
-  source coverage, completeness, cost, retention, ambiguity, or scaling
-  limitations must be carried forward explicitly.
-- `FAIL`: the tested free-first architecture cannot support the needed
-  historical evidence under the observed constraints. **STOP**; do not rescue
-  the result by silently switching to paid data or beginning Phase 2 anyway.
-
-Do not fake completeness. A limitation is not a failure merely because it would
-be nice to have better data; judge whether it prevents the historical evidence
-ARGUS actually needs.
-
-## Existing Phase 1 environmental deferrals during this spike
-
-Do not spend Phase 1.5 repeatedly trying to close environmental items that the
-current sandbox is known to block unless the environment has actually changed
-and the check can be run normally.
-
-Carry forward, honestly:
-
-- `LIVE_HELIUS_RPC_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
-- `LIVE_HELIUS_WSS_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
-- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
-
-If the environment unexpectedly permits one of these checks, it MAY be run and
-recorded, but it is not the mission of Phase 1.5 and must not delay the
-historical feasibility work. All three remain mandatory before live readiness.
-
-## Mandatory evidence and tests
-
-This is a data-feasibility phase. Prefer tests that prove the exact transformations
-and interpretations actually used; do not create hundreds of unrelated unit
-tests to inflate counts.
-
-Before handoff:
-
-1. Run the new/relevant Phase 1.5 tests.
-2. Run the existing full repository suite and report pass/fail honestly.
-3. Run Ruff and mypy under the repository's established commands.
-4. Run relevant migration checks only if this phase changes persistent schema.
-   Do not create a schema migration merely to have one.
-5. Run the tracked-file secret scan and verify no credential or secret was
-   committed.
-6. Re-run/replay Phase 1 parser/golden tests if the spike changes any parsing
-   or provider-normalization code. Any unexpected existing golden change must
-   fail until reviewed.
-7. Record exact input identities, source paths/endpoints, time ranges, and
-   reproducibility metadata sufficient for the orchestrator to reproduce the
-   conclusion from the committed evidence where practical.
-
-A network/source limitation should be reported as a limitation or blocker, not
-masked with mocks and called historical validation. Mocks may test code paths;
-they do not satisfy Tests A-C.
-
-## Required checkpoint/handoff contract
-
-At completion create **new** immutable evidence files:
-
-- `orchestration/checkpoints/phase_1_5.md`
-- `orchestration/bundles/phase_1_5.txt`
-
-Do not overwrite any prior checkpoint or bundle.
-
-The checkpoint must include, clearly separated:
-
-1. identity/scope and exact commit;
-2. verified token and wallet inputs, or `BOOTSTRAP_TOKEN_INPUT_REQUIRED`;
-3. Test A result and evidence;
-4. Test B result and evidence;
-5. Test C count/results and disagreements;
-6. Test D measured usage plus 100/1,000-wallet scaling estimates;
-7. exact `HISTORICAL_DATA_PATH` conclusion when the spike reaches that gate;
-8. source/completeness limitations;
-9. commands/tests actually run;
-10. deviations from this instruction, if any;
-11. known bugs/debt split into blocking vs `HARDENING_BACKLOG`;
-12. security/secret state;
-13. environmental deferrals carried forward;
-14. explicit STOP / next action requiring orchestrator review.
-
-Update `docs/BUILD_STATE.md`, append a new `docs/DECISION_LOG.md` entry for the
-Phase 1 approval/Phase 1.5 outcome as appropriate, and update
-`orchestration/AGENT_HANDOFF.md`.
-
-The handoff must use a new `HANDOFF_ID` and exactly:
-
-`LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-1-5-001`
-
-At end of a completed Phase 1.5 implementation/spike, durable state may report
-Phase 1.5 as implementation-agent-complete and awaiting orchestrator review,
-but MUST keep `last_orchestrator_approved_phase: 1` until a later orchestrator
-instruction explicitly approves Phase 1.5.
-
-Every commit created during this run must use the sole final trailer paragraph:
-
-`ARGUS-INSTRUCTION-ID: argus-phase-1-5-001`
-
-Do not place any paragraph after it.
-
-Push all authorized work, verify remote/local HEAD agreement and a clean worktree,
-then **STOP**. Do not begin Phase 2, even if
-`HISTORICAL_DATA_PATH = PASS` or `PASS_WITH_LIMITATIONS`.
+This instruction does not authorize any mainnet trade, canary, transaction
+broadcast, signing/private-key/seed access, credential entry or disclosure,
+paid-provider upgrade or usage, live arming, threshold relaxation, evidence
+rewrite, phase skip, or work outside the remediation above.
