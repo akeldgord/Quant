@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -83,10 +83,19 @@ class HeliusRpcClient:
         self._usage_recorder = usage_recorder
         self._clock = clock or Clock()
 
-    async def _rpc(self, method: str, params: list[Any]) -> Any:
+    async def _rpc[T](self, method: str, params: list[Any], *, validate: Callable[[Any], T]) -> T:
+        # Phase 1 remediation round 3, finding #3: the caller's full nested
+        # contract validation (``validate``) runs *inside* this single
+        # accounted operation, not after it returns. Previously each public
+        # method re-validated the raw ``result`` after ``_rpc`` had already
+        # returned -- so a malformed method-specific shape left an "ok"
+        # usage row behind and only then raised. Now a malformed nested
+        # result is classified as a genuine terminal outcome of this same
+        # call (see ``send_with_usage``'s ``process`` contract), never a
+        # second, unaccounted failure after an "ok" was already recorded.
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
 
-        def _process(response: httpx.Response) -> Any:
+        def _process(response: httpx.Response) -> T:
             response.raise_for_status()
             data = response.json()
             if "error" in data:
@@ -101,7 +110,7 @@ class HeliusRpcClient:
                     f"{method}: malformed response, missing both 'result' and 'error': {data!r}",
                     usage_status="contract_error",
                 )
-            return data["result"]
+            return validate(data["result"])
 
         return await send_with_usage(
             lambda: self._http.post(
@@ -117,18 +126,25 @@ class HeliusRpcClient:
         )
 
     async def get_transaction(self, signature: str) -> dict[str, Any]:
-        result: dict[str, Any] = await self._rpc(
+        def _validate(result: Any) -> dict[str, Any]:
+            if not isinstance(result, dict) or "meta" not in result or "transaction" not in result:
+                raise HeliusRpcError(
+                    f"getTransaction: malformed response for {signature!r}, missing 'meta'/"
+                    f"'transaction': {result!r}",
+                    usage_status="contract_error",
+                )
+            if not isinstance(result["meta"], dict):
+                raise HeliusRpcError(
+                    f"getTransaction: 'meta' is not an object: {result['meta']!r}",
+                    usage_status="contract_error",
+                )
+            return result
+
+        return await self._rpc(
             "getTransaction",
             [signature, {"maxSupportedTransactionVersion": 0, "encoding": "json"}],
+            validate=_validate,
         )
-        if not isinstance(result, dict) or "meta" not in result or "transaction" not in result:
-            raise HeliusRpcError(
-                f"getTransaction: malformed response for {signature!r}, missing 'meta'/"
-                f"'transaction': {result!r}"
-            )
-        if not isinstance(result["meta"], dict):
-            raise HeliusRpcError(f"getTransaction: 'meta' is not an object: {result['meta']!r}")
-        return result
 
     async def get_signatures_for_address(
         self,
@@ -143,113 +159,150 @@ class HeliusRpcClient:
             options["until"] = until_signature
         if before_signature is not None:
             options["before"] = before_signature
-        result = await self._rpc("getSignaturesForAddress", [wallet_address, options])
-        if not isinstance(result, list):
-            raise HeliusRpcError(f"getSignaturesForAddress: expected a list, got {result!r}")
-        entries = []
-        for entry in result:
-            if not isinstance(entry, dict) or "signature" not in entry or "slot" not in entry:
-                raise HeliusRpcError(
-                    f"getSignaturesForAddress: malformed entry, missing 'signature'/'slot': {entry!r}"
-                )
-            if not isinstance(entry["signature"], str) or not isinstance(entry["slot"], int):
-                raise HeliusRpcError(
-                    f"getSignaturesForAddress: 'signature'/'slot' have wrong type: {entry!r}"
-                )
-            block_time_raw = entry.get("blockTime")
-            if block_time_raw is not None and not isinstance(block_time_raw, int):
-                raise HeliusRpcError(f"getSignaturesForAddress: non-integer blockTime: {entry!r}")
-            entries.append(
-                SignatureInfo(
-                    signature=entry["signature"],
-                    slot=entry["slot"],
-                    block_time=(
-                        datetime.fromtimestamp(block_time_raw, tz=UTC)
-                        if block_time_raw is not None
-                        else None
-                    ),
-                    err=entry.get("err"),
-                )
-            )
-        return entries
 
-    async def get_signature_statuses(self, signatures: list[str]) -> list[SignatureStatusInfo]:
-        result = await self._rpc(
-            "getSignatureStatuses", [signatures, {"searchTransactionHistory": True}]
-        )
-        if not isinstance(result, dict) or "value" not in result:
-            raise HeliusRpcError(
-                f"getSignatureStatuses: malformed response, missing 'value': {result!r}"
-            )
-        values = result["value"]
-        if not isinstance(values, list) or len(values) != len(signatures):
-            raise HeliusRpcError(
-                f"getSignatureStatuses: expected {len(signatures)} status entries, got {values!r}"
-            )
-        statuses = []
-        for signature, entry in zip(signatures, values, strict=True):
-            if entry is None:
-                statuses.append(
-                    SignatureStatusInfo(
-                        signature=signature, confirmation_status=None, err=None, slot=None
+        def _validate(result: Any) -> list[SignatureInfo]:
+            if not isinstance(result, list):
+                raise HeliusRpcError(
+                    f"getSignaturesForAddress: expected a list, got {result!r}",
+                    usage_status="contract_error",
+                )
+            entries = []
+            for entry in result:
+                if not isinstance(entry, dict) or "signature" not in entry or "slot" not in entry:
+                    raise HeliusRpcError(
+                        "getSignaturesForAddress: malformed entry, missing "
+                        f"'signature'/'slot': {entry!r}",
+                        usage_status="contract_error",
+                    )
+                if not isinstance(entry["signature"], str) or not isinstance(entry["slot"], int):
+                    raise HeliusRpcError(
+                        f"getSignaturesForAddress: 'signature'/'slot' have wrong type: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                block_time_raw = entry.get("blockTime")
+                if block_time_raw is not None and not isinstance(block_time_raw, int):
+                    raise HeliusRpcError(
+                        f"getSignaturesForAddress: non-integer blockTime: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                entries.append(
+                    SignatureInfo(
+                        signature=entry["signature"],
+                        slot=entry["slot"],
+                        block_time=(
+                            datetime.fromtimestamp(block_time_raw, tz=UTC)
+                            if block_time_raw is not None
+                            else None
+                        ),
+                        err=entry.get("err"),
                     )
                 )
-                continue
-            if not isinstance(entry, dict):
-                raise HeliusRpcError(f"getSignatureStatuses: malformed status entry: {entry!r}")
-            confirmation_status = entry.get("confirmationStatus")
-            if confirmation_status is not None and confirmation_status not in (
-                "processed",
-                "confirmed",
-                "finalized",
-            ):
+            return entries
+
+        return await self._rpc(
+            "getSignaturesForAddress", [wallet_address, options], validate=_validate
+        )
+
+    async def get_signature_statuses(self, signatures: list[str]) -> list[SignatureStatusInfo]:
+        def _validate(result: Any) -> list[SignatureStatusInfo]:
+            if not isinstance(result, dict) or "value" not in result:
                 raise HeliusRpcError(
-                    f"getSignatureStatuses: unknown confirmationStatus {confirmation_status!r}"
+                    f"getSignatureStatuses: malformed response, missing 'value': {result!r}",
+                    usage_status="contract_error",
                 )
-            statuses.append(
-                SignatureStatusInfo(
-                    signature=signature,
-                    confirmation_status=confirmation_status,
-                    err=entry.get("err"),
-                    slot=entry.get("slot"),
+            values = result["value"]
+            if not isinstance(values, list) or len(values) != len(signatures):
+                raise HeliusRpcError(
+                    f"getSignatureStatuses: expected {len(signatures)} status entries, "
+                    f"got {values!r}",
+                    usage_status="contract_error",
                 )
-            )
-        return statuses
+            statuses = []
+            for signature, entry in zip(signatures, values, strict=True):
+                if entry is None:
+                    statuses.append(
+                        SignatureStatusInfo(
+                            signature=signature, confirmation_status=None, err=None, slot=None
+                        )
+                    )
+                    continue
+                if not isinstance(entry, dict):
+                    raise HeliusRpcError(
+                        f"getSignatureStatuses: malformed status entry: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                confirmation_status = entry.get("confirmationStatus")
+                if confirmation_status is not None and confirmation_status not in (
+                    "processed",
+                    "confirmed",
+                    "finalized",
+                ):
+                    raise HeliusRpcError(
+                        f"getSignatureStatuses: unknown confirmationStatus {confirmation_status!r}",
+                        usage_status="contract_error",
+                    )
+                statuses.append(
+                    SignatureStatusInfo(
+                        signature=signature,
+                        confirmation_status=confirmation_status,
+                        err=entry.get("err"),
+                        slot=entry.get("slot"),
+                    )
+                )
+            return statuses
+
+        return await self._rpc(
+            "getSignatureStatuses",
+            [signatures, {"searchTransactionHistory": True}],
+            validate=_validate,
+        )
 
     async def get_balance(self, wallet_address: str) -> int:
-        result = await self._rpc("getBalance", [wallet_address])
-        if (
-            not isinstance(result, dict)
-            or "value" not in result
-            or not isinstance(result["value"], int)
-        ):
-            raise HeliusRpcError(
-                f"getBalance: malformed response, expected {{'value': int}}: {result!r}"
-            )
-        value: int = result["value"]
-        return value
+        def _validate(result: Any) -> int:
+            if (
+                not isinstance(result, dict)
+                or "value" not in result
+                or not isinstance(result["value"], int)
+            ):
+                raise HeliusRpcError(
+                    f"getBalance: malformed response, expected {{'value': int}}: {result!r}",
+                    usage_status="contract_error",
+                )
+            value: int = result["value"]
+            return value
+
+        return await self._rpc("getBalance", [wallet_address], validate=_validate)
 
     async def get_token_accounts(self, wallet_address: str) -> list[dict[str, Any]]:
-        result = await self._rpc(
+        def _validate(result: Any) -> list[dict[str, Any]]:
+            if (
+                not isinstance(result, dict)
+                or "value" not in result
+                or not isinstance(result["value"], list)
+            ):
+                raise HeliusRpcError(
+                    "getTokenAccountsByOwner: malformed response, expected "
+                    f"{{'value': list}}: {result!r}",
+                    usage_status="contract_error",
+                )
+            value: list[dict[str, Any]] = result["value"]
+            return value
+
+        return await self._rpc(
             "getTokenAccountsByOwner",
             [wallet_address, {"programId": TOKEN_PROGRAM_ID}, {"encoding": "jsonParsed"}],
+            validate=_validate,
         )
-        if (
-            not isinstance(result, dict)
-            or "value" not in result
-            or not isinstance(result["value"], list)
-        ):
-            raise HeliusRpcError(
-                f"getTokenAccountsByOwner: malformed response, expected {{'value': list}}: {result!r}"
-            )
-        value: list[dict[str, Any]] = result["value"]
-        return value
 
     async def get_slot(self) -> int:
-        result = await self._rpc("getSlot", [])
-        if not isinstance(result, int):
-            raise HeliusRpcError(f"getSlot: expected an integer, got {result!r}")
-        return result
+        def _validate(result: Any) -> int:
+            if not isinstance(result, int):
+                raise HeliusRpcError(
+                    f"getSlot: expected an integer, got {result!r}", usage_status="contract_error"
+                )
+            return result
+
+        return await self._rpc("getSlot", [], validate=_validate)
 
 
 class WebSocketConnection(Protocol):

@@ -474,35 +474,6 @@ async def test_jupiter_unsigned_order_missing_swap_transaction_rejected() -> Non
     await http_client.aclose()
 
 
-async def test_helius_get_signatures_malformed_entry_type_rejected() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": [{"signature": "sig", "slot": "not-an-int"}],
-            },
-        )
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = HeliusRpcClient("fake-key", http_client=http_client)
-    with pytest.raises(HeliusRpcError, match="wrong type"):
-        await client.get_signatures_for_address("SomeWallet")
-    await http_client.aclose()
-
-
-async def test_helius_signature_statuses_length_mismatch_rejected() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": []}})
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = HeliusRpcClient("fake-key", http_client=http_client)
-    with pytest.raises(HeliusRpcError, match="expected 1 status entries"):
-        await client.get_signature_statuses(["sig-1"])
-    await http_client.aclose()
-
-
 # --- Finding #7: usage accounting must survive transport exhaustion ----
 
 
@@ -723,6 +694,178 @@ async def test_usage_records_ok_exactly_once_for_a_real_success() -> None:
     client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
     result = await client.get_slot()
     assert result == 42
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "ok"
+    await http_client.aclose()
+
+
+# --- R3 finding #3: every Helius method's nested contract validation ---
+# --- runs inside the single accounted operation -- a malformed method- ---
+# --- specific result must never leave behind an "ok" usage row. --------
+
+
+async def test_helius_get_transaction_missing_meta_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"transaction": {}}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="missing 'meta'"):
+        await client.get_transaction("some-signature")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_transaction_meta_not_object_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"meta": "not-an-object", "transaction": {}},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="'meta' is not an object"):
+        await client.get_transaction("some-signature")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_signatures_malformed_entry_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": [{"signature": "sig", "slot": "not-an-int"}],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="wrong type"):
+        await client.get_signatures_for_address("SomeWallet")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_signatures_result_not_a_list_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": "not-a-list"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="expected a list"):
+        await client.get_signatures_for_address("SomeWallet")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_signature_statuses_length_mismatch_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": []}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="expected 1 status entries"):
+        await client.get_signature_statuses(["sig-1"])
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_signature_statuses_unknown_confirmation_status_records_contract_error() -> (
+    None
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"value": [{"confirmationStatus": "bogus"}]},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="unknown confirmationStatus"):
+        await client.get_signature_statuses(["sig-1"])
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_balance_malformed_response_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": "nope"}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="getBalance: malformed response"):
+        await client.get_balance("SomeWallet")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_token_accounts_happy_path_records_ok() -> None:
+    accounts = [{"pubkey": "acct-1", "account": {"data": {}}}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": accounts}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    result = await client.get_token_accounts("SomeWallet")
+    assert result == accounts
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "ok"
+    await http_client.aclose()
+
+
+async def test_helius_get_token_accounts_malformed_response_records_contract_error_not_ok() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": "nope"}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="getTokenAccountsByOwner: malformed response"):
+        await client.get_token_accounts("SomeWallet")
+    assert len(usage.requests) == 1
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_transaction_happy_path_records_ok_and_returns_result() -> None:
+    transaction_result = {"meta": {"fee": 5000}, "transaction": {"message": {}, "signatures": []}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": transaction_result})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    result = await client.get_transaction("some-signature")
+    assert result == transaction_result
     assert len(usage.requests) == 1
     assert usage.requests[0].status == "ok"
     await http_client.aclose()
