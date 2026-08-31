@@ -58,7 +58,6 @@ further findings:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import json
 from collections.abc import Awaitable, Callable
@@ -67,8 +66,11 @@ from typing import Protocol
 from argus.clock import Clock
 from argus.ingestion.clock_monitor import PersistentClockMonitor
 from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationTrigger
+from argus.logging import get_logger
 from argus.providers import ChainProvider, LiveChainStream
 from argus.providers.usage import StreamingUsageRecord, UsageRecorder
+
+_logger = get_logger(component="argus.ingestion.manager")
 
 
 class WalletSource(Protocol):
@@ -397,8 +399,20 @@ class IngestionManager:
         if self._streaming_usage_recorder is None:
             return
         # Usage accounting must never mask a real ingestion outcome --
-        # same policy as argus.providers.http.send_with_usage.
-        with contextlib.suppress(Exception):
+        # same policy as argus.providers.http.send_with_usage. Phase 1
+        # remediation round 3, finding #4: a recorder failure used to be
+        # swallowed by contextlib.suppress(Exception) with no signal
+        # whatsoever -- not even a log line -- so an operator had no way to
+        # know streaming usage accounting had silently stopped working.
+        # This now emits the same structured `usage_recorder_failed`
+        # warning argus.providers.http._record_best_effort emits for the
+        # HTTP path: safe metadata only (provider/endpoint/request_class/
+        # the delta shape actually attempted/error class+message), no
+        # wallet-secret or credential material, and never anything that
+        # replaces or masks the real stream outcome this call is
+        # accounting for -- the caller's control flow is untouched either
+        # way.
+        try:
             await self._streaming_usage_recorder.record_streaming(
                 StreamingUsageRecord(
                     provider=self._provider_name,
@@ -411,4 +425,17 @@ class IngestionManager:
                     bytes_received=bytes_delta or None,
                     estimated_streaming_credits=None,
                 )
+            )
+        except Exception as exc:  # noqa: BLE001 - deliberately never re-raised
+            _logger.warning(
+                "usage_recorder_failed",
+                provider=self._provider_name,
+                wallet_address=wallet_address,
+                request_class="stream",
+                connection_delta=connection_delta,
+                subscription_delta=subscription_delta,
+                reconnect_delta=reconnect_delta,
+                bytes_delta=bytes_delta,
+                error_class=type(exc).__name__,
+                error=str(exc),
             )

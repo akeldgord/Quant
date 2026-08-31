@@ -600,6 +600,129 @@ async def test_streaming_usage_recorded_from_manager_real_code_path() -> None:
     assert len(reconnect_records) >= 1
 
 
+# --- Phase 1 remediation round 3, finding #4: a streaming usage-recorder
+# --- failure must be a visible, non-secret operational signal -- never
+# --- silently swallowed, and never allowed to corrupt the real stream
+# --- outcome or state machine.
+
+
+class _FailingStreamingUsageRecorder:
+    """`record_streaming` always fails; `record_request` is unused by the
+    manager and is never expected to be called."""
+
+    async def record_request(self, record: RequestUsageRecord) -> None:
+        raise NotImplementedError
+
+    async def record_streaming(self, record: StreamingUsageRecord) -> None:
+        raise RuntimeError("streaming usage DB is down")
+
+
+async def test_streaming_recorder_connection_subscription_failure_is_visible(capsys) -> None:  # noqa: ANN001
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        streaming_usage_recorder=_FailingStreamingUsageRecorder(),
+    )
+
+    await manager._record_streaming(WALLET_A, connection_delta=1, subscription_delta=1)
+
+    captured = capsys.readouterr()
+    assert "usage_recorder_failed" in captured.out
+    assert "streaming usage DB is down" in captured.out
+    assert "fake_provider" in captured.out
+    assert WALLET_A in captured.out
+    assert "connection_delta" in captured.out and "1" in captured.out
+    assert "HELIUS_API_KEY" not in captured.out
+
+
+async def test_streaming_recorder_reconnect_failure_is_visible(capsys) -> None:  # noqa: ANN001
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        streaming_usage_recorder=_FailingStreamingUsageRecorder(),
+    )
+
+    await manager._record_streaming(WALLET_A, reconnect_delta=1)
+
+    captured = capsys.readouterr()
+    assert "usage_recorder_failed" in captured.out
+    assert "streaming usage DB is down" in captured.out
+    assert "reconnect_delta" in captured.out
+
+
+async def test_streaming_recorder_byte_accounting_failure_is_visible(capsys) -> None:  # noqa: ANN001
+    provider = FakeChainProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        streaming_usage_recorder=_FailingStreamingUsageRecorder(),
+    )
+
+    await manager._record_streaming(WALLET_A, bytes_delta=4096)
+
+    captured = capsys.readouterr()
+    assert "usage_recorder_failed" in captured.out
+    assert "streaming usage DB is down" in captured.out
+    assert "bytes_delta" in captured.out and "4096" in captured.out
+
+
+async def test_streaming_recorder_failure_never_masks_the_real_stream_outcome() -> None:
+    """The full manager run must complete exactly as it would with a
+    working recorder -- events observed, watermark advanced, reconnect
+    handled -- with a permanently-failing streaming usage recorder wired
+    in throughout. A recorder failure is an operational-visibility signal,
+    never a change to ingestion's real outcome or control flow."""
+    provider = FakeChainProvider()
+    provider.add_transaction("sig-A", slot=1, raw_payload=_valid_raw_payload())
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    stream = FakeLiveStream()
+    stream.script(
+        WALLET_A,
+        [
+            StreamNotification(wallet_address=WALLET_A, signature="sig-A", slot=1),
+            ConnectionError("dropped"),
+        ],
+    )
+    manager = _manager(
+        provider,
+        stream,
+        ledger,
+        store,
+        (WALLET_A,),
+        streaming_usage_recorder=_FailingStreamingUsageRecorder(),
+    )
+
+    stop_event = asyncio.Event()
+    await _run_until(
+        stop_event, manager, lambda: ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows
+    )
+
+    assert ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows
+    watermark = await store.get(WALLET_A)
+    assert watermark is not None
+
+
 async def test_manager_never_signs_executes_or_broadcasts() -> None:
     """No live-entry/signing/execution/broadcast path exists anywhere on
     IngestionManager -- asserted directly, not just by absence of use."""
