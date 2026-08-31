@@ -1,7 +1,7 @@
 ARGUS ORCHESTRATOR REVIEW BUNDLE
 instruction_id: argus-phase-1-5-remediation-002
 STATUS: HISTORICAL_DATA_PATH_PASS_WITH_LIMITATIONS
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: f4ed7893849128257b3b5e62f44b93b779ee50c8
 TEST_STATUS: 95/95 golden parser tests passed (up from 46); 7/7 Phase 1.5
   tests passed (up from 6); full repository suite 613/613 passed, 0
   failed, 0 unexplained skipped; ruff clean; mypy clean.
@@ -41,8 +41,8 @@ SCOPE: Phase 1.5 remediation round 2, per orchestrator instruction
   that a swap instruction actually executed -- the same programs also
   execute genuine non-trade instructions.
 STATUS: HISTORICAL_DATA_PATH_PASS_WITH_LIMITATIONS
-UTC_TIMESTAMP: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+UTC_TIMESTAMP: 2026-08-31T23:41:05Z
+GIT_COMMIT: f4ed7893849128257b3b5e62f44b93b779ee50c8
 TARGET_COMMIT: 5d85848ab5bff397a192a0868ffcf1077b691706
 AUTHORIZED_PHASE: 1.5
 APPROVES_PHASE: NONE
