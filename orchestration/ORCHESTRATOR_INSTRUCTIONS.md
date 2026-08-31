@@ -2,333 +2,398 @@
 
 **OWNER: ARGUS ORCHESTRATOR.** The implementation agent must not modify this
 file. Execute only the ACTIVE instruction below. MASTER_SPEC.md remains
-authoritative except where this instruction explicitly adds stricter
-acceptance detail.
+authoritative except where this instruction adds stricter acceptance detail.
 
 ---
 
-INSTRUCTION_ID: argus-phase-1-remediation-004
-ISSUED_AT: 2026-08-31T12:25:32Z
-TARGET_COMMIT: a589e15c29937b140ae96bdfc2d75de62a9109c2
-AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_4_ONLY
+INSTRUCTION_ID: argus-phase-1-remediation-005
+ISSUED_AT: 2026-08-31T15:05:00Z
+TARGET_COMMIT: d1b7ef0ae9c4d40ada15cac60fb7931bf8de2376
+AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_5_ONLY
 AUTHORIZED_PHASE: 1
 APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
 ## Independent audit disposition
 
-- Phase 0 remains approved as
-  `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`.
-- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` remains open
-  and blocks live readiness, not this remediation.
-- Phase 1 remediation round 3 is **not approved**. Its checkpoint correctly
-  reports `STATUS: PARTIAL`, but its 17/18 scoring overstates fixture
-  coverage and several runtime acceptance claims.
-- Phase 1 remains unapproved. Phase 1.5 and every later phase remain forbidden.
+- Phase 0 remains approved as PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
+- PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK remains open and
+  blocks live readiness, not this remediation.
+- Phase 1 remediation round 4 is rejected as FAIL_REMEDIATION_REQUIRED.
+  The builder honestly reported one partial criterion, but independent review
+  found additional untested and unsafe behavior described below.
+- Phase 1 remains unapproved. Phase 1.5 and all later phases remain blocked.
 - This instruction approves no phase and authorizes only the listed Phase 1
   remediation.
-- No live trade, mainnet canary, signing, private-key or seed access,
-  credential disclosure or entry, paid-provider upgrade, live arming,
-  threshold relaxation, or phase skip is authorized.
+- No live trade, mainnet canary, transaction construction or broadcast,
+  signing, private-key or seed access, credential disclosure or entry,
+  paid-provider upgrade, live arming, threshold relaxation, or phase skip is
+  authorized.
 
 ## Mandatory session start
 
 Before changing code:
 
-1. Run `git status --porcelain`, `git pull --ff-only`, and
-   `git log -5 --oneline`.
+1. Run git status --porcelain, git pull --ff-only, and git log -5 --oneline.
 2. Read the six canonical files in the exact PROTOCOL.md order.
-3. Verify the checked-out instruction commit is exactly one
-   instruction-file-only commit whose parent is the exact TARGET_COMMIT above.
+3. Verify this instruction is in exactly one instruction-file-only commit whose
+   parent is the exact TARGET_COMMIT above.
 4. Verify the worktree is clean and local HEAD equals the remote branch.
-5. Verify BUILD_STATE still has `current_phase: 1`,
-   `last_orchestrator_approved_phase: 0`, and
-   `awaiting_orchestrator_review: true`.
+5. Verify BUILD_STATE still has current_phase 1,
+   last_orchestrator_approved_phase 0, and awaiting_orchestrator_review true.
 6. If any precondition is false, stop with an honest PARTIAL/FAIL handoff.
 
-## Audit findings that must be remediated
+## Required engineering approach
 
-### 1. Real-chain coverage is six of nine categories, not seven
+Treat this as one consolidated repair pass. Before implementation, build a
+requirement-to-code-to-test matrix covering every finding and every Phase 1
+MASTER_SPEC requirement. Inspect production call paths, not only helper tests.
+For each fix, add a negative/adversarial test that fails on the submitted
+round-4 implementation and passes only after the fix. Preserve all correct
+round-4 behavior, including parser-artifact selection, current-artifact reparse
+convergence, visible missing-finalization failure, pagination boundary checks,
+session isolation, restart recovery, append-only evidence, and provider
+accounting.
 
-The submitted `real_mainnet_ambiguous_multi_asset` fixture is not an
-ambiguous-parser fixture. The parser classifies it `TRANSFER_IN` with
-confidence `1.000`. It therefore does not exercise the required ambiguous
-transaction path, does not prove `UNKNOWN` handling, and does not prove that
-an ambiguous real transaction cannot create a live-copy signal.
+Do not satisfy an acceptance item by changing wording, weakening a category,
+renaming a fixture, or asserting a builder-generated value as an independent
+oracle.
 
-Correct all checkpoint, handoff, BUILD_STATE, provenance, and test claims.
-The genuinely supported real-chain categories are currently:
+## Audit findings and required remediation
 
-- simple transfer;
-- SOL to token;
-- token to SOL;
-- token to USDC;
-- multi-hop swap;
-- partial sell.
+### 1. Golden expectations remain circular and incomplete
 
-The still-open categories are:
+RealChainFixtureRecord and its importer currently store only expected and
+observed classification/confidence. validate_real_chain_fixtures compares only
+those fields. It does not independently assert copy eligibility, wallet
+perspective, canonical asset deltas, input/output mint, raw/UI material
+amounts, network fee, or semantic evidence. This does not satisfy the round-4
+instruction and cannot detect a confidently wrong parse.
 
-- genuinely ambiguous transaction that the parser classifies `UNKNOWN` and
-  marks ineligible;
-- multiple token-account / LP-style action;
-- failed on-chain transaction with non-null `meta.err`.
+Implement a typed immutable independent expectation for every wallet
+perspective. At minimum it must include:
 
-Keep the structurally multi-asset DCA-close fixture as an additional useful
-fixture, but do not count it as the ambiguous category. Do not rename a
-confident result as ambiguous.
+- independently reviewed classification and is_copy_eligible;
+- wallet perspective and the method used to establish it;
+- ordered canonical asset deltas with mint, account context where material,
+  raw integer amount, decimals, and exact UI amount;
+- expected input/output mint and material input/output amounts where applicable;
+- network fee and failed-transaction status;
+- confidence expectation or bounded rule;
+- semantic rationale and the evidence used by the reviewer.
 
-Search further only where evidence is credible. If any category remains
-unavailable, keep it NOT TESTED/PARTIAL. Do not weaken the category semantics
-or fabricate evidence.
+Keep parser-observed output separate. Importing may record observed output but
+must never promote it to expected truth. Offline validation must compare every
+applicable canonical field. A parser mismatch may be preserved as a quarantined
+research fixture, but it must fail golden validation and cannot count as passing
+category coverage.
 
-### 2. Imported upstream provenance is not byte-for-byte reproducible
+### 2. Provenance is not fully bound or tamper-evident
 
-Independent review fetched
-`0xjeffro/tx-parser@475b1ebff79a2f41ec966919fdefa01f11f6c5d7`
-`solana/data/pumpfun_buy_0.json`. The upstream file is a single-element JSON
-array, while ARGUS stores only the unwrapped object. Parsed payloads match, but
-the provenance record:
+The round-4 provenance records useful hashes, but metadata such as upstream
+repository, commit, path, license, and reviewer method is not cryptographically
+bound to the preserved source. Editing those fields can still pass. Source
+container/envelope type and license evidence are also incomplete.
 
-- has no upstream Git blob SHA;
-- has no SHA-256 of the exact upstream file bytes;
-- does not preserve the exact upstream bytes;
-- records `sanitization_transform` as “canonicalized JSON formatting only,”
-  omitting the array-unwrapping transform;
-- sets `original_sha256` from the already-unwrapped import input, not the
-  exact upstream file.
+For each authentic fixture, preserve an offline-verifiable evidence chain that
+binds:
 
-The same defect applies to the six new `0xjeffro/tx-parser` fixtures. The
-older fixtures also lack an upstream blob identity.
+- repository identity, immutable commit, tree/path, and Git blob identity;
+- exact original bytes and their SHA-256;
+- source container/envelope type;
+- ordered deterministic transforms, with input and output hash per step;
+- exact final sanitized bytes and SHA-256;
+- license file path, exact license/notice bytes or immutable blob, its hash,
+  compatibility decision, and required attribution;
+- wallet perspective, independent reviewer method, semantic evidence, and
+  expectation-object hash.
 
-Extend the provenance schema and importer/validator to preserve and verify:
+Where Git objects are used, preserve enough immutable commit/tree/blob evidence
+to prove that the declared path at the declared commit resolves to the declared
+blob. A bare metadata string is insufficient. The offline validator must
+rebuild the sanitized fixture and fail closed on tampering with repository,
+commit, path, tree/blob, source bytes, source hash, transform order or content,
+license path/content/hash/notice, reviewer evidence, expectation, or final
+output. If a property can only be verified online, report it separately and do
+not count it as offline PASS.
 
-- exact upstream repository, commit, path, and Git blob SHA;
-- SHA-256 of the exact upstream file bytes before any transformation;
-- source container/envelope format;
-- an ordered, deterministic transform manifest, including single-element
-  array extraction and JSON-RPC `result` extraction;
-- SHA-256 after every transform and of the final sanitized fixture;
-- license identity and required attribution/notice;
-- independent semantic expectation evidence.
+Add direct tamper tests for every field group above.
 
-Either preserve the exact upstream bytes in a content-addressed source area or
-provide an equivalent offline-verifiable artifact. The validator must rebuild
-the sanitized fixture from those exact source bytes and fail on any source,
-transform, provenance, or output mismatch. Re-import all current real-chain
-fixtures through this corrected path. Add tamper tests for upstream bytes,
-blob SHA, source hash, transform order, path/commit, and sanitized output.
+### 3. All nine authentic real-chain fixture categories are still required
 
-### 3. Golden expectations are generated by the parser under test
+The truthful round-4 status is six of nine. The missing categories are:
 
-`import_real_chain_fixture()` runs the current parser and writes that output
-as the expected classification/confidence. Validation then reruns the same
-parser and compares it with its own saved result. This detects later drift but
-cannot detect an existing misclassification. The confidently classified
-“ambiguous” fixture demonstrates the circularity.
+- genuinely ambiguous multi-asset behavior that must be UNKNOWN and ineligible;
+- multiple-token-account or LP-style behavior;
+- failed on-chain transaction with non-null meta.err.
 
-Separate observed output from independently reviewed expected output:
+The following public artifacts are candidate starting points discovered during
+independent review. They are not pre-approved fixtures. Verify exact bytes,
+commit, license, wallet perspective, and semantics before use:
 
-- importer may record the parser's observed output, but must not promote it to
-  expected truth;
-- expected canonical classification, eligibility, asset deltas, and material
-  amounts must come from independent transaction semantics/manual review or a
-  trusted upstream interpretation;
-- provenance must record the evidence and reviewer method;
-- fixture validation fails when observed parser output disagrees with the
-  independent expectation;
-- an ambiguous fixture must assert `UNKNOWN`, low/appropriate confidence, and
-  `is_copy_eligible == false`;
-- failed transactions must assert `UNKNOWN` and ineligible regardless of
-  apparent balance fields.
+- failed: coinbase/chainstorage commit
+  e5932902bae94e0578d13328f9f4135b3c95c252,
+  internal/utils/fixtures/parser/solana/transaction_err.json, with license
+  evidence from LICENSE.md at the same commit;
+- LP/multiple accounts: quellen-sol/ingestooor commit
+  74e2039ec8dbc61bc5df1e08540ec5a3f3cd991e,
+  crates/parsers/tests/orca/orca_add_liq.json, and, if useful, the Raydium
+  increase-liquidity fixtures in that repository, with LICENSE evidence;
+- ambiguous/non-fungible candidate: milktoastlab/SolanaNFTBot commit
+  e77710555004db314117d435f0d2b4f1dca54a77,
+  src/lib/marketplaces/__fixtures__/magicEdenSaleTxV2.ts. A buyer-perspective
+  NFT purchase is a useful adversarial case because balance deltas alone can
+  resemble a swap. The same repository also contains magicEdenFailedTx.ts.
 
-Add category-specific tests. A test that only checks filenames, hashes, or
-self-generated expectations is insufficient.
+A getBlock transactions array or TypeScript fixture wrapper requires an
+explicit, deterministic, audited extraction transform. Do not execute source
+code to extract a fixture.
 
-### 4. Helius contract validation is still shallow and WebSocket acks are not matched
+Complete all nine authentic categories if compatible evidence is available.
+The failed and LP candidates above may not be dismissed as unavailable without
+documented source, license, and semantic review. If any category genuinely
+cannot be verified, report it as NOT TESTED/PARTIAL and do not request Phase 1
+approval.
 
-The HTTP accounting boundary is improved, but “complete nested validation” is
-still overstated:
+The checkpoint matrix must list all nine categories consistently, with exact
+source, commit/path/blob, wallet perspective, independent expectation,
+observed result, eligibility, evidence hash, and PASS/PARTIAL/FAIL status.
 
-- `get_transaction()` accepts a non-object `transaction` and does not
-  validate required nested message/signature/meta fields used downstream;
-- `get_token_accounts()` accepts any list elements while returning
-  `list[dict[str, Any]]`;
-- `get_signature_statuses()` does not fully validate slot/error field types;
-- Python booleans may pass integer checks;
-- token-account responses remain provider-shaped dictionaries outside the
-  adapter instead of canonical typed models.
+### 4. The generic parser is not fail-closed for ambiguous assets
 
-Define the minimum complete contract required by every downstream consumer.
-Validate it inside the accounted operation and return canonical immutable
-models for separately consumed token-account metadata. Raw
-`getTransaction` evidence may remain raw only after all fields needed for
-safe persistence/parsing are validated.
+Current balance-delta logic marks any transaction with both negative and
+positive wallet deltas as SWAP_SIMPLE or SWAP_COMPLEX. SWAP_COMPLEX is
+copy-eligible above the confidence threshold. This makes multi-asset, LP-like,
+NFT, and otherwise unproven transactions eligible without deterministic proof.
+A decimals-zero NFT purchase can be called a simple swap.
 
-Also fix `HeliusWebSocketStream.open_subscription()`: it accepts any message
-with an integer `result`, without requiring JSON-RPC version and exact
-request-ID equality or rejecting a simultaneous/error response. A mismatched
-ack can mark the stream ready. Require a valid, exact matching acknowledgement
-before readiness. Add bounded connect/send/ack timeouts so a half-open
-subscription cannot wedge forever.
+Define and document fail-closed Phase 1 semantics:
 
-Test malformed nested objects and element types, bool-as-int cases, null
-transaction, mismatched JSON-RPC IDs, missing/wrong JSON-RPC version, error
-responses, unrelated acks, timeout/cancellation, and cleanup. Every HTTP
-failure must still create exactly one correct non-OK usage record.
+- failed transactions are UNKNOWN and ineligible;
+- genuinely ambiguous multi-asset transactions are UNKNOWN and ineligible;
+- NFT/non-fungible or decimals-zero asset movement is not automatically a
+  fungible copy-trade swap;
+- LP creation/removal, multiple material candidate legs, multiple relevant
+  token accounts, or an unproven route is ineligible;
+- balance deltas may preserve research evidence but cannot alone prove
+  copy-trade eligibility for an ambiguous complex route;
+- SWAP_COMPLEX must be ineligible in v1 unless a separate deterministic proof
+  rule is defined, implemented, and demonstrated with authentic fixtures.
 
-### 5. Reparse selection ignores the new build identity
+Test the authentic ambiguous, NFT/non-fungible, LP, multiple-account, failed,
+simple swap, multi-hop, transfer, and partial-sell cases. Demonstrate that no
+ambiguous event can emit an eligible signal.
 
-`SqlParseAttemptRecorder.events_pending_at_version()` filters only by
-`parser_version`. If an event already has SUCCESS/UNKNOWN under that version,
-a changed `build_hash` is never selected, even though round 3 claims that a
-new build identity creates a new attempt.
+### 5. Helius HTTP contracts are still under-validated
 
-Make the pending/reparse identity explicit and deterministic. At minimum,
-selection must distinguish the current executable parser artifact using
-`parser_version + build_hash`; document whether config/spec changes also
-require a new parse. Git commit remains audit metadata and must not cause
-unbounded reparsing merely because documentation changed.
+Validate every field used by persistence, parsing, reconciliation, provider
+health, and downstream consumers inside the single accounted operation. Reject
+Python booleans wherever an integer is required.
 
-The derived `swaps` uniqueness/versioning must support the same identity. A
-new parser build cannot append an honest new attempt while silently retaining
-an incompatible old derived row as the only canonical result. Either version
-derived rows by parser artifact identity or fail closed when source hash
-changes without a parser-version bump. Do not update old rows.
+At minimum:
 
-Add real PostgreSQL and restart tests for:
+- get_slot and get_balance require strict nonnegative integers, not bool;
+- get_transaction requires a non-null object with a nonempty canonical
+  signatures list, transaction.message object, accountKeys list and supported
+  account-key shapes, required meta.err field, strict nonnegative meta.fee,
+  preBalances/postBalances strict nonnegative integer arrays with coherent
+  lengths, valid slot/blockTime when consumed, and fully validated token-balance
+  entries;
+- each token-balance entry requires accountIndex strict integer in range,
+  mint/owner strings as applicable, uiTokenAmount.amount as a nonnegative
+  decimal integer string, and bounded nonnegative decimals;
+- get_token_accounts validates returned ownership against the requested wallet,
+  canonical field types, nonnegative amounts, bounded decimals, and returns
+  immutable typed adapter models rather than provider-shaped dictionaries;
+- get_signature_statuses validates every consumed nested field, including
+  strict slot/error/confirmation values.
 
-- same version + same build = idempotent;
-- same version + changed build = deterministic new attempt or explicit
-  version-mismatch failure;
-- changed parser version = new attempt and derived row;
-- old SUCCESS does not suppress a required new-artifact attempt;
-- failures remain retryable;
-- concurrent reparse cannot create contradictory duplicate results.
+Malformed fields, missing required fields, incoherent array lengths, wrong
+owner, out-of-range index, bool-as-int, nulls, and oversized/invalid numeric
+forms must fail closed. Each operation, including validation failures, must
+write exactly one terminal provider-usage record with the correct non-OK
+outcome. No double-accounting is allowed.
 
-### 6. The historical-version CLI claim is false
+### 6. WebSocket acknowledgement and lifecycle behavior can lose evidence
 
-`argus ingest reparse --parser-version OLD` queries events pending under
-`OLD`, but executes only the currently imported parser and records the
-current `PARSER_VERSION`. Re-running the same command can select the same old
-events forever. The CLI cannot execute historical parser code merely from a
-string label.
+_read_matching_ack currently uses Python equality, so JSON true can match
+request ID 1. It also consumes and discards nonmatching messages, including a
+valid early notification. Cleanup has no bounded timeout. The manager treats
+30 seconds of normal socket silence as a dead connection and reconnects,
+creating avoidable provider use and gap risk.
 
-Choose one honest design:
+Required behavior:
 
-- current-artifact-only: remove/reject arbitrary historical target versions;
-  allow an explicit source-attempt selector while clearly recording that the
-  current artifact performed the reparse; or
-- artifact registry: load a real immutable parser artifact matching the
-  requested version/hash and verify it before execution.
+- JSON-RPC version, request ID type and value, result/error exclusivity, and
+  subscription result type must match exactly; bool, string, float, null,
+  unrelated ID, wrong version, and mixed result/error are invalid;
+- a valid notification arriving before the matching acknowledgement must be
+  buffered and replayed in order, or the connection must fail closed without
+  losing the need for truth-path reconciliation;
+- connect, send, acknowledgement, receive-liveness probe, cancellation, and
+  context-manager cleanup must all be bounded;
+- quiet but transport-healthy sockets must not reconnect every receive timeout;
+  use transport ping/pong or an equivalent explicit liveness check and run
+  reconciliation without needless resubscription;
+- truly dead sockets must close, reconcile, reconnect, resubscribe, and process
+  each canonical event exactly once;
+- reconnect and provider-usage behavior must remain feasible under the
+  documented free-first provider budget.
 
-Never claim an old parser ran when only the current parser exists. Prove a
-bounded sweep makes forward progress and becomes empty when repeated under the
-same output identity.
+Add deterministic tests for typed-ID mismatches, early notification before ack,
+multiple unrelated messages, bounded cleanup, cancellation during every
+transition, quiet healthy socket, dead socket, restart, reconciliation, no lost
+notification, no duplicate canonicalization, and exact reconnect/accounting
+counts.
 
-### 7. Production git identity can silently become a sentinel
+### 7. Production Git identity can be spoofed by an override
 
-`git_commit_sha()` returns `GIT_COMMIT_UNAVAILABLE`, and the production
-parse path accepts it as a valid non-empty identity. This does not satisfy
-exact point-in-time git identity.
+resolve_production_git_commit currently returns ARGUS_BUILD_GIT_COMMIT before
+checking an available checkout. A dirty checkout can therefore provide any
+valid-looking SHA, and a clean checkout can provide an override that disagrees
+with HEAD.
 
-Production ingestion/reparse must obtain a validated immutable commit from the
-checkout or a build-time deployment value and fail closed if neither is
-available. Require a full validated SHA and reject dirty/unverifiable source
-unless an explicit non-production test mode is active. Test missing git,
-invalid override, dirty checkout, clean checkout, and valid build-time
-override. Existing pre-round-3 sentinel rows remain honest historical
-evidence and must not be rewritten.
+Required behavior:
 
-### 8. A missing finalization source is a misconfiguration, not a clean sweep
+- when Git metadata exists, always verify clean state and resolve HEAD;
+- an override in a Git checkout must exactly equal resolved HEAD or fail;
+- dirty or unverifiable source fails closed in production even when an override
+  is present;
+- a build-time override is accepted only when Git metadata is absent and its
+  deployment provenance/attestation is explicit and validated;
+- non-production test mode may return an honest test sentinel, but may not turn
+  a supplied or dirty identity into a verified production SHA;
+- historical sentinel evidence remains append-only and is not rewritten.
 
-`sweep_finalization()` returns `ok=True, promoted=0` when no
-`RecentEventSource` is wired. In the real manager this capability is required;
-treating its absence as a clean zero result can hide dead finalization wiring.
+Test clean/no override, clean/matching override, clean/mismatch, dirty/no
+override, dirty/matching override, dirty/mismatch, no-Git valid override,
+no-Git invalid override, missing identity, and explicit test mode.
 
-Return `ok=False` with an explicit configuration reason when the capability
-is missing. Preserve clean zero only for a correctly wired source with no
-eligible candidates or no new promotions. Add manager and restart tests.
+### 8. Migration 0007 downgrade evidence is incomplete
 
-## Mandatory acceptance tests
+Migration 0007 widens uniqueness from event_id + parser_version to event_id +
+parser_version + build_hash. After multiple build-hash rows exist for the same
+event/version, restoring the narrower uniqueness can fail. The claimed
+downgrade-to-base result does not prove a populated compatible data state.
 
-Independently demonstrate at least:
+Choose and document one honest behavior:
 
-1. fixture coverage is reported as exactly supported, with no confident
-   classification counted as an ambiguous fixture;
-2. every imported fixture preserves exact upstream bytes, upstream Git blob,
-   source hash, deterministic transforms, final hash, and license evidence;
-3. all committed fixtures rebuild offline from their preserved source evidence;
-4. independently reviewed expected outcomes, not parser self-output, drive
-   golden PASS/FAIL;
-5. real ambiguous and failed fixtures are UNKNOWN/ineligible, or remain
-   explicitly NOT TESTED/PARTIAL;
-6. every Helius HTTP method rejects all malformed fields used downstream and
-   records exactly one correct terminal usage outcome;
-7. token-account metadata crossing the adapter boundary is canonical and typed;
-8. WebSocket readiness requires exact matching JSON-RPC acknowledgement and
-   bounded lifecycle timeouts;
-9. reparse selection and derived-row versioning are parser-artifact-aware;
-10. repeated reparse under one identity terminates with no pending work;
-11. historical-version CLI behavior is truthful and deterministic;
-12. production git identity is exact and fails closed when unavailable/dirty;
-13. missing finalization-source wiring is a typed visible failure;
-14. pagination direct-boundary proof and all round-3 regression tests remain
-    passing;
-15. the disconnect/reconnect A/B scenario still canonicalizes each exactly once;
-16. real PostgreSQL session isolation, commitment serialization, migrations,
-    and append-only grants remain passing;
-17. no signing, signer, private-key, seed-phrase, live-arm, or broadcast path
-    exists;
-18. secret scan is clean;
-19. no paid-provider feature is enabled;
-20. no Phase 1.5 or later-phase code is started.
+- provide a deterministic non-destructive downgrade that preserves evidence; or
+- preflight and fail closed with a clear incompatibility reason when populated
+  evidence cannot fit the older schema.
 
-Run and record exact results for:
+Never silently delete, merge, rewrite, or select one append-only result. Add a
+real PostgreSQL migration test with multiple valid build rows, and report the
+supported downgrade state precisely rather than claiming universal success.
 
-- `uv run pytest tests/unit -v`
-- `uv run pytest tests/integration -v`
-- `uv run pytest tests/golden -v`
-- `uv run pytest tests/replay -v`
-- `uv run pytest --cov --cov-report=term-missing`
-- `uv run ruff check .`
-- `uv run ruff format --check .`
-- `uv run mypy`
-- relevant Alembic upgrade/current/downgrade checks;
-- `uv run argus providers probe`
-- `uv run argus providers probe-history`
-- `uv run argus providers usage --provider helius`
-- offline deterministic `uv run argus ingest run --test-mode`
-- corrected offline fixture rebuild/validation command;
-- repeated current-artifact reparse demonstrating convergence.
+### 9. Evidence and state reporting must be internally consistent
 
-Do not claim an unrun test. PostgreSQL 16 may support code tests but must not
-be described as PostgreSQL 17 validation. Live RPC/WebSocket and PG17 checks
-may remain explicit environmental deferrals. Missing authentic fixture
-categories must remain explicit and may not be relabeled or self-certified.
+BUILD_STATE correctly reports six of nine categories, while checkpoint/handoff
+acceptance text omits the multiple-account/LP gap in places. Reconcile every
+claim across BUILD_STATE, checkpoint, bundle, handoff, provenance, and test
+output. A criterion is PASS only when fresh evidence proves the exact criterion.
+Use PASS, FAIL, PARTIAL, NOT TESTED, or DEFERRED_ENVIRONMENTAL_CHECK honestly.
+
+## Mandatory acceptance matrix
+
+The remediation is complete only when fresh evidence demonstrates all of the
+following:
+
+1. All nine MASTER_SPEC real-chain fixture categories are authentic,
+   independently reviewed, provenance-bound, and parser-validated; otherwise
+   Phase 1 remains PARTIAL.
+2. Every real fixture has a typed independent semantic oracle covering
+   classification, eligibility, perspective, deltas, material amounts, fee,
+   confidence rule, failure status, rationale, and evidence.
+3. Offline rebuild and validation binds source commit/tree/path/blob, exact
+   bytes, container, transforms, license/notice, reviewer evidence,
+   expectation, and final output; every tamper class fails.
+4. Ambiguous, NFT/non-fungible, LP, multi-account, unproven complex, and failed
+   transactions are ineligible; the authentic ambiguous case is UNKNOWN.
+5. Simple swaps, multi-hop swaps, transfers, and partial sells retain correct
+   canonical results without broadening eligibility.
+6. Every Helius HTTP method fully validates every downstream-consumed field and
+   writes exactly one terminal usage record for success and every failure.
+7. WebSocket readiness requires exact typed acknowledgement, early messages are
+   not lost, all lifecycle operations are bounded, quiet healthy sockets do not
+   churn, and dead sockets reconcile safely.
+8. Production Git identity cannot be overridden around a clean/HEAD check and
+   no unverifiable SHA is accepted.
+9. Reparse remains parser-artifact-aware, append-only, concurrent-safe,
+   restart-safe, and converges to no pending work.
+10. Migration downgrade behavior is proven with populated multi-build data and
+    never destroys evidence.
+11. Direct pagination-boundary proof, commitment monotonicity, finalization,
+    disconnect/reconnect A/B, database session isolation, provider accounting,
+    and restart/crash regressions remain green.
+12. Real PostgreSQL concurrency and migration checks remain green. PostgreSQL
+    16 results must not be called PostgreSQL 17 validation.
+13. No signer, signing, key/seed handling, live arm, broadcast, mainnet trade,
+    paid-provider enablement, Phase 1.5 code, or later-phase work exists.
+14. Secret scan is clean and no credential is entered, exposed, or committed.
+15. All repository quality gates and the full Phase 1 regression suite pass.
+
+## Required test evidence
+
+Run and record exact commands, exit codes, counts, durations, environment, and
+relevant artifact hashes for:
+
+- uv run pytest tests/unit -v
+- uv run pytest tests/integration -v
+- uv run pytest tests/golden -v
+- uv run pytest tests/replay -v
+- uv run pytest --cov --cov-report=term-missing
+- uv run ruff check .
+- uv run ruff format --check .
+- uv run mypy
+- relevant Alembic upgrade/current/downgrade and populated-data checks
+- uv run argus providers probe
+- uv run argus providers probe-history
+- uv run argus providers usage --provider helius
+- offline deterministic uv run argus ingest run --test-mode
+- offline fixture rebuild/validation including the full tamper suite
+- repeated current-artifact reparse demonstrating convergence
+- WebSocket quiet/dead/restart/loss/duplicate/accounting scenarios
+- production Git-identity matrix
+- a secret scan covering tracked source and generated evidence
+
+Also include a prospective requirement-to-test matrix and a claim ledger mapping
+every PASS statement to the exact code path, test name, and fresh output. Run an
+audit-of-the-audit before handoff: search for untested branches, skipped tests,
+self-generated expected values, mocks that bypass production wiring, stale
+evidence, changed category definitions, and contradictions across documents.
+
+Do not claim an unrun test. Environmental failures must be reported with the
+exact blocker. Live RPC/WebSocket and PG17 checks may remain explicit
+environmental deferrals only where MASTER_SPEC permits; they cannot be called
+PASS. Existing PG17_COMPOSE_VALIDATION remains open.
 
 ## Checkpoint, bundle, and handoff
 
 At completion:
 
 - keep Phase 1 awaiting orchestrator review and not approved;
-- leave `last_orchestrator_approved_phase: 0` and the Phase 0
-  `approved_commit` unchanged;
+- leave last_orchestrator_approved_phase 0 and the Phase 0 approved_commit
+  unchanged;
 - preserve every earlier checkpoint and bundle as immutable history;
 - create:
-  - `orchestration/checkpoints/phase_1_remediation_4.md`
-  - `orchestration/bundles/phase_1_remediation_4.txt`;
+  - orchestration/checkpoints/phase_1_remediation_5.md
+  - orchestration/bundles/phase_1_remediation_5.txt;
 - generate the canonical runtime checkpoint/bundle required by MASTER_SPEC;
 - use a new unique handoff ID;
-- set `LAST_ORCHESTRATOR_INSTRUCTION_ID` exactly to
-  `argus-phase-1-remediation-004`;
-- identify every commit, exact test result, open failure, and deferral;
+- set LAST_ORCHESTRATOR_INSTRUCTION_ID exactly to
+  argus-phase-1-remediation-005;
+- identify every commit, changed production path, test result, open failure,
+  and environmental deferral;
+- include the consistent nine-category fixture matrix, requirement traceability
+  matrix, claim ledger, and audit-of-audit results;
 - state clearly that Phase 1.5 remains blocked;
 - verify remote HEAD equals local HEAD and the worktree is clean.
 
 Every commit created during this run must contain exactly one valid terminal
 trailer:
 
-`ARGUS-INSTRUCTION-ID: argus-phase-1-remediation-004`
+ARGUS-INSTRUCTION-ID: argus-phase-1-remediation-005
 
-Then STOP. Do not modify this instruction file. Do not self-authorize Phase
-1, Phase 1.5, or any later work.
+Then STOP. Do not modify this instruction file. Do not self-authorize Phase 1,
+Phase 1.5, or any later work.
