@@ -586,7 +586,6 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   consequence. `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not
   modified; `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase`
   remains `0` — this task did not and could not self-approve Phase 1.
-- git_commit: 28a88f74d28e70542050f5d5e8d9a9d139f26bb8 (code), docs commit
-  SHA to follow (this entry is part of that docs commit and therefore
-  cannot cite its own SHA in advance — see the handoff for the exact
-  final commit).
+- git_commit: 28a88f74d28e70542050f5d5e8d9a9d139f26bb8 (code),
+  1f0a2ffa73f8e6fde4a855bab62cc4092b78769a (docs: checkpoint, bundle,
+  handoff).
