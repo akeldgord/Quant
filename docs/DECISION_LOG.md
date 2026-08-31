@@ -798,3 +798,90 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   section B for the complete per-finding commit list (`da74172`,
   `bccd2a2`, `494a9ba`, `18cab36`, `4e6035d`, `93ab89a`, `6759cec`,
   `0943368`, `e44b588`).
+
+### 2026-08-31 — Phase 1 remediation round 3 (argus-phase-1-remediation-003)
+- requirement_id: MASTER_SPEC.md CORE-004 (reproducibility), section 19
+  (truth-path reconciliation/pagination), section 21 (generic parser +
+  real-chain fixtures), section 108 (evidence accuracy / prohibited
+  actions); the six findings in
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-003`.
+- decision: An independent orchestrator audit rejected round 2's
+  self-assessment as still insufficient, citing 6 concrete findings, all
+  remediated this round with real, tested code: (1) pagination now
+  requires directly observing a persisted boundary signature in the
+  provider's own address-history sequence rather than inferring success
+  from an empty/short page; (2) every Helius RPC method's full nested
+  contract validation now runs inside its single accounted usage
+  operation, so a malformed result can never leave an "ok" usage row;
+  (3) a streaming usage-recorder failure now emits a visible structured
+  warning instead of disappearing via `contextlib.suppress`; (4)
+  `parse_attempts` now durably records build/config/MASTER_SPEC/git
+  identity (CORE-004) via a new migration and identity-capture module,
+  not just parser version and payload hash; (5) `sweep_finalization()`
+  now returns a typed result distinguishing a genuine zero-promotion
+  sweep from a provider/malformed-response/per-event-append failure,
+  surfaced by the manager's own background loop; (6) 6 more real-chain
+  golden fixtures were sourced (from `0xjeffro/tx-parser`, MPL-2.0),
+  bringing real-chain fixture coverage to 7 of 9 required categories (up
+  from 4 of 9 after round 2). Acceptance criterion 1 (real-chain golden
+  fixtures) remains honestly PARTIAL: "multiple token-account/LP-style
+  action" and a genuinely failed on-chain transaction were not found in
+  any repository checked across rounds 2 or 3 (every DEX/AMM program
+  repository checked tests exclusively against synthetic local-validator
+  state); this is recorded as PARTIAL, not fabricated and not claimed as
+  full PASS, per the instruction's own explicit allowance for a category
+  that cannot be fully sourced from available evidence.
+- reason: An independent audit is a stronger integrity check than
+  self-assessment. Round 3's own findings targeted exactly the kind of
+  gap self-assessment tends to miss: usage-accounting outcomes recorded
+  before the validation that could invalidate them (finding #3, the same
+  class of defect round 2's finding #8 fixed for the transport layer but
+  had not yet been generalized to every adapter's own nested validation);
+  a durable ledger missing the code/config/git identity CORE-004
+  explicitly requires (finding #5); and a typed-outcome gap that made a
+  real operational failure indistinguishable from a legitimate zero
+  result (finding #6, the same shape of defect round 2's finding #8 also
+  fixed for HTTP usage recording, now applied to the finalization sweep).
+  Acceptance criterion 1 (real-chain fixtures) advances materially over
+  round 2's 4-of-9 state (now 7 of 9) without overstating what was
+  actually found: `0xjeffro/tx-parser`'s real captured DEX-swap/DCA
+  transactions are a genuinely new source this round located, but they do
+  not cover an LP-style liquidity action or a failed transaction, which
+  MASTER_SPEC.md section 108's evidence-accuracy requirement forbids
+  inventing.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-003` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 87a0e2efe329512a78f81331da24a85adf62bbbe`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_3_ONLY`,
+  `AUTHORIZED_PHASE: 1`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: New `migrations/versions/0006_parse_attempt_build_config_git_identity.py`;
+  new `tests/integration/test_migrations.py`, `tests/unit/test_parse_ledger.py`;
+  substantially rewritten `src/argus/ingestion/{reconciliation,manager,
+  parse_ledger,parse_attempt_repository}.py`,
+  `src/argus/providers/helius/client.py`, `src/argus/domain/parse_attempts.py`,
+  `src/argus/config.py`, `src/argus/parsing/generic_parser.py`,
+  `src/argus/cli.py`; 6 new real-chain fixtures in
+  `tests/golden/fixtures/real/`; substantially expanded
+  `tests/unit/test_{reconciliation,ingestion_manager,provider_adapters,
+  config,golden_fixtures}.py`, `tests/integration/test_reconciliation_sql.py`,
+  `tests/replay/test_replay.py`. 44 net new tests (327 -> 371). Full
+  suite: 371 passed, 86% coverage, ruff clean, mypy clean, alembic
+  downgrade-to-base/upgrade-to-head clean through migration 0006.
+  `orchestration/checkpoints/phase_1_remediation_3.md` and
+  `orchestration/bundles/phase_1_remediation_3.txt` record the full
+  18-item PASS/PARTIAL disposition. All prior Phase 0/Phase 1/round-1/
+  round-2 evidence files are preserved unmodified as immutable history.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified;
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `0`
+  and the Phase 0 `approved_commit` is unchanged — this task did not and
+  could not self-approve Phase 1, and Phase 1.5 remains forbidden and
+  unattempted.
+- git_commit: 81dd46cbfa3a46dd97c2f59a92ec62a42ab4fda9 (last commit of
+  this round); see `orchestration/checkpoints/phase_1_remediation_3.md`
+  section B for the complete per-finding commit list (`63742c3`,
+  `6a1b081`, `4510522`, `1ba5403`, `e0753cc`, `81dd46c`).
