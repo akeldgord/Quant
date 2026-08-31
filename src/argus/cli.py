@@ -27,6 +27,8 @@ providers_app = typer.Typer(
     add_completion=False, help="Provider capability/history probes and usage"
 )
 app.add_typer(providers_app, name="providers")
+ingest_app = typer.Typer(add_completion=False, help="Live chain data ingestion (Phase 1)")
+app.add_typer(ingest_app, name="ingest")
 
 console = Console()
 
@@ -198,6 +200,163 @@ def providers_usage(
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
+
+
+@ingest_app.command("run")
+def ingest_run(
+    wallet: list[str] | None = typer.Option(  # noqa: B008 - required Typer CLI-option idiom
+        None, "--wallet", help="Tracked wallet address (repeatable). Required unless --test-mode."
+    ),
+    test_mode: bool = typer.Option(
+        False,
+        "--test-mode",
+        help="Run entirely against in-memory fakes (NullLiveStream/NullChainProvider) -- "
+        "never opens a real network connection, never touches a real database, and cannot "
+        "broadcast a transaction. Smoke-tests this command's own wiring and the ingestion "
+        "manager's orchestration loop offline (Phase 1 remediation finding #1's required "
+        "offline deterministic smoke test). Never claims to validate real provider behavior.",
+    ),
+    duration_seconds: float = typer.Option(
+        5.0, "--duration-seconds", help="How long to run before exiting cleanly (--test-mode only)."
+    ),
+) -> None:
+    """Runs the Phase 1 ingestion manager: opens a live Helius WebSocket
+    subscription per tracked wallet, records fast-path notifications,
+    triggers truth-path reconciliation on every disconnect/reconnect/
+    timeout/malformed-message/clock-anomaly condition plus a periodic
+    cadence, and persists commitment progression and parsed swap output.
+
+    No signing, execution, or broadcast path exists anywhere in this
+    command or anything it calls (MASTER_SPEC.md section 108 / absolute
+    prohibitions)."""
+    from argus.clock import Clock
+    from argus.ingestion.manager import IngestionManager, IngestionManagerConfig, StaticWalletSource
+    from argus.ingestion.reconciliation import ReconciliationEngine
+    from argus.parsing.generic_parser import PARSER_VERSION
+
+    async def _run_test_mode() -> int:
+        from argus.ingestion.test_mode import (
+            InMemoryCommitmentStore,
+            InMemoryEventRecorder,
+            InMemorySwapRecorder,
+            InMemoryWatermarkStore,
+            NullChainProvider,
+            NullLiveStream,
+        )
+
+        wallets = tuple(wallet or ()) or ("TestModeWallet1111111111111111111111111111",)
+        provider = NullChainProvider()
+        engine = ReconciliationEngine(
+            chain_provider=provider,
+            watermark_store=InMemoryWatermarkStore(),
+            event_recorder=InMemoryEventRecorder(),
+            clock=Clock(),
+            provider_name="test-mode",
+            parser_version=PARSER_VERSION,
+            commitment_store=InMemoryCommitmentStore(),
+            swap_recorder=InMemorySwapRecorder(),
+        )
+        manager = IngestionManager(
+            wallet_source=StaticWalletSource(wallets),
+            stream=NullLiveStream(),
+            chain_provider=provider,
+            reconciliation_engine=engine,
+            provider_name="test-mode",
+            clock=Clock(),
+            config=IngestionManagerConfig(
+                periodic_reconciliation_interval_seconds=3600, clock_heartbeat_interval_seconds=3600
+            ),
+        )
+        stop_event = asyncio.Event()
+        run_task = asyncio.ensure_future(manager.run(stop_event=stop_event))
+        await asyncio.sleep(duration_seconds)
+        stop_event.set()
+        await run_task
+        console.print(
+            f"test-mode: ran cleanly for {duration_seconds}s across {len(wallets)} wallet(s) "
+            "-- no crash, no network, no signing/execution/broadcast path exists"
+        )
+        return 0
+
+    async def _run_live() -> int:
+        import contextlib
+        import signal
+
+        import httpx
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from argus.db.connection import connection_for_role
+        from argus.db.roles import DbRole
+        from argus.ingestion.commitment_repository import SqlCommitmentObservationStore
+        from argus.ingestion.event_repository import SqlEventRecorder
+        from argus.ingestion.swap_repository import SqlSwapRecorder
+        from argus.ingestion.watermark_repository import SqlWatermarkStore
+        from argus.providers.credentials import MissingProviderCredentialError
+        from argus.providers.helius.client import (
+            HeliusRpcClient,
+            HeliusWebSocketStream,
+            resolve_helius_api_key,
+        )
+        from argus.providers.helius.websocket_connector import WebSocketsConnector
+        from argus.providers.retry import retry_policy_from_config
+        from argus.providers.usage import SqlUsageRecorder
+
+        if not wallet:
+            console.print("error: --wallet is required at least once (or use --test-mode)")
+            return 1
+
+        config = load_config()
+        try:
+            api_key = resolve_helius_api_key(config.env)
+        except MissingProviderCredentialError as exc:
+            console.print(str(exc))
+            return 1
+
+        db_info = connection_for_role(config, DbRole.INGEST)
+        db_engine = create_async_engine(db_info.as_asyncpg_url())
+        sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
+        retry_policy = retry_policy_from_config(config)
+
+        async with httpx.AsyncClient(timeout=30.0) as http_client, sessionmaker() as session:
+            usage_recorder = SqlUsageRecorder(session)
+            rpc_client = HeliusRpcClient(
+                api_key,
+                http_client=http_client,
+                retry_policy=retry_policy,
+                usage_recorder=usage_recorder,
+            )
+            ws_stream = HeliusWebSocketStream(api_key, connector=WebSocketsConnector())
+            reconciliation_engine = ReconciliationEngine(
+                chain_provider=rpc_client,
+                watermark_store=SqlWatermarkStore(session),
+                event_recorder=SqlEventRecorder(session),
+                clock=Clock(),
+                provider_name="helius",
+                parser_version=PARSER_VERSION,
+                commitment_store=SqlCommitmentObservationStore(session),
+                swap_recorder=SqlSwapRecorder(session),
+                recent_event_source=SqlEventRecorder(session),
+                commit_hook=session.commit,
+            )
+            manager = IngestionManager(
+                wallet_source=StaticWalletSource(tuple(wallet or ())),
+                stream=ws_stream,
+                chain_provider=rpc_client,
+                reconciliation_engine=reconciliation_engine,
+                provider_name="helius",
+                clock=Clock(),
+                streaming_usage_recorder=usage_recorder,
+            )
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with contextlib.suppress(NotImplementedError):
+                    loop.add_signal_handler(sig, stop_event.set)
+            await manager.run(stop_event=stop_event)
+        await db_engine.dispose()
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run_test_mode() if test_mode else _run_live()))
 
 
 if __name__ == "__main__":

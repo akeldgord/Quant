@@ -266,6 +266,18 @@ class ReconciliationEngine:
         await self._watermark_store.save(degraded)
         await self._commit_hook()
 
+    async def mark_degraded(self, wallet_address: str, *, reason: str = "") -> None:
+        """Public entry point for a caller (the ingestion manager) that
+        has *itself* detected a disruptive transition -- a stream
+        disconnect, timeout, malformed message, subscription failure, or
+        cancellation -- and must mark the wallet DEGRADED immediately,
+        before attempting any recovery, not only after a (possibly slow)
+        :meth:`reconcile` call resolves. Idempotent: calling this on an
+        already-DEGRADED wallet is a harmless no-op re-save."""
+        del reason  # not persisted as a column today; kept for caller-side logging/testing clarity
+        watermark = await self._get_or_init(wallet_address)
+        await self._mark_degraded(watermark, now=self._clock.utc_now())
+
     async def observe_stream_event(
         self, notification: StreamNotification, raw_payload: dict[str, Any]
     ) -> bool:

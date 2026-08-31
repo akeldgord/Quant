@@ -99,11 +99,20 @@ class ChainProvider(Protocol):
 class LiveChainStream(Protocol):
     """WebSocket-style live subscription (MASTER_SPEC.md section 10)."""
 
-    async def subscribe_wallet(self, wallet_address: str) -> AsyncIterator[StreamNotification]:
+    def subscribe_wallet(self, wallet_address: str) -> AsyncIterator[StreamNotification]:
         """An async-iterable of fast-path notifications for this wallet.
         Implementations must raise (not silently stop iterating) on
         disconnect, so callers can distinguish "no new activity" from
-        "the connection dropped"."""
+        "the connection dropped".
+
+        Declared as a plain (non-``async``) ``def`` returning
+        ``AsyncIterator[...]`` deliberately: every real implementation is
+        an async-generator function (``async def ... yield ...``), which
+        returns its iterator immediately on call, with no ``await``
+        needed until iteration -- an ``async def`` Protocol signature here
+        would mislead mypy into treating this as a coroutine that must be
+        awaited before it can be iterated, which does not match how any
+        implementation actually behaves."""
         ...
 
     async def unsubscribe_wallet(self, wallet_address: str) -> None: ...
