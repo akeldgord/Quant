@@ -1,0 +1,374 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE
+instruction_id: argus-watcher-remediation-002
+STATUS: PASS
+GIT_COMMIT: 7a46af842d705736ea6284eeccb9c3d8d76c89c1
+TEST_STATUS: 51/51 watcher tests passed; full suite 88 passed, 4 skipped
+  (pre-existing, unrelated); ruff clean; mypy clean
+
+This bundle contains the full checkpoint (below) plus additional review
+evidence: the mandatory-adversarial-test-category mapping and the real
+`--once` log line captured during this task.
+
+================================================================
+FULL CHECKPOINT
+================================================================
+
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Operational tooling remediation (local orchestrator watcher),
+  instruction_id=argus-watcher-remediation-002 — NOT an ARGUS phase.
+  current_phase remains 0; no phase gate was crossed;
+  orchestration/ORCHESTRATOR_INSTRUCTIONS.md was not modified.
+STATUS: PASS
+UTC_TIMESTAMP: 2026-08-31T02:52:00Z
+GIT_COMMIT: 7a46af842d705736ea6284eeccb9c3d8d76c89c1
+TARGET_COMMIT: 79287b573bd0cc106d26d5f2001f919b11d61625
+AUTHORIZED_PHASE: 0
+APPROVES_PHASE: NONE
+
+B. What was built
+
+Per orchestrator instruction argus-watcher-remediation-002 (pushed via
+GitHub, commit e0d3504), the prior watcher remediation
+(orchestration/checkpoints/watcher_remediation.md, commit a700ee1) was
+rejected as insufficient for unattended phase advancement. This task
+substantially rewrote scripts/argus_orchestrator_watch.py and
+tests/unit/test_orchestrator_watch.py to close all 8 numbered requirement
+categories in the instruction. Full reasoning and per-category detail is
+recorded in docs/DECISION_LOG.md, entry "Watcher remediation round 2:
+orchestrator-requested hardening (argus-watcher-remediation-002)". Summary:
+
+1. Durable, fail-closed state handling. read_state_safe() distinguishes
+   OK/MISSING/INVALID outcomes. A malformed/corrupt/schema-invalid state
+   file fails closed (STATE_INVALID) without being rewritten (preserved for
+   forensic inspection). A missing state file with an ACTIVE instruction
+   outstanding is not assumed to be a first execution: the watcher
+   cross-checks orchestration/AGENT_HANDOFF.md and either recognizes the
+   instruction as already completed (STATE_REBUILT_FROM_HANDOFF, no
+   relaunch) or fails closed (STATE_MISSING_FAIL_CLOSED, requires a new
+   INSTRUCTION_ID). State writes now fsync the file and its parent
+   directory.
+
+2. A failed Claude process now always fails the run. This was the literal
+   bug the orchestrator identified: the prior tick() recorded exit_code but
+   never branched on it before calling verify_handoff() -- a nonzero exit,
+   timeout, or launch-time OSError (e.g. FileNotFoundError) could still be
+   accepted as COMPLETED if handoff/evidence files happened to look valid.
+   tick() now fails the run immediately on any non-zero/None exit code,
+   before any other verification runs, logging a diagnostic bounded to a
+   few hundred characters.
+
+3. Evidence must be new, immutable, and structurally valid.
+   CHECKPOINT_PATH/BUNDLE_PATH are normalized and validated
+   (repository-relative, correct directory/extension, no
+   traversal/absolute/symlink paths), must not have existed at the
+   pre-launch HEAD, and must show as newly ADDED (not modified) in the
+   run's commit range. Content is structurally validated -- a one-line
+   placeholder now fails. AGENT_HANDOFF.md is validated against the full
+   11-field schema from orchestration/PROTOCOL.md section 5 (previously
+   only 4 of 11 fields were checked), rejecting duplicates, missing fields,
+   and a reused HANDOFF_ID. CURRENT_COMMIT and the checkpoint's own
+   GIT_COMMIT must resolve to a commit created during the run.
+
+4. Branch-movement and commit-attribution detection. Local and remote HEAD
+   are compared immediately before launch. Post-run HEAD must descend
+   linearly from pre-launch HEAD -- rewritten/force-pushed history or a
+   merge commit anywhere in the run's range fails the run. Every commit in
+   range must carry the exact trailer "ARGUS-INSTRUCTION-ID:
+   <instruction_id>"; a substring-matching or differently worded trailer
+   does not count.
+
+5. Mechanical self-authorization prevention. The blob hash of
+   orchestration/ORCHESTRATOR_INSTRUCTIONS.md is captured immediately
+   before launch and re-checked (via git hash-object against the live
+   working-tree file, catching an uncommitted edit too) after Claude
+   exits. Any difference fails the run outright, even if later committed
+   and pushed by the implementation agent itself.
+
+6. Explicit, sequence-based phase gating with Phase 1.5 support.
+   PHASE_SEQUENCE is now an explicit ordered tuple of string tokens ("0",
+   "1", "1.5", "2", ..., "6", "6.5", ..., "11"), compared only by list
+   position, never as floats. A new APPROVES_PHASE instruction field
+   distinguishes same-phase remediation (APPROVES_PHASE: NONE, requires
+   AUTHORIZED_PHASE == current_phase) from phase advancement
+   (APPROVES_PHASE == current_phase == last_completed_phase,
+   awaiting_orchestrator_review == true, AUTHORIZED_PHASE must be the
+   immediate successor -- no skipping a phase or sub-phase).
+
+7. Strict instruction-field parsing. Duplicate fields, missing fields, an
+   unknown STATUS, a malformed ISSUED_AT timestamp, a non-full-SHA
+   TARGET_COMMIT, an empty/NONE AUTHORIZED_ACTION, and an invalid
+   AUTHORIZED_PHASE/APPROVES_PHASE are all rejected for an ACTIVE
+   instruction. The NO_INSTRUCTION placeholder keeps a deliberately
+   lenient, explicitly-validated safe schema.
+
+8. Conservative, ordered post-run verification: process-exit success, then
+   ancestry/attribution, then instructions-file integrity, then
+   handoff/evidence completeness, then clean-worktree/pushed-HEAD equality
+   -- matching the order specified by the instruction.
+
+Also added: a defensive try/except around each tick() call inside
+run_forever() so one bad tick cannot crash the whole watcher process
+(--once runs intentionally still let an exception propagate, since an
+operator is watching interactively).
+
+orchestration/PROTOCOL.md sections 4, 5, and 7 and docs/OPERATIONS.md were
+updated to describe the above as mechanically-enforced requirements, not
+just implementation detail.
+
+C. Files changed
+Modified: scripts/argus_orchestrator_watch.py,
+tests/unit/test_orchestrator_watch.py, orchestration/PROTOCOL.md,
+docs/OPERATIONS.md, docs/DECISION_LOG.md, docs/BUILD_STATE.md.
+New (this task): orchestration/checkpoints/watcher_remediation_2.md (this
+file), orchestration/bundles/watcher_remediation_2.txt,
+orchestration/AGENT_HANDOFF.md (updated in place, per its single-current-
+status-file convention).
+Not modified: orchestration/ORCHESTRATOR_INSTRUCTIONS.md (verified via
+`git hash-object` before and after this task; orchestrator-owned).
+
+D. Commands actually run
+- Full re-read of the ACTIVE instruction (orchestration/ORCHESTRATOR_INSTRUCTIONS.md,
+  instruction_id=argus-watcher-remediation-002) plus MASTER_SPEC.md,
+  docs/BUILD_STATE.md, docs/DECISION_LOG.md, orchestration/PROTOCOL.md,
+  orchestration/AGENT_HANDOFF.md, and the prior watcher_remediation.md
+  checkpoint, before writing any code.
+- Pre-execution safety verification:
+  `git merge-base --is-ancestor 79287b573bd0cc106d26d5f2001f919b11d61625 HEAD`
+  (OK: ancestor); `git diff --name-only 79287b57... HEAD` (only
+  orchestration/ORCHESTRATOR_INSTRUCTIONS.md differed); manual check of
+  docs/BUILD_STATE.md's current_phase/last_completed_phase/
+  awaiting_orchestrator_review against the instruction's AUTHORIZED_PHASE: 0 /
+  APPROVES_PHASE: NONE (same-phase remediation case; valid).
+- uv run pytest tests/unit/test_orchestrator_watch.py -v -- 51/51 passed
+- uv run pytest --cov --cov-report=term-missing -- 88 passed, 4 skipped
+  (pre-existing, unrelated Postgres-integration skips), 93% coverage on
+  src/argus (unchanged -- the watcher lives outside that coverage scope
+  and is verified by its own 51 dedicated tests)
+- uv run ruff check . -- All checks passed!
+- uv run ruff format --check . -- 79 files already formatted
+- uv run mypy -- Success: no issues found in 40 source files
+- uv run mypy scripts/argus_orchestrator_watch.py --ignore-missing-imports
+  -- Success: no issues found in 1 source file
+- uv run python scripts/argus_orchestrator_watch.py --once against the
+  real repository while implementation changes were still uncommitted --
+  correctly logged DIRTY_WORKTREE and took no git/Claude action
+- grep-based secret scan on the staged diff (password/secret/api-key/
+  token/private-key/seed-phrase/PEM-header patterns) -- no matches beyond
+  benign prose/parsing-token usage; git status --porcelain clean before
+  and after commit
+
+E. Test results
+pytest (watcher suite): 51 passed, 0 failed, 0 skipped (up from 22 in the
+  rejected prior remediation -- 26+ new/updated adversarial tests covering
+  every category in the instruction's "Mandatory adversarial regression
+  tests" list, plus the retained useful tests from before)
+pytest (full suite): 88 passed, 4 skipped (pre-existing, unrelated
+  Postgres-integration skips -- Postgres is not reachable in this sandbox)
+coverage: 93% (src/argus, unchanged)
+ruff: All checks passed!
+ruff format --check: 79 files already formatted
+mypy: Success: no issues found in 40 source files (+ watcher script clean
+  when checked directly)
+
+F. Acceptance criteria (this task)
+[PASS] Section 1 (durable replay protection / fail-closed state) implemented
+  with STATE_INVALID, STATE_MISSING_FAIL_CLOSED, STATE_REBUILT_FROM_HANDOFF
+  and dedicated tests
+[PASS] Section 2 (failed Claude process must fail the run) implemented --
+  this was the literal originally-reported bug; test_nonzero_exit_with_valid_handoff_is_failed
+  directly proves a nonzero exit is FAILED even with otherwise-valid evidence
+[PASS] Section 3 (evidence newness/immutability/structural validity)
+  implemented with path normalization, newly-added checks, and content
+  structural validators; placeholder content now fails
+[PASS] Section 4 (branch movement / commit attribution) implemented with
+  ancestry, merge-commit, and exact-trailer checks
+[PASS] Section 5 (self-authorization prevention) implemented via blob-hash
+  comparison; known non-cryptographic limitation stated honestly in
+  docs/DECISION_LOG.md and orchestration/AGENT_HANDOFF.md rather than
+  overclaimed
+[PASS] Section 6 (explicit phase gating incl. Phase 1.5) implemented via
+  PHASE_SEQUENCE + APPROVES_PHASE, with dedicated tests for same-phase
+  remediation, Phase 0->1, Phase 1->1.5, and the Phase 1->2 skip-ahead
+  rejection
+[PASS] Section 7 (strict instruction parsing) implemented with duplicate/
+  missing/malformed-field rejection for ACTIVE instructions
+[PASS] Section 8 (conservative verification order) implemented exactly in
+  the specified order inside tick()
+[PASS] All 26 mandatory adversarial regression test categories from the
+  instruction are covered (see the mapping below)
+[PASS] orchestration/ORCHESTRATOR_INSTRUCTIONS.md not modified
+[PASS] Phase 1 not self-authorized; docs/BUILD_STATE.md
+  last_orchestrator_approved_phase/approved_commit untouched
+[PASS] Every commit for this task carries the exact trailer
+  ARGUS-INSTRUCTION-ID: argus-watcher-remediation-002
+
+G. Database/data sanity
+Unchanged -- this task touched no schema, migration, or database code.
+
+H. Provider usage
+Not applicable.
+
+I. Data quality warnings
+None new. PG17_COMPOSE_VALIDATION remains DEFERRED_ENVIRONMENTAL_CHECK
+(unchanged by this task; unrelated).
+
+J. Sample outputs
+See the mapping and log line sections below.
+
+K. Architectural deviations
+NONE. No MASTER_SPEC.md change. No ARGUS architecture change. This is
+operational tooling for the orchestration protocol, not ARGUS itself.
+
+L. ORCHESTRATOR_REVIEW_REQUIRED
+NONE from this task specifically. Standing items unchanged and unrelated:
+PG17_COMPOSE_VALIDATION (see docs/BUILD_STATE.md); the watcher's real
+(non-mocked) Claude CLI launch path remains unexercised against an actual
+`claude` process in this sandbox.
+
+M. Known bugs / debt
+- Known limitation on self-authorization prevention (section 5): this
+  protocol is file-trust-based, not cryptographically signed. The
+  blob-hash-unchanged check reliably catches an implementation agent that
+  edits the live instructions file (committed or not), and the
+  target-commit diff-scope check independently catches a self-authored
+  instruction whose TARGET_COMMIT points at the pre-launch HEAD while other
+  files also changed in the same range (the realistic case, and the one
+  test_self_authored_instruction_cannot_launch exercises). A maximally
+  adversarial run that points a self-authored instruction's TARGET_COMMIT
+  at its own freshly-created HEAD is not fully excluded by these mechanisms
+  alone -- closing that completely would require a cryptographic signing
+  step outside this protocol's current file-trust design. Stated here
+  explicitly per CORE-011 ("truth outranks impressive P&L") rather than
+  overclaiming complete prevention.
+- The watcher's real (non-mocked) Claude CLI invocation itself
+  (`claude -p <prompt>`) still has not been exercised against a real
+  `claude` process in this sandbox -- unchanged limitation from prior
+  rounds; every test and the real `--once` runs here either mock it or
+  never reach the launch step.
+- validate_checkpoint_content()/validate_bundle_content() are deliberately
+  simple substring/marker-based structural checks (not a full grammar) --
+  sufficient to reject a placeholder or wildly malformed document, but not
+  a rigorous document schema. If a future instruction wants stricter
+  validation, that's a protocol-contract question for the orchestrator.
+
+N. Security state
+- No new secrets, no signing-key code, no live-execution code touched.
+- The watcher's credential-avoidance logging posture is unchanged and
+  strengthened: subprocess diagnostics are now explicitly bounded (a few
+  hundred characters) rather than only "not logged at all by convention".
+- LIVE_READY_SOFTWARE=false, LIVE_CANARY_PASSED=false, LIVE_ARMED=false --
+  unaffected.
+- All changes in this task are in the direction of stricter, more
+  conservative, more fail-closed behavior -- none relax any prior check.
+
+O. Next specified phase
+Per orchestrator instruction argus-watcher-remediation-002: do NOT begin
+Phase 1, do NOT modify orchestration/ORCHESTRATOR_INSTRUCTIONS.md, do NOT
+self-authorize anything. Phase 1 remains unauthorized by this session.
+STOP. Await further orchestrator review/instruction.
+
+================ END ARGUS CHECKPOINT =========================
+
+================================================================
+MANDATORY ADVERSARIAL REGRESSION TEST MAPPING (instruction section
+"Mandatory adversarial regression tests", items 1-26)
+================================================================
+
+ 1. missing state + ACTIVE instruction does not launch
+    -> test_missing_state_with_active_instruction_does_not_launch
+ 2. corrupt JSON state does not launch
+    -> test_corrupt_json_state_does_not_launch
+ 3. invalid state schema/status does not launch
+    -> test_invalid_state_status_does_not_launch,
+       test_invalid_state_wrong_field_type_does_not_launch
+ 4. a completed/handoff-recorded instruction cannot replay after state loss
+    -> test_state_loss_after_completion_does_not_replay
+ 5. nonzero Claude exit with otherwise valid handoff/evidence is FAILED
+    -> test_nonzero_exit_with_valid_handoff_is_failed
+ 6. timeout and launch exception are FAILED
+    -> test_claude_timeout_is_failed, test_claude_launch_exception_is_failed
+ 7. modified pre-existing checkpoint/bundle is rejected
+    -> test_modified_preexisting_checkpoint_is_rejected
+ 8. empty/malformed newly added checkpoint is rejected
+    -> test_empty_newly_added_checkpoint_is_rejected
+ 9. empty/malformed newly added bundle is rejected
+    -> test_empty_newly_added_bundle_is_rejected
+10. missing and duplicate handoff fields are rejected
+    -> test_missing_handoff_field_is_rejected,
+       test_duplicate_handoff_field_is_rejected
+11. foreign/absolute/path-traversal/symlink evidence paths are rejected
+    -> test_foreign_or_traversal_evidence_path_is_rejected[...] (5 cases),
+       test_symlink_evidence_path_is_rejected
+12. post-run HEAD not descending from pre-launch HEAD is rejected
+    -> test_head_not_descending_from_prelaunch_is_rejected
+13. a merge commit in the run range is rejected
+    -> test_merge_commit_in_run_range_is_rejected
+14. a concurrent commit without the exact instruction trailer is rejected
+    -> test_concurrent_untrailered_commit_is_rejected
+15. a run commit with the wrong/substr-matching trailer is rejected
+    -> test_substring_matching_trailer_is_rejected
+16. an implementation-agent change to ORCHESTRATOR_INSTRUCTIONS is rejected
+    -> test_instructions_file_modified_during_run_is_rejected,
+       test_instructions_file_modified_but_uncommitted_is_rejected
+17. a self-authored next-phase instruction cannot launch
+    -> test_self_authored_instruction_cannot_launch
+18. duplicate instruction fields are rejected
+    -> test_duplicate_instruction_field_is_rejected
+19. malformed timestamp/full-SHA/action are rejected
+    -> test_malformed_issued_at_is_rejected,
+       test_non_full_sha_target_commit_is_rejected,
+       test_empty_authorized_action_is_rejected
+20. Phase 1 is blocked while Phase 0 is incomplete or lacks explicit
+    APPROVES_PHASE: 0
+    -> test_phase_1_blocked_without_approves_phase,
+       test_phase_1_blocked_when_phase_0_not_marked_complete
+21. Phase 1 is allowed only with the exact predecessor approval and
+    completed state
+    -> test_phase_1_allowed_with_full_predecessor_approval
+22. Phase 1.5 is accepted only as the immediate successor of completed
+    Phase 1 with APPROVES_PHASE: 1
+    -> test_phase_1_5_accepted_as_immediate_successor_of_phase_1
+23. Phase 2 is blocked directly from Phase 1
+    -> test_phase_2_blocked_directly_from_phase_1
+24. stale CLAIMED and RUNNING remain fail-closed
+    -> test_stale_running_state_does_not_relaunch,
+       test_stale_claimed_state_does_not_relaunch
+25. dirty worktree and unpushed/diverged commits remain blocked
+    -> test_dirty_worktree_blocks_launch,
+       test_diverged_local_commit_blocks_launch,
+       test_dirty_tree_after_claude_run_marks_failed
+26. a valid same-phase remediation run still completes as a negative
+    control
+    -> test_valid_same_phase_remediation_run_completes
+
+Retained/other coverage (target-commit protection, pause file, lock,
+pure parsing/validation): test_pause_file_blocks_launch,
+test_target_commit_not_ancestor_blocks_launch,
+test_target_commit_with_unreviewed_diff_blocks_launch,
+test_second_watcher_instance_cannot_acquire_lock,
+test_parse_instructions_basic, test_parse_handoff_basic,
+test_phase_sequence_ordering, test_validate_checkpoint_content_rejects_placeholder,
+test_validate_checkpoint_content_accepts_realistic_fixture,
+test_validate_bundle_content_rejects_placeholder.
+
+Total: 51 tests, all real temporary-git-repository-backed scenarios (no
+git mocking); the Claude CLI is always mocked via an injected runner
+callable per the instruction's requirement.
+
+================================================================
+REAL WATCHER --once RUN CAPTURED DURING THIS TASK
+================================================================
+
+Run against the real repository while implementation changes were still
+uncommitted (confirms the watcher correctly refuses to touch a dirty
+worktree rather than crashing or silently proceeding):
+
+2026-08-31T02:41:11.381754+00:00 DIRTY_WORKTREE local worktree has
+uncommitted changes; not pulling
+
+No git or Claude action was taken. runtime/orchestrator_watcher_state.json
+is gitignored and was not part of any commit.
