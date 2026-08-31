@@ -5,6 +5,16 @@ Persists to ``swaps`` (MASTER_SPEC.md section 21), deduplicated on
 re-running the same parser version against the same event is idempotent;
 a new parser version may add an additional row without disturbing a prior
 point-in-time result (Phase 1 remediation round 1, finding #4).
+
+Phase 1 remediation round 2 (argus-phase-1-remediation-002), finding #9:
+the original ``except IntegrityError: return False`` caught *every*
+integrity failure -- a NOT NULL violation, a foreign-key violation, a
+schema mismatch -- and mislabeled all of them "duplicate, no-op",
+silently hiding a real bug behind an idempotency signal. ``record()`` now
+only treats it as a duplicate when the database names the exact
+``(event_id, parser_version)`` constraint as the cause, and only after
+independently confirming the expected row exists; every other
+``IntegrityError`` is re-raised.
 """
 
 from __future__ import annotations
@@ -12,11 +22,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from argus.db.errors import constraint_name as _constraint_name
 from argus.domain.swaps import Swap
 from argus.parsing.generic_parser import ParsedTransaction
+
+_DEDUP_CONSTRAINT = "uq_swaps_event_id_parser_version"
 
 
 class SqlSwapRecorder:
@@ -60,6 +74,17 @@ class SqlSwapRecorder:
             async with self._session.begin_nested():
                 self._session.add(row)
                 await self._session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
+            if _constraint_name(exc) != _DEDUP_CONSTRAINT:
+                raise
+            existing = (
+                await self._session.execute(
+                    select(Swap.swap_id).where(
+                        Swap.event_id == event_id, Swap.parser_version == parsed.parser_version
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
             return False
         return True

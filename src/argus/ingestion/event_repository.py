@@ -7,6 +7,14 @@ enforced by the database's own unique constraint
 race in application code -- catching the resulting integrity error is what
 makes ``record()`` safely concurrent across multiple ingestion paths
 observing the same transaction at nearly the same time.
+
+Phase 1 remediation round 2 (argus-phase-1-remediation-002), finding #9:
+``record()`` only treats an ``IntegrityError`` as "this is the expected
+dedup collision" when the database itself names the exact dedup
+constraint as the cause, and only after independently confirming the
+expected row now exists -- any other integrity failure (a NOT NULL
+violation, a foreign-key violation, an unrelated constraint) is
+re-raised, never silently reinterpreted as "duplicate, no-op".
 """
 
 from __future__ import annotations
@@ -17,8 +25,11 @@ from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from argus.db.errors import constraint_name as _constraint_name
 from argus.domain.chain_events import ChainEvent
 from argus.ingestion.reconciliation import ChainEventDraft, RecordOutcome
+
+_DEDUP_CONSTRAINT = "uq_chain_events_signature_wallet_type"
 
 
 class SqlEventRecorder:
@@ -55,12 +66,17 @@ class SqlEventRecorder:
             async with self._session.begin_nested():
                 self._session.add(row)
                 await self._session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
+            if _constraint_name(exc) != _DEDUP_CONSTRAINT:
+                raise
             # draft.event_id was never actually stored under this natural
             # key -- look up the real, already-persisted row so callers
             # link any further evidence (commitment observations, parsed
             # output) to the event that genuinely exists, not to a
-            # fabricated id that would violate a foreign key.
+            # fabricated id that would violate a foreign key. Confirming
+            # the row actually exists (rather than trusting the
+            # constraint name alone) is what makes this idempotency, not
+            # a masked failure -- `.scalar_one()` re-raises if it doesn't.
             existing = (
                 await self._session.execute(
                     select(ChainEvent.event_id).where(

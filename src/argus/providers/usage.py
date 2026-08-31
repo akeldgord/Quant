@@ -19,7 +19,7 @@ from decimal import Decimal
 from typing import Final, Protocol
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from argus.clock import Clock
 from argus.domain.provider_usage import ProviderUsage
@@ -71,52 +71,61 @@ class UsageRecorder(Protocol):
 
 
 class SqlUsageRecorder:
-    """Writes usage rows via an injected SQLAlchemy async session. Callers
-    control the session/commit lifecycle, matching the rest of this
-    codebase's repository pattern."""
+    """Writes usage rows via a session factory, not a bound session.
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    Phase 1 remediation round 2 (argus-phase-1-remediation-002), finding
+    #2's "usage accounting uses a safe independent transaction path":
+    every real ingestion adapter call (Helius RPC, WebSocket connect,
+    every wallet's subscribe) records usage from whatever task happens to
+    be running at the time -- if usage recording shared a session with
+    that task's own reconciliation work, a usage-write failure could
+    abort reconciliation's pending transaction, and vice versa. Each
+    ``record_*`` call here opens, commits, and closes its own session, so
+    usage accounting can never corrupt or be corrupted by any other
+    concurrent unit of work."""
+
+    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+        self._sessionmaker = sessionmaker
 
     async def record_request(self, record: RequestUsageRecord) -> None:
         now = record.response_at or record.requested_at
-        self._session.add(
-            ProviderUsage(
-                provider=record.provider,
-                endpoint=record.endpoint,
-                request_class=record.request_class,
-                requested_at=record.requested_at,
-                response_at=record.response_at,
-                latency_ms=record.latency_ms,
-                status=record.status,
-                retry_count=record.retry_count,
-                estimated_credits=record.estimated_credits,
-                bytes_received=record.bytes_received,
-                cache_hit=record.cache_hit,
-                created_at=now,
+        async with self._sessionmaker() as session, session.begin():
+            session.add(
+                ProviderUsage(
+                    provider=record.provider,
+                    endpoint=record.endpoint,
+                    request_class=record.request_class,
+                    requested_at=record.requested_at,
+                    response_at=record.response_at,
+                    latency_ms=record.latency_ms,
+                    status=record.status,
+                    retry_count=record.retry_count,
+                    estimated_credits=record.estimated_credits,
+                    bytes_received=record.bytes_received,
+                    cache_hit=record.cache_hit,
+                    created_at=now,
+                )
             )
-        )
-        await self._session.flush()
 
     async def record_streaming(self, record: StreamingUsageRecord) -> None:
-        self._session.add(
-            ProviderUsage(
-                provider=record.provider,
-                endpoint=record.endpoint,
-                request_class=record.request_class,
-                requested_at=record.requested_at,
-                status="streaming",
-                retry_count=0,
-                cache_hit=False,
-                connection_count=record.connection_count,
-                subscription_count=record.subscription_count,
-                reconnect_count=record.reconnect_count,
-                bytes_received=record.bytes_received,
-                estimated_streaming_credits=record.estimated_streaming_credits,
-                created_at=record.requested_at,
+        async with self._sessionmaker() as session, session.begin():
+            session.add(
+                ProviderUsage(
+                    provider=record.provider,
+                    endpoint=record.endpoint,
+                    request_class=record.request_class,
+                    requested_at=record.requested_at,
+                    status="streaming",
+                    retry_count=0,
+                    cache_hit=False,
+                    connection_count=record.connection_count,
+                    subscription_count=record.subscription_count,
+                    reconnect_count=record.reconnect_count,
+                    bytes_received=record.bytes_received,
+                    estimated_streaming_credits=record.estimated_streaming_credits,
+                    created_at=record.requested_at,
+                )
             )
-        )
-        await self._session.flush()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

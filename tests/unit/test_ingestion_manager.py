@@ -26,7 +26,8 @@ from argus.ingestion.manager import (
     IngestionManagerConfig,
     StaticWalletSource,
 )
-from argus.ingestion.reconciliation import ReconciliationEngine
+from argus.ingestion.parse_ledger import InMemoryParseAttemptRecorder
+from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationRepos
 from argus.providers import StreamNotification
 from argus.providers.usage import RequestUsageRecord, StreamingUsageRecord
 from tests.unit.test_reconciliation import (
@@ -35,6 +36,7 @@ from tests.unit.test_reconciliation import (
     FakeEventLedger,
     FakeSwapRecorder,
     FakeWatermarkStore,
+    _FakeUnitOfWork,
     _valid_raw_payload,
 )
 
@@ -108,15 +110,20 @@ def _manager(
     streaming_usage_recorder: FakeUsageRecorder | None = None,
     config: IngestionManagerConfig = FAST_CONFIG,
 ) -> IngestionManager:
-    engine = ReconciliationEngine(
-        chain_provider=provider,
+    repos = ReconciliationRepos(
         watermark_store=store,
         event_recorder=ledger,
+        commitment_store=commitment_store or FakeCommitmentStore(),
+        swap_recorder=swap_recorder or FakeSwapRecorder(),
+        parse_attempt_recorder=InMemoryParseAttemptRecorder(),
+        recent_event_source=None,
+    )
+    engine = ReconciliationEngine(
+        chain_provider=provider,
+        unit_of_work=_FakeUnitOfWork(repos),
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
-        commitment_store=commitment_store or FakeCommitmentStore(),
-        swap_recorder=swap_recorder or FakeSwapRecorder(),
         clock_monitor=clock_monitor,
     )
     return IngestionManager(
@@ -176,13 +183,29 @@ async def test_end_to_end_disconnect_reconnect_canonicalizes_a_and_b_exactly_onc
     )
     manager = _manager(provider, stream, ledger, store, (WALLET_A,))
 
+    # "B occurs while disconnected" -- added exactly once, gated on A
+    # already being fast-path-recorded, not unconditionally on every
+    # predicate poll. Phase 1 remediation round 2's pagination-continuity
+    # validation (finding #10) now correctly DEGRADEs a reconciliation
+    # that ever sees the same signature twice in fetched history, so
+    # repeatedly re-adding "sig-B" here would itself make the fake
+    # provider malformed.
+    b_added = False
+
     def a_and_b_recorded() -> bool:
-        provider.add_transaction("sig-B", slot=2, raw_payload={"tx": "B"})
-        return ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows and (
-            "sig-B",
-            WALLET_A,
-            "TRANSACTION_OBSERVED",
-        ) in ledger.rows
+        nonlocal b_added
+        if not b_added and ("sig-A", WALLET_A, "TRANSACTION_OBSERVED") in ledger.rows:
+            provider.add_transaction("sig-B", slot=2, raw_payload={"tx": "B"})
+            b_added = True
+        return (
+            b_added
+            and (
+                "sig-B",
+                WALLET_A,
+                "TRANSACTION_OBSERVED",
+            )
+            in ledger.rows
+        )
 
     stop_event = asyncio.Event()
     await _run_until(stop_event, manager, a_and_b_recorded)

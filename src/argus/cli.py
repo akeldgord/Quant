@@ -236,10 +236,7 @@ def ingest_run(
 
     async def _run_test_mode() -> int:
         from argus.ingestion.test_mode import (
-            InMemoryCommitmentStore,
-            InMemoryEventRecorder,
-            InMemorySwapRecorder,
-            InMemoryWatermarkStore,
+            InMemoryReconciliationUnitOfWork,
             NullChainProvider,
             NullLiveStream,
         )
@@ -248,13 +245,10 @@ def ingest_run(
         provider = NullChainProvider()
         engine = ReconciliationEngine(
             chain_provider=provider,
-            watermark_store=InMemoryWatermarkStore(),
-            event_recorder=InMemoryEventRecorder(),
+            unit_of_work=InMemoryReconciliationUnitOfWork(),
             clock=Clock(),
             provider_name="test-mode",
             parser_version=PARSER_VERSION,
-            commitment_store=InMemoryCommitmentStore(),
-            swap_recorder=InMemorySwapRecorder(),
         )
         manager = IngestionManager(
             wallet_source=StaticWalletSource(wallets),
@@ -287,10 +281,7 @@ def ingest_run(
 
         from argus.db.connection import connection_for_role
         from argus.db.roles import DbRole
-        from argus.ingestion.commitment_repository import SqlCommitmentObservationStore
-        from argus.ingestion.event_repository import SqlEventRecorder
-        from argus.ingestion.swap_repository import SqlSwapRecorder
-        from argus.ingestion.watermark_repository import SqlWatermarkStore
+        from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
         from argus.providers.credentials import MissingProviderCredentialError
         from argus.providers.helius.client import (
             HeliusRpcClient,
@@ -314,11 +305,16 @@ def ingest_run(
 
         db_info = connection_for_role(config, DbRole.INGEST)
         db_engine = create_async_engine(db_info.as_asyncpg_url())
+        # A session factory, not one shared session (finding #2): every
+        # atomic operation -- one wallet's one reconciliation item, one
+        # usage write -- opens, commits, and closes its own session, so
+        # no AsyncSession is ever touched by more than one concurrent
+        # task.
         sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
         retry_policy = retry_policy_from_config(config)
 
-        async with httpx.AsyncClient(timeout=30.0) as http_client, sessionmaker() as session:
-            usage_recorder = SqlUsageRecorder(session)
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            usage_recorder = SqlUsageRecorder(sessionmaker)
             rpc_client = HeliusRpcClient(
                 api_key,
                 http_client=http_client,
@@ -328,15 +324,10 @@ def ingest_run(
             ws_stream = HeliusWebSocketStream(api_key, connector=WebSocketsConnector())
             reconciliation_engine = ReconciliationEngine(
                 chain_provider=rpc_client,
-                watermark_store=SqlWatermarkStore(session),
-                event_recorder=SqlEventRecorder(session),
+                unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
                 clock=Clock(),
                 provider_name="helius",
                 parser_version=PARSER_VERSION,
-                commitment_store=SqlCommitmentObservationStore(session),
-                swap_recorder=SqlSwapRecorder(session),
-                recent_event_source=SqlEventRecorder(session),
-                commit_hook=session.commit,
             )
             manager = IngestionManager(
                 wallet_source=StaticWalletSource(tuple(wallet or ())),
@@ -357,6 +348,114 @@ def ingest_run(
         return 0
 
     raise typer.Exit(code=asyncio.run(_run_test_mode() if test_mode else _run_live()))
+
+
+@ingest_app.command("reparse")
+def ingest_reparse(
+    parser_version: str = typer.Option(
+        "",
+        "--parser-version",
+        help="Parser version to (re)attempt. Defaults to the currently running "
+        "PARSER_VERSION -- pass an explicit value to retry a specific historical version.",
+    ),
+    limit: int = typer.Option(
+        500, "--limit", help="Maximum number of events to (re)attempt in this run."
+    ),
+) -> None:
+    """Deterministic reparse sweep (Phase 1 remediation round 2, finding
+    #9): finds every ``chain_events`` row lacking a non-failure
+    ``parse_attempts`` row at the target parser version -- never-yet-
+    attempted events and events whose only attempts at this version were
+    failures -- and re-runs the parser against their already-immutable
+    raw evidence. Never rewrites a prior attempt or the raw payload:
+    every run only appends new ``parse_attempts``/``swaps`` rows. Requires
+    a database; performs no network I/O and no signing/execution/
+    broadcast (MASTER_SPEC.md section 108)."""
+    import uuid
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from argus.db.connection import connection_for_role
+    from argus.db.roles import DbRole
+    from argus.domain.chain_events import ChainEvent
+    from argus.ingestion.parse_attempt_repository import SqlParseAttemptRecorder
+    from argus.ingestion.parse_ledger import ParseAttemptDraft, outcome_for, payload_hash
+    from argus.ingestion.swap_repository import SqlSwapRecorder
+    from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
+
+    target_version = parser_version or PARSER_VERSION
+
+    async def _run() -> int:
+        config = load_config()
+        db_info = connection_for_role(config, DbRole.INGEST)
+        db_engine = create_async_engine(db_info.as_asyncpg_url())
+        sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
+        now = Clock().utc_now()
+
+        async with sessionmaker() as session:
+            ledger = SqlParseAttemptRecorder(session)
+            pending = await ledger.events_pending_at_version(target_version, limit=limit)
+
+        attempted = 0
+        succeeded = 0
+        still_failing = 0
+        for event_id in pending:
+            async with sessionmaker() as session, session.begin():
+                row = await session.get(ChainEvent, event_id)
+                if row is None:
+                    continue  # pragma: no cover - event deleted between the sweep and here
+                attempted += 1
+                exc: BaseException | None = None
+                classification: str | None = None
+                try:
+                    parsed = parse_transaction(
+                        row.raw_payload,
+                        wallet_address=row.wallet_address or "",
+                        slot=row.slot,
+                        block_time=row.block_time,
+                    )
+                    classification = parsed.classification
+                    await SqlSwapRecorder(session).record(
+                        event_id=row.event_id,
+                        wallet_address=row.wallet_address or "",
+                        parsed=parsed,
+                        created_at=now,
+                    )
+                except Exception as caught:  # noqa: BLE001 - recorded, never fatal to the sweep
+                    exc = caught
+
+                outcome, retry_disposition = outcome_for(classification=classification, exc=exc)
+                # `parse_transaction()` always stamps the currently running
+                # `PARSER_VERSION`, never `target_version` -- that field only
+                # selects *which* prior version's failures to re-attempt;
+                # the ledger records the version that actually ran.
+                await SqlParseAttemptRecorder(session).record(
+                    ParseAttemptDraft(
+                        attempt_id=uuid.uuid4(),
+                        event_id=row.event_id,
+                        parser_version=PARSER_VERSION,
+                        attempted_at=now,
+                        outcome=outcome,
+                        error_class=type(exc).__name__ if exc is not None else None,
+                        error_reason=str(exc)[:512] if exc is not None else None,
+                        input_payload_hash=payload_hash(row.raw_payload),
+                        retry_disposition=retry_disposition,
+                        created_at=now,
+                    )
+                )
+                if exc is None:
+                    succeeded += 1
+                else:
+                    still_failing += 1
+
+        await db_engine.dispose()
+        console.print(
+            f"reparse @ {target_version}: {attempted} attempted, {succeeded} succeeded/unknown, "
+            f"{still_failing} still failing (of {len(pending)} pending, limit {limit})"
+        )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
 
 
 if __name__ == "__main__":

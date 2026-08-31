@@ -1,0 +1,105 @@
+"""Durable parse-attempt ledger protocol (Phase 1 remediation round 2,
+finding #9) -- see ``argus.domain.parse_attempts`` for the schema
+rationale. Written against a protocol, matching every other
+``argus.ingestion`` repository, so ``ReconciliationEngine`` and the
+``argus ingest reparse`` sweep never depend on a real database directly.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import uuid
+from datetime import datetime
+from typing import Protocol
+
+from argus.domain.parse_attempts import (
+    PARSE_OUTCOME_FAILURE,
+    PARSE_OUTCOME_SUCCESS,
+    PARSE_OUTCOME_UNKNOWN,
+    PARSE_RETRY_NOT_APPLICABLE,
+    PARSE_RETRY_RETRYABLE,
+)
+
+_CLASSIFICATION_UNKNOWN = "UNKNOWN"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParseAttemptDraft:
+    attempt_id: uuid.UUID
+    event_id: uuid.UUID
+    parser_version: str
+    attempted_at: datetime
+    outcome: str
+    error_class: str | None
+    error_reason: str | None
+    input_payload_hash: str
+    retry_disposition: str
+    created_at: datetime
+
+
+class ParseAttemptRecorder(Protocol):
+    """A real implementation backs onto ``parse_attempts``; a fake for
+    tests is a plain in-memory list."""
+
+    async def record(self, draft: ParseAttemptDraft) -> None: ...
+    async def events_pending_at_version(
+        self, parser_version: str, *, limit: int
+    ) -> list[uuid.UUID]:
+        """Every ``event_id`` that has never had a ``SUCCESS`` or
+        ``UNKNOWN`` attempt recorded at ``parser_version`` -- i.e. events
+        ``argus ingest reparse`` should retry: never-yet-attempted events
+        and events whose only attempts at this version were failures.
+        Never includes an event that already has a non-failure attempt at
+        this exact version (idempotent: re-running the sweep is safe)."""
+        ...
+
+
+def payload_hash(raw_payload: dict[str, object]) -> str:
+    """Shared with ``argus.ingestion.reconciliation._payload_hash`` in
+    spirit (same canonical-JSON SHA-256 scheme) -- kept as a separate,
+    trivially-reusable function here so the parse ledger never needs to
+    import reconciliation just for this."""
+    import json
+
+    canonical = json.dumps(raw_payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def outcome_for(*, classification: str | None, exc: BaseException | None) -> tuple[str, str]:
+    """Maps a parse attempt's real result to ``(outcome, retry_disposition)``."""
+    if exc is not None:
+        return PARSE_OUTCOME_FAILURE, PARSE_RETRY_RETRYABLE
+    if classification == _CLASSIFICATION_UNKNOWN:
+        return PARSE_OUTCOME_UNKNOWN, PARSE_RETRY_NOT_APPLICABLE
+    return PARSE_OUTCOME_SUCCESS, PARSE_RETRY_NOT_APPLICABLE
+
+
+class InMemoryParseAttemptRecorder:
+    """Reference in-memory :class:`ParseAttemptRecorder` for
+    ``argus.ingestion.test_mode`` and the unit-test suite."""
+
+    def __init__(self) -> None:
+        self.attempts: list[ParseAttemptDraft] = []
+
+    async def record(self, draft: ParseAttemptDraft) -> None:
+        self.attempts.append(draft)
+
+    async def events_pending_at_version(
+        self, parser_version: str, *, limit: int
+    ) -> list[uuid.UUID]:
+        succeeded_or_unknown = {
+            a.event_id
+            for a in self.attempts
+            if a.parser_version == parser_version and a.outcome != PARSE_OUTCOME_FAILURE
+        }
+        pending: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = set()
+        for attempt in self.attempts:
+            if attempt.event_id in succeeded_or_unknown or attempt.event_id in seen:
+                continue
+            seen.add(attempt.event_id)
+            pending.append(attempt.event_id)
+            if len(pending) >= limit:
+                break
+        return pending

@@ -1,9 +1,17 @@
 """End-to-end integration test: ReconciliationEngine wired to the real
 SqlEventRecorder/SqlWatermarkStore/SqlCommitmentObservationStore/
-SqlSwapRecorder against a real Postgres database (not fakes) -- proves the
-dedup unique-constraint, watermark persistence, commitment-observation
-persistence, and parsed-swap persistence actually work together, not just
-the abstract in-memory logic covered in tests/unit/test_reconciliation.py.
+SqlSwapRecorder/SqlParseAttemptRecorder against a real Postgres database
+(not fakes) -- proves the dedup unique-constraint, watermark persistence,
+commitment-observation persistence, and parsed-swap persistence actually
+work together, not just the abstract in-memory logic covered in
+tests/unit/test_reconciliation.py.
+
+Phase 1 remediation round 2 (argus-phase-1-remediation-002), finding #2:
+the engine now takes a :class:`~argus.ingestion.unit_of_work.SqlReconciliationUnitOfWork`
+(a session factory), not a single bound session -- every call below
+constructs the engine once per test against a sessionmaker and lets the
+engine open/commit/close its own sessions per atomic operation
+internally; tests no longer manage a session lifecycle themselves.
 """
 
 from __future__ import annotations
@@ -13,7 +21,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from argus.clock import Clock
 from argus.config import load_config
@@ -21,13 +29,12 @@ from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
 from argus.domain.commitment import COMMITMENT_CONFIRMED
+from argus.domain.parse_attempts import PARSE_OUTCOME_SUCCESS, ParseAttempt
 from argus.domain.swaps import Swap
 from argus.ingestion.commitment import derive_current_state
 from argus.ingestion.commitment_repository import SqlCommitmentObservationStore
-from argus.ingestion.event_repository import SqlEventRecorder
 from argus.ingestion.reconciliation import ReconciliationEngine, ReconciliationTrigger
-from argus.ingestion.swap_repository import SqlSwapRecorder
-from argus.ingestion.watermark_repository import SqlWatermarkStore
+from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
 from argus.providers import SignatureInfo, StreamNotification
 
 pytestmark = pytest.mark.asyncio
@@ -100,20 +107,52 @@ class _FakeChainProvider:
 
 
 def _engine(
-    provider: _FakeChainProvider, session: Any, *, page_size: int = 1000
+    provider: _FakeChainProvider,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    page_size: int = 1000,
 ) -> ReconciliationEngine:
     return ReconciliationEngine(
         chain_provider=provider,
-        watermark_store=SqlWatermarkStore(session),
-        event_recorder=SqlEventRecorder(session),
+        unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
-        commitment_store=SqlCommitmentObservationStore(session),
-        swap_recorder=SqlSwapRecorder(session),
         page_size=page_size,
-        commit_hook=session.commit,
     )
+
+
+async def _cleanup(admin_engine: Any, wallet: str) -> None:
+    async with admin_engine.connect() as conn:
+        await conn.execute(
+            text(
+                "DELETE FROM parse_attempts WHERE event_id IN "
+                "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
+            ),
+            {"w": wallet},
+        )
+        await conn.execute(
+            text(
+                "DELETE FROM commitment_observation_rejections WHERE event_id IN "
+                "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
+            ),
+            {"w": wallet},
+        )
+        await conn.execute(
+            text(
+                "DELETE FROM commitment_observations WHERE event_id IN "
+                "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
+            ),
+            {"w": wallet},
+        )
+        await conn.execute(text("DELETE FROM swaps WHERE wallet_address = :w"), {"w": wallet})
+        await conn.execute(
+            text("DELETE FROM chain_events WHERE wallet_address = :w"), {"w": wallet}
+        )
+        await conn.execute(
+            text("DELETE FROM wallet_stream_state WHERE wallet_address = :w"), {"w": wallet}
+        )
+        await conn.commit()
 
 
 async def test_reconciliation_engine_with_real_sql_repositories(admin_engine) -> None:
@@ -129,24 +168,21 @@ async def test_reconciliation_engine_with_real_sql_repositories(admin_engine) ->
     )
 
     try:
-        async with sessionmaker() as session:
-            engine = _engine(provider, session)
-            fast_added = await engine.observe_stream_event(
-                StreamNotification(wallet_address=wallet, signature="sql-sig-A", slot=1),
-                raw_payload=_valid_raw_payload(wallet, "sql-sig-A", 1_000),
-            )
-            assert fast_added is True
+        engine = _engine(provider, sessionmaker)
+        fast_added = await engine.observe_stream_event(
+            StreamNotification(wallet_address=wallet, signature="sql-sig-A", slot=1),
+            raw_payload=_valid_raw_payload(wallet, "sql-sig-A", 1_000),
+        )
+        assert fast_added is True
 
         provider.add_transaction(
             "sql-sig-B", slot=2, raw_payload=_valid_raw_payload(wallet, "sql-sig-B", 2_000)
         )
 
-        async with sessionmaker() as session:
-            engine = _engine(provider, session)
-            result = await engine.reconcile(wallet, ReconciliationTrigger.RECONNECT)
-            assert result.ok is True
-            assert result.new_events == 1  # A already recorded; only B is new
-            assert result.parser_failures == 0
+        result = await engine.reconcile(wallet, ReconciliationTrigger.RECONNECT)
+        assert result.ok is True
+        assert result.new_events == 1  # A already recorded; only B is new
+        assert result.parser_failures == 0
 
         async with sessionmaker() as session:
             rows = (
@@ -181,31 +217,39 @@ async def test_reconciliation_engine_with_real_sql_repositories(admin_engine) ->
             )
             assert len(swap_rows) == 2
             assert {s.classification for s in swap_rows} == {"TRANSFER_IN"}
+
+            # Finding #9: every parse attempt is durably recorded, in the
+            # same transaction as the item's watermark advance. Both A
+            # (re-fetched via truth path, already a duplicate chain_event)
+            # and B (newly recorded) go through reconcile()'s per-item
+            # path, so both get a parse attempt row -- parsing runs
+            # unconditionally per fetched item, independent of whether
+            # the chain_event insert itself was new or a dedup no-op.
+            attempt_rows = (
+                (
+                    await session.execute(
+                        select(ParseAttempt).where(
+                            ParseAttempt.event_id.in_([event_a.event_id, event_b.event_id])
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(attempt_rows) == 2
+            assert all(row.outcome == PARSE_OUTCOME_SUCCESS for row in attempt_rows)
     finally:
-        async with admin_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "DELETE FROM commitment_observations WHERE event_id IN "
-                    "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
-                ),
-                {"w": wallet},
-            )
-            await conn.execute(text("DELETE FROM swaps WHERE wallet_address = :w"), {"w": wallet})
-            await conn.execute(
-                text("DELETE FROM chain_events WHERE wallet_address = :w"), {"w": wallet}
-            )
-            await conn.execute(
-                text("DELETE FROM wallet_stream_state WHERE wallet_address = :w"), {"w": wallet}
-            )
-            await conn.commit()
+        await _cleanup(admin_engine, wallet)
         await ingest_engine.dispose()
 
 
 async def test_multi_page_reconciliation_commits_progress_per_item(admin_engine) -> None:
-    """Proves the commit_hook wiring is real: each item's watermark
-    advance is durably committed as it happens, not only at the very end
-    -- a crash after item N must never require re-fetching or losing
-    items 1..N (finding #2's "persist partial progress transactionally")."""
+    """Proves each item is its own atomic unit of work (finding #2): the
+    watermark advance, chain event, commitment observation, and parse
+    attempt for item N are all durably committed together as they
+    happen, not only at the very end -- a crash after item N must never
+    require re-fetching or losing items 1..N ("persist partial progress
+    transactionally")."""
     config = load_config()
     ingest_info = connection_for_role(config, DbRole.INGEST)
     ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
@@ -221,11 +265,10 @@ async def test_multi_page_reconciliation_commits_progress_per_item(admin_engine)
         )
 
     try:
-        async with sessionmaker() as session:
-            engine = _engine(provider, session, page_size=2)
-            result = await engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
-            assert result.ok is True
-            assert result.new_events == 5
+        engine = _engine(provider, sessionmaker, page_size=2)
+        result = await engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
+        assert result.ok is True
+        assert result.new_events == 5
 
         async with sessionmaker() as session:
             rows = (
@@ -239,20 +282,94 @@ async def test_multi_page_reconciliation_commits_progress_per_item(admin_engine)
             )
             assert len(rows) == 5
     finally:
-        async with admin_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "DELETE FROM commitment_observations WHERE event_id IN "
-                    "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
-                ),
-                {"w": wallet},
+        await _cleanup(admin_engine, wallet)
+        await ingest_engine.dispose()
+
+
+async def test_concurrent_wallets_use_independent_sessions_no_cross_commit(admin_engine) -> None:
+    """Finding #2's core mandatory acceptance criterion: multi-wallet
+    concurrency uses no shared AsyncSession and has no cross-commit/
+    cross-rollback. Two wallets reconcile concurrently via `asyncio.gather`
+    against the SAME engine instance (same unit-of-work factory); one
+    wallet's provider is made to fail on its second transaction fetch.
+    The failed wallet's already-processed first item must remain
+    committed and the healthy wallet's items must be entirely unaffected
+    -- proving no session is shared across the two concurrent calls."""
+    import asyncio
+
+    config = load_config()
+    ingest_info = connection_for_role(config, DbRole.INGEST)
+    ingest_engine = create_async_engine(ingest_info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(ingest_engine, expire_on_commit=False)
+
+    wallet_ok = f"sql-concurrent-ok-{uuid.uuid4()}"
+    wallet_fail = f"sql-concurrent-fail-{uuid.uuid4()}"
+
+    class _PartiallyFailingProvider(_FakeChainProvider):
+        def __init__(self, *, fail_signature: str) -> None:
+            super().__init__()
+            self._fail_signature = fail_signature
+
+        async def get_transaction(self, signature: str) -> dict[str, Any]:
+            if signature == self._fail_signature:
+                raise ConnectionError("simulated mid-reconciliation failure")
+            return await super().get_transaction(signature)
+
+    provider_ok = _FakeChainProvider()
+    for i in range(3):
+        provider_ok.add_transaction(
+            f"sql-ok-sig-{i}",
+            slot=i,
+            raw_payload=_valid_raw_payload(wallet_ok, f"sql-ok-sig-{i}", 100),
+        )
+
+    provider_fail = _PartiallyFailingProvider(fail_signature="sql-fail-sig-1")
+    provider_fail.add_transaction(
+        "sql-fail-sig-0", slot=0, raw_payload=_valid_raw_payload(wallet_fail, "sql-fail-sig-0", 100)
+    )
+    provider_fail.add_transaction(
+        "sql-fail-sig-1", slot=1, raw_payload=_valid_raw_payload(wallet_fail, "sql-fail-sig-1", 100)
+    )
+
+    engine_ok = _engine(provider_ok, sessionmaker)
+    engine_fail = _engine(provider_fail, sessionmaker)
+
+    try:
+        result_ok, result_fail = await asyncio.gather(
+            engine_ok.reconcile(wallet_ok, ReconciliationTrigger.SCHEDULED),
+            engine_fail.reconcile(wallet_fail, ReconciliationTrigger.SCHEDULED),
+        )
+
+        assert result_ok.ok is True
+        assert result_ok.new_events == 3  # entirely unaffected by the other wallet's failure
+
+        assert result_fail.ok is False
+        assert result_fail.new_events == 1  # sql-fail-sig-0 committed before the failure
+
+        async with sessionmaker() as session:
+            ok_rows = (
+                (
+                    await session.execute(
+                        select(ChainEvent).where(ChainEvent.wallet_address == wallet_ok)
+                    )
+                )
+                .scalars()
+                .all()
             )
-            await conn.execute(text("DELETE FROM swaps WHERE wallet_address = :w"), {"w": wallet})
-            await conn.execute(
-                text("DELETE FROM chain_events WHERE wallet_address = :w"), {"w": wallet}
+            assert len(ok_rows) == 3
+
+            fail_rows = (
+                (
+                    await session.execute(
+                        select(ChainEvent).where(ChainEvent.wallet_address == wallet_fail)
+                    )
+                )
+                .scalars()
+                .all()
             )
-            await conn.execute(
-                text("DELETE FROM wallet_stream_state WHERE wallet_address = :w"), {"w": wallet}
-            )
-            await conn.commit()
+            assert len(fail_rows) == 1
+            assert fail_rows[0].transaction_signature == "sql-fail-sig-0"
+    finally:
+        await _cleanup(admin_engine, wallet_ok)
+        await _cleanup(admin_engine, wallet_fail)
         await ingest_engine.dispose()

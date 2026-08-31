@@ -36,7 +36,7 @@ from argus.ingestion.reconciliation import (
     ReconciliationTrigger,
 )
 from argus.ingestion.swap_repository import SqlSwapRecorder
-from argus.ingestion.watermark_repository import SqlWatermarkStore
+from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
 from argus.parsing.generic_parser import PARSER_VERSION, parse_transaction
 from argus.providers import SignatureInfo, StreamNotification
 
@@ -121,6 +121,20 @@ async def _cleanup(admin_engine, wallet: str) -> None:
     async with admin_engine.connect() as conn:
         await conn.execute(
             text(
+                "DELETE FROM parse_attempts WHERE event_id IN "
+                "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
+            ),
+            {"w": wallet},
+        )
+        await conn.execute(
+            text(
+                "DELETE FROM commitment_observation_rejections WHERE event_id IN "
+                "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
+            ),
+            {"w": wallet},
+        )
+        await conn.execute(
+            text(
                 "DELETE FROM commitment_observations WHERE event_id IN "
                 "(SELECT event_id FROM chain_events WHERE wallet_address = :w)"
             ),
@@ -183,13 +197,19 @@ async def test_raw_evidence_is_immutable_and_unmutated_across_replay(admin_engin
                 assert row.payload_hash == _payload_hash(row.raw_payload)
                 assert row.payload_hash == draft.payload_hash
 
-        # Replaying (re-recording) the exact same draft must never create
-        # a second row or alter the first.
+        # Replaying (re-recording) the same observation -- a fresh
+        # `event_id` (exactly how the real engine always calls `record()`:
+        # every draft gets a newly generated id, never a reused one) but
+        # the identical natural key (signature, wallet, event_type) --
+        # must resolve to the original row, never create a second one.
+        replay_draft = dataclasses.replace(draft, event_id=uuid.uuid4())
         async with sessionmaker() as session:
             recorder = SqlEventRecorder(session)
-            replay_outcome = await recorder.record(draft)
+            replay_outcome = await recorder.record(replay_draft)
             assert replay_outcome.is_new is False
-            assert replay_outcome.event_id == draft.event_id
+            assert (
+                replay_outcome.event_id == draft.event_id
+            )  # the real, original row -- not a new one
 
         async with sessionmaker() as session:
             rows = (
@@ -228,23 +248,18 @@ async def test_duplicate_delivery_replay_is_idempotent(admin_engine) -> None:
     raw_payload = _valid_raw_payload(signature="replay-sig-dup", amount_in=500, wallet=wallet)
 
     try:
+        recon_engine = ReconciliationEngine(
+            chain_provider=_FakeChainProvider(),
+            unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+            clock=Clock(),
+            provider_name="replay-test",
+            parser_version=PARSER_VERSION,
+        )
         for _ in range(3):  # "replaying" the identical fast-path delivery 3 times
-            async with sessionmaker() as session:
-                recon_engine = ReconciliationEngine(
-                    chain_provider=_FakeChainProvider(),
-                    watermark_store=SqlWatermarkStore(session),
-                    event_recorder=SqlEventRecorder(session),
-                    clock=Clock(),
-                    provider_name="replay-test",
-                    parser_version=PARSER_VERSION,
-                    commitment_store=SqlCommitmentObservationStore(session),
-                    swap_recorder=SqlSwapRecorder(session),
-                    commit_hook=session.commit,
-                )
-                await recon_engine.observe_stream_event(
-                    StreamNotification(wallet_address=wallet, signature="replay-sig-dup", slot=1),
-                    raw_payload=raw_payload,
-                )
+            await recon_engine.observe_stream_event(
+                StreamNotification(wallet_address=wallet, signature="replay-sig-dup", slot=1),
+                raw_payload=raw_payload,
+            )
 
         async with sessionmaker() as session:
             rows = (
@@ -288,20 +303,15 @@ async def test_process_restart_replay_recovers_missed_events_from_persisted_boun
     )
 
     try:
-        async with sessionmaker() as session:
-            recon_engine = ReconciliationEngine(
-                chain_provider=provider,
-                watermark_store=SqlWatermarkStore(session),
-                event_recorder=SqlEventRecorder(session),
-                clock=Clock(),
-                provider_name="replay-test",
-                parser_version=PARSER_VERSION,
-                commitment_store=SqlCommitmentObservationStore(session),
-                swap_recorder=SqlSwapRecorder(session),
-                commit_hook=session.commit,
-            )
-            result = await recon_engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
-            assert result.new_events == 1
+        recon_engine = ReconciliationEngine(
+            chain_provider=provider,
+            unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+            clock=Clock(),
+            provider_name="replay-test",
+            parser_version=PARSER_VERSION,
+        )
+        result = await recon_engine.reconcile(wallet, ReconciliationTrigger.SCHEDULED)
+        assert result.new_events == 1
 
         # Event B occurs after this "process" has already persisted its
         # watermark and gone away.
@@ -311,25 +321,22 @@ async def test_process_restart_replay_recovers_missed_events_from_persisted_boun
             raw_payload=_valid_raw_payload(signature="replay-sig-B", amount_in=200),
         )
 
-        # "Restart": a brand-new session/engine instance replays forward
-        # from exactly the persisted watermark boundary, recovering only
-        # what's new -- not re-processing A, not missing B.
-        async with sessionmaker() as restarted_session:
-            restarted_engine = ReconciliationEngine(
-                chain_provider=provider,
-                watermark_store=SqlWatermarkStore(restarted_session),
-                event_recorder=SqlEventRecorder(restarted_session),
-                clock=Clock(),
-                provider_name="replay-test",
-                parser_version=PARSER_VERSION,
-                commitment_store=SqlCommitmentObservationStore(restarted_session),
-                swap_recorder=SqlSwapRecorder(restarted_session),
-                commit_hook=restarted_session.commit,
-            )
-            restart_result = await restarted_engine.reconcile(
-                wallet, ReconciliationTrigger.PROCESS_RESTART
-            )
-            assert restart_result.new_events == 1
+        # "Restart": a brand-new engine instance (fresh in-process state;
+        # a real process restart has none either) replays forward from
+        # exactly the persisted watermark boundary -- via the same
+        # sessionmaker, since a real database does survive a restart --
+        # recovering only what's new: not re-processing A, not missing B.
+        restarted_engine = ReconciliationEngine(
+            chain_provider=provider,
+            unit_of_work=SqlReconciliationUnitOfWork(sessionmaker),
+            clock=Clock(),
+            provider_name="replay-test",
+            parser_version=PARSER_VERSION,
+        )
+        restart_result = await restarted_engine.reconcile(
+            wallet, ReconciliationTrigger.PROCESS_RESTART
+        )
+        assert restart_result.new_events == 1
 
         async with sessionmaker() as session:
             rows = (

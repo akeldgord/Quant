@@ -18,8 +18,10 @@ persistence (finding #3), and parser-to-persistence wiring (finding #4).
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
@@ -27,16 +29,27 @@ import pytest
 
 from argus.clock import Clock
 from argus.domain.commitment import COMMITMENT_CONFIRMED, COMMITMENT_FINALIZED, COMMITMENT_PROCESSED
-from argus.ingestion.commitment import CommitmentObservationDraft, derive_current_state
+from argus.ingestion.commitment import (
+    InMemoryCommitmentObservationStore,
+    derive_current_state,
+)
+from argus.ingestion.parse_ledger import InMemoryParseAttemptRecorder
 from argus.ingestion.reconciliation import (
     ChainEventDraft,
     ReconciliationEngine,
+    ReconciliationRepos,
     ReconciliationTrigger,
     RecordOutcome,
     WalletWatermark,
 )
 from argus.parsing.generic_parser import ParsedTransaction
 from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification
+
+# Phase 1 remediation round 2 (finding #5): the shared reference fake --
+# same lock()/append_rejection()/sequence-stamping contract the real SQL
+# store has. Kept under this name since tests/unit/test_ingestion_manager.py
+# imports it from here.
+FakeCommitmentStore = InMemoryCommitmentObservationStore
 
 WALLET = "TestWallet1111111111111111111111111111111"
 COUNTERPARTY = "CounterpartyWallet22222222222222222222222"
@@ -177,20 +190,6 @@ class FakeWatermarkStore:
         return dict(self._rows)
 
 
-class FakeCommitmentStore:
-    def __init__(self, snapshot: list[CommitmentObservationDraft] | None = None) -> None:
-        self.rows: list[CommitmentObservationDraft] = list(snapshot or [])
-
-    async def list_for_event(self, event_id: uuid.UUID) -> list[CommitmentObservationDraft]:
-        return [r for r in self.rows if r.event_id == event_id]
-
-    async def append(self, observation: CommitmentObservationDraft) -> None:
-        self.rows.append(observation)
-
-    def snapshot(self) -> list[CommitmentObservationDraft]:
-        return list(self.rows)
-
-
 class FakeSwapRecorder:
     def __init__(self) -> None:
         self.rows: dict[tuple[uuid.UUID, str], ParsedTransaction] = {}
@@ -220,6 +219,21 @@ class FakeRecentEventSource:
         return self.pairs[:limit]
 
 
+class _FakeUnitOfWork:
+    """Phase 1 remediation round 2, finding #2: the real engine now takes
+    a unit-of-work factory, not individually bound repos. For these
+    in-memory fakes -- which have no real transaction/session to scope
+    per operation -- every call yields the same fixed bundle; the fakes
+    themselves are what a test inspects afterward, exactly as before."""
+
+    def __init__(self, repos: ReconciliationRepos) -> None:
+        self._repos = repos
+
+    @contextlib.asynccontextmanager
+    async def __call__(self) -> AsyncIterator[ReconciliationRepos]:
+        yield self._repos
+
+
 def _engine(
     provider: FakeChainProvider,
     ledger: FakeEventLedger,
@@ -227,22 +241,27 @@ def _engine(
     *,
     commitment_store: FakeCommitmentStore | None = None,
     swap_recorder: FakeSwapRecorder | None = None,
+    parse_attempt_recorder: InMemoryParseAttemptRecorder | None = None,
     clock_monitor: Any | None = None,
     recent_event_source: Any | None = None,
     page_size: int = 1000,
     max_pages: int = 50,
 ) -> ReconciliationEngine:
-    return ReconciliationEngine(
-        chain_provider=provider,
+    repos = ReconciliationRepos(
         watermark_store=store,
         event_recorder=ledger,
+        commitment_store=commitment_store or FakeCommitmentStore(),
+        swap_recorder=swap_recorder or FakeSwapRecorder(),
+        parse_attempt_recorder=parse_attempt_recorder or InMemoryParseAttemptRecorder(),
+        recent_event_source=recent_event_source,
+    )
+    return ReconciliationEngine(
+        chain_provider=provider,
+        unit_of_work=_FakeUnitOfWork(repos),
         clock=Clock(),
         provider_name="fake_provider",
         parser_version="test_v1",
-        commitment_store=commitment_store or FakeCommitmentStore(),
-        swap_recorder=swap_recorder or FakeSwapRecorder(),
         clock_monitor=clock_monitor,
-        recent_event_source=recent_event_source,
         page_size=page_size,
         max_pages=max_pages,
     )
@@ -573,7 +592,13 @@ async def test_non_progressing_cursor_fails_degraded_without_losing_prior_pages(
     result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
 
     assert result.ok is False
-    assert "non-progressing" in result.reason
+    # Finding #10 generalized cross-page validation: the exact same
+    # signature reappearing on the next page is caught by the (more
+    # specific, and now earlier-firing) duplicate-signature check before
+    # the cursor-equality check ever runs -- a non-progressing cursor is
+    # unreachable without also being a duplicate signature, since the
+    # cursor's value always came from a previously-seen item.
+    assert "duplicate signature" in result.reason or "non-progressing" in result.reason
     assert result.new_events == 0  # nothing was ever processed/persisted
     watermark = await store.get(WALLET)
     assert watermark is not None
@@ -608,6 +633,98 @@ def test_page_size_and_max_pages_must_be_positive() -> None:
         _engine(provider, ledger, store, page_size=0)
     with pytest.raises(ValueError, match="max_pages"):
         _engine(provider, ledger, store, max_pages=0)
+
+
+# --- Phase 1 remediation round 2, finding #10: pagination continuity ---
+
+
+@pytest.mark.asyncio
+async def test_multi_step_cursor_cycle_fails_degraded() -> None:
+    """A -> B -> A cycle spanning more than one step: the original check
+    (repeated-*immediately*) would miss this. Because the next page's
+    ``before`` cursor is always exactly the previous page's last item's
+    signature, a cycle at *any* distance is definitionally the same
+    signature reappearing -- which the duplicate-signature check catches
+    per-item as soon as it happens, at whichever page that is. (A cycle
+    that reintroduces a slot *lower* than one already seen also happens
+    to trip the independent ordering check first here -- either detector
+    firing is correct: both are real pagination-continuity faults for a
+    provider that revisits already-seen data.)"""
+
+    class _CyclingProvider(FakeChainProvider):
+        _pages = {
+            None: [SignatureInfo(signature="sig-B", slot=2, block_time=None, err=None)],
+            "sig-B": [SignatureInfo(signature="sig-A", slot=1, block_time=None, err=None)],
+            "sig-A": [SignatureInfo(signature="sig-B", slot=2, block_time=None, err=None)],
+        }
+
+        async def get_signatures_for_address(
+            self, wallet_address, *, until_signature=None, before_signature=None, limit=1000
+        ):
+            return self._pages[before_signature]
+
+    provider = _CyclingProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    engine = _engine(provider, ledger, store, page_size=1)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is False
+    assert "duplicate signature" in result.reason or "ordering fault" in result.reason
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.wallet_live_state == "DEGRADED"
+    assert len(ledger.rows) == 0  # nothing was ever durably processed
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_slot_within_a_page_fails_degraded() -> None:
+    class _OutOfOrderProvider(FakeChainProvider):
+        async def get_signatures_for_address(
+            self, wallet_address, *, until_signature=None, before_signature=None, limit=1000
+        ):
+            # Violates newest-first ordering: slot 1 appears before slot 5.
+            return [
+                SignatureInfo(signature="sig-newer-looking", slot=1, block_time=None, err=None),
+                SignatureInfo(signature="sig-actually-newest", slot=5, block_time=None, err=None),
+            ]
+
+    provider = _OutOfOrderProvider()
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    engine = _engine(provider, ledger, store)
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is False
+    assert "ordering fault" in result.reason
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.wallet_live_state == "DEGRADED"
+
+
+@pytest.mark.asyncio
+async def test_exact_full_final_page_is_not_mistaken_for_an_unresolved_gap() -> None:
+    """A last legitimate page that happens to be exactly `page_size` long
+    must not be misread as "more data might remain" -- pagination
+    continues one more round and correctly terminates on the natural
+    empty page that follows."""
+    provider = FakeChainProvider()
+    for i in range(4):
+        provider.add_transaction(f"sig-{i}", slot=i, raw_payload={"tx": str(i)})
+    ledger = FakeEventLedger()
+    store = FakeWatermarkStore()
+    engine = _engine(provider, ledger, store, page_size=2, max_pages=50)  # exactly 2 full pages
+
+    result = await engine.reconcile(WALLET, ReconciliationTrigger.SCHEDULED)
+
+    assert result.ok is True
+    assert result.new_events == 4
+    assert len(provider.list_calls) == 3  # 2 full pages + 1 empty page confirming the end
+    watermark = await store.get(WALLET)
+    assert watermark is not None
+    assert watermark.last_reconciled_signature == "sig-3"
 
 
 # --- Finding #3: commitment progression --------------------------------
