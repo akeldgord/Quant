@@ -7,9 +7,9 @@ here.
 
 ---
 
-INSTRUCTION_ID: argus-watcher-remediation-002
-ISSUED_AT: 2026-08-31T02:07:44Z
-TARGET_COMMIT: 79287b573bd0cc106d26d5f2001f919b11d61625
+INSTRUCTION_ID: argus-watcher-remediation-003
+ISSUED_AT: 2026-08-31T03:24:15Z
+TARGET_COMMIT: 34930bfa78cd7f667527b40f7d006c923c7c9ba6
 AUTHORIZED_ACTION: REMEDIATE_ORCHESTRATION_WATCHER_ONLY
 AUTHORIZED_PHASE: 0
 APPROVES_PHASE: NONE
@@ -21,19 +21,19 @@ STATUS: ACTIVE
   `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`.
 - `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` remains open and
   must be completed against real PostgreSQL 17 before live readiness.
-- Watcher remediation at TARGET_COMMIT is REJECTED. The four reported fixes
-  are real, but the watcher is not yet deterministic, restart-safe,
-  idempotent, and fail-closed enough for unattended phase advancement.
-- Phase 1 is NOT authorized by this instruction.
+- Watcher remediation round 2 at the audited target commit is REJECTED.
+  Many requested protections are real and useful, but several fail-open and
+  replay paths remain. The implementation does not yet satisfy the required
+  deterministic, restart-safe, idempotent, fail-closed standard.
+- Phase 1 is NOT authorized.
 - Do not change `last_orchestrator_approved_phase`, `approved_commit`, or
-  begin any Phase 1 implementation.
+  begin Phase 1 work.
 
 ## Scope
 
-Remediate only the GitHub orchestration protocol, local watcher, its tests,
-and directly related operational documentation/evidence. Do not change
-MASTER_SPEC.md or ARGUS application architecture. Allowed implementation
-files are limited to:
+Remediate only the GitHub orchestration protocol, local watcher, watcher
+tests, and directly related operational documentation/evidence. Do not
+change MASTER_SPEC.md or ARGUS application architecture. Allowed files are:
 
 - `scripts/argus_orchestrator_watch.py`
 - `tests/unit/test_orchestrator_watch.py`
@@ -43,202 +43,161 @@ files are limited to:
 - the operational-tooling note in `docs/BUILD_STATE.md`
 - a new checkpoint, bundle, and `orchestration/AGENT_HANDOFF.md`
 
-If a required safety fix cannot be made inside that scope, stop with
-`STATUS: PARTIAL` and request orchestrator review. Do not broaden scope
-silently.
+If a required safety fix cannot be completed in this scope, return
+`STATUS: PARTIAL` and stop. Do not broaden scope silently.
 
-## Required remediation
+## Defects independently reproduced
 
-### 1. Durable replay protection and invalid-state fail-closed behavior
+### 1. A self-authored next instruction can launch on the next tick
 
-The current `read_state()` converts a missing, unreadable, or malformed
-state file into a fresh `IDLE` state. If an old instruction remains ACTIVE,
-that can replay an already claimed or completed instruction.
+The round-2 regression test is not adversarial enough. It gives the
+self-authored instruction an old target, while also changing another file.
+That fails target-diff scope, but a realistic bypass remains:
 
-Implement explicit state outcomes. At minimum:
+1. During an authorized run, the implementation agent commits its work and
+   evidence.
+2. It then makes a final commit that changes only the orchestrator
+   instruction file.
+3. That self-authored instruction targets the immediately preceding
+   implementation commit and contains otherwise valid next-phase metadata.
+4. The current run correctly fails because the instruction bytes changed.
+5. On the next tick, the new instruction ID differs from the failed run's
+   ID; its target is an ancestor and only the instruction file differs.
+   Current target and phase checks therefore allow it to launch.
 
-- A malformed, unreadable, schema-invalid, or unknown-status state file must
-  produce a visible `STATE_INVALID`/equivalent failure and must not launch
-  Claude.
-- When an ACTIVE instruction exists, an unexpectedly missing state file must
-  fail closed rather than assume first execution.
-- State initialization may occur only in a clearly safe condition such as
-  `STATUS: NO_INSTRUCTION`.
-- Cross-check the current handoff so loss of local state cannot replay an
-  instruction already recorded as completed/handed off.
-- Validate field types and `current_status` against `VALID_STATUSES`.
-- Preserve atomic writes; add appropriate flush/fsync durability for the
-  state file and parent directory.
-- Never auto-retry a CLAIMED, RUNNING, FAILED, ambiguous, or previously
-  handed-off instruction. A retry requires a new `INSTRUCTION_ID`.
+This violates the requirement that a self-authored instruction can never
+launch.
 
-### 2. Failed Claude process must fail the run
+Implement both protections:
 
-The current code records a nonzero exit code or timeout, then can still mark
-the run COMPLETED if handoff files exist.
+- A detected implementation-agent modification of the instruction file is a
+  terminal trust breach, not an ordinary retryable failure. Persist a
+  distinct fail-closed/quarantined state. No later ACTIVE instruction,
+  regardless of ID or target, may launch automatically from that state.
+  Recovery requires explicit human/operator restoration and a deliberate
+  local reset procedure documented in OPERATIONS.md.
+- Tighten ordinary target provenance: an ACTIVE instruction must be
+  introduced by exactly one instruction-only commit whose parent is the
+  exact `TARGET_COMMIT`. Reject target-equals-HEAD, multiple commits between
+  target and HEAD, merge commits, or any changed path other than the
+  instruction file.
 
-- A nonzero Claude exit, timeout, `FileNotFoundError`, or other launch
-  exception must mark the run FAILED before success verification.
-- Do not accept a handoff as COMPLETED after a failed Claude process.
-- Log a bounded diagnostic without dumping environment variables,
-  credentials, or unbounded raw subprocess output.
+Do not claim that unsigned Git commits authenticate the orchestrator.
+Document the remaining file-trust boundary honestly. Do not add a new API,
+service, or paid system.
 
-### 3. Evidence must be new, immutable, and structurally valid
+### 2. Safety-critical Git command errors still fail open
 
-The current diff-membership check still accepts an old checkpoint/bundle
-that was lightly edited, and it accepts empty or malformed new files.
+Several helpers collapse Git errors into empty results. Examples:
 
-Require all of the following:
+- a failed commit-body/log read becomes an empty list, so commit attribution
+  can pass without checking any commit;
+- a failed merge-query can pass as “no merges”;
+- a failed status command can look like a clean worktree;
+- a failed diff can look like “no unexpected paths”;
+- a failed range enumeration can still allow the final head to count as the
+  only run commit.
 
-- `CHECKPOINT_PATH` and `BUNDLE_PATH` are normalized repository-relative
-  paths inside `orchestration/checkpoints/` and
-  `orchestration/bundles/`, respectively; reject absolute paths, `..`,
-  symlinks, wrong directories, and wrong extensions.
-- Both evidence paths must be newly added during this run, not merely
-  modified. An evidence path present at pre-launch HEAD is stale and must
-  fail.
-- Do not overwrite any prior checkpoint or bundle.
-- The checkpoint must be nonempty, begin and end with the standard ARGUS
-  checkpoint markers, identify PROJECT ARGUS, identify the authorized
-  phase or explicit operational-remediation scope, contain STATUS,
-  GIT_COMMIT, commands actually run, test results, acceptance criteria,
-  deviations, known debt, security state, and the next-action/STOP statement.
-- The bundle must be nonempty, contain the checkpoint, and contain the
-  required review sections/evidence. A one-line placeholder must fail.
-- Validate `AGENT_HANDOFF.md` as a complete schema, not only four fields.
-  Require every field in PROTOCOL section 5 exactly once. Reject duplicates,
-  missing fields, unresolved/foreign CURRENT_COMMIT values, a reused
-  HANDOFF_ID, and an inexact instruction-ID match.
-- `CURRENT_COMMIT` and checkpoint `GIT_COMMIT` must resolve to commits
-  created during this run (they may be an implementation commit that is an
-  ancestor of a final documentation-only hash-fill commit).
+Refactor safety-critical Git reads to return explicit success/error results
+or raise a controlled verification error. Every nonzero exit, timeout,
+unparseable result, missing expected record, or ambiguous condition must
+fail the current check. Never treat command failure as empty/clean/absent.
 
-### 4. Detect branch movement and unattributed commits
+### 3. Commit-message attribution does not require a real trailer
 
-The final local-equals-remote check is not enough. Claude can pull a
-concurrent unreviewed commit during its run and still finish with local and
-remote equal.
+The code accepts the expected text on any line anywhere in a commit body.
+A prose paragraph can contain the exact line and pass without a Git trailer.
 
-Mechanically enforce:
+Require exactly one parsed terminal trailer with key
+`ARGUS-INSTRUCTION-ID` and exact value equal to the active instruction ID.
+Use `git interpret-trailers --parse` or an equivalently strict parser.
+Reject a matching line in ordinary body prose, duplicate trailers,
+conflicting trailers, extra whitespace/value text, or an absent trailer.
 
-- Capture local HEAD, remote branch HEAD, instruction-file blob/content hash,
-  and handoff ID immediately before launch. Local and remote HEAD must match.
-- Post-run HEAD must descend linearly from pre-launch HEAD. Reject rewritten
-  ancestry, non-fast-forward movement, and merge commits in the run range.
-- Every commit after pre-launch HEAD must carry the exact trailer
-  `ARGUS-INSTRUCTION-ID: argus-watcher-remediation-002` for this run.
-  Implement this generically using the current instruction ID, not a
-  hardcoded remediation ID.
-- Reject any post-launch commit in the range without the exact trailer. This
-  makes concurrent/unattributed branch movement visible.
-- Continue requiring the final clean worktree and exact local/remote HEAD
-  equality.
+### 4. Launch failures and diagnostics are not fully safe
 
-### 5. Mechanically prevent implementation-agent self-authorization
+Only timeout and `OSError` are converted immediately to FAILED. An
+unexpected `Exception` from the launch wrapper leaves the state RUNNING
+until a later tick, and an interactive `--once` run can exit without
+persisting FAILED. Catch all ordinary launch exceptions, persist FAILED
+immediately, and never run success verification afterward.
 
-The implementation agent owns handoffs, not instructions.
+Do not log Claude stdout/stderr. Truncation is not credential redaction.
+A secret in the first 300 characters is still leaked. Log only safe,
+whitelisted metadata such as exit code, timeout duration, and exception
+class. Sanitize control characters/newlines in every log detail so process
+output cannot forge watcher log entries.
 
-- The bytes/blob of `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` after the
-  run must exactly equal the pre-launch version.
-- Any implementation-agent modification of that file during a run must mark
-  the run FAILED, even if it was later committed and pushed.
-- Add this prohibition explicitly to `CLAUDE_PROMPT` and PROTOCOL.md.
-- Add a regression test where the simulated Claude run implements work,
-  writes a new ACTIVE next-phase instruction, commits, and pushes it. The
-  watcher must reject the run and must not later launch that self-authored
-  instruction.
+### 5. Timestamp validation is only a shape check
 
-### 6. Make phase gating explicit and support Phase 1.5
+The regular expression accepts impossible values such as month 99, hour 99,
+or invalid calendar dates. Parse the timestamp with a real UTC datetime
+parser and require canonical `YYYY-MM-DDTHH:MM:SSZ` round-trip form.
 
-The integer/current+1 rule is incomplete and its current prose is
-contradictory. It permits Phase 1 while BUILD_STATE still says Phase 0 is
-awaiting review, and it cannot represent the mandatory Phase 1.5 gate.
+Apply real timestamp validation to ACTIVE instructions and new handoffs.
 
-Update the protocol and watcher to use the canonical ordered phase sequence:
+### 6. Evidence linkage is too weak
 
-`0, 1, 1.5, 2, 3, 4, 5, 6, 6.5, 7, 8, 9, 10, 11`
+The bundle validator checks only that some checkpoint markers and a few
+words occur. It does not prove the bundle contains the exact checkpoint
+named by the handoff. Require exact embedded checkpoint bytes or an
+unambiguous cryptographic digest/linkage and reject a bundle containing a
+different valid checkpoint.
 
-Use normalized strings or another exact representation; do not use binary
-floating-point ordering.
+Tighten semantic validation without turning Markdown into a large parser:
 
-Add and enforce the structured `APPROVES_PHASE` field:
-
-- Same-phase remediation: `AUTHORIZED_PHASE` may equal `current_phase`
-  and `APPROVES_PHASE` must be `NONE`.
-- Advancing to the immediate successor requires
-  `APPROVES_PHASE == current_phase`, `last_completed_phase ==
-  current_phase`, and `awaiting_orchestrator_review == true`.
-- No instruction may skip a phase or sub-phase.
-- Claude must never infer approval or change approval fields without an
-  ACTIVE orchestrator instruction.
-- This current instruction is same-phase operational remediation:
-  `AUTHORIZED_PHASE: 0`, `APPROVES_PHASE: NONE`.
-- Update PROTOCOL.md wording so it accurately describes the enforced rule.
-
-### 7. Strict instruction parsing
-
-For an ACTIVE instruction, require every structured field exactly once.
-Reject duplicates, missing/empty required fields, unknown status values,
-malformed UTC timestamp, non-full TARGET_COMMIT SHA, empty/NONE
-AUTHORIZED_ACTION, invalid phase identifiers, and invalid APPROVES_PHASE.
-Do not silently accept the first of duplicate contradictory fields.
-
-Preserve `NO_INSTRUCTION` placeholder support with an explicitly validated
-safe schema.
-
-### 8. Conservative verification order
-
-After Claude returns, verify in this order:
-
-1. process exit success,
-2. pre/post ancestry and commit attribution,
-3. instruction file unchanged,
-4. complete handoff and new evidence structure,
-5. clean worktree and exact pushed remote HEAD.
-
-Any failed check must persist FAILED, log the reason, and never mark the
-instruction processed or auto-retry it.
+- checkpoint `STATUS` and `GIT_COMMIT` must each occur exactly once;
+- checkpoint commit must be a full SHA and a run commit;
+- handoff `CURRENT_PHASE` must be a recognized exact phase token and match
+  the authorized scope;
+- handoff timestamp must be real canonical UTC;
+- handoff `WORKING_TREE` must state clean and the mechanical Git check must
+  independently confirm it;
+- required handoff section headings from PROTOCOL section 5 must each exist;
+- reject contradictory duplicate checkpoint identity/status fields.
 
 ## Mandatory adversarial regression tests
 
-Keep all existing useful tests and add tests proving at least:
+Retain all useful existing tests and add tests proving at least:
 
-1. missing state + ACTIVE instruction does not launch;
-2. corrupt JSON state does not launch;
-3. invalid state schema/status does not launch;
-4. a completed/handoff-recorded instruction cannot replay after state loss;
-5. nonzero Claude exit with otherwise valid handoff/evidence is FAILED;
-6. timeout and launch exception are FAILED;
-7. modified pre-existing checkpoint/bundle is rejected;
-8. empty/malformed newly added checkpoint is rejected;
-9. empty/malformed newly added bundle is rejected;
-10. missing and duplicate handoff fields are rejected;
-11. foreign/absolute/path-traversal/symlink evidence paths are rejected;
-12. post-run HEAD not descending from pre-launch HEAD is rejected;
-13. a merge commit in the run range is rejected;
-14. a concurrent commit without the exact instruction trailer is rejected;
-15. a run commit with the wrong/substr-matching trailer is rejected;
-16. an implementation-agent change to ORCHESTRATOR_INSTRUCTIONS is rejected;
-17. a self-authored next-phase instruction cannot launch;
-18. duplicate instruction fields are rejected;
-19. malformed timestamp/full-SHA/action are rejected;
-20. Phase 1 is blocked while Phase 0 is incomplete or lacks explicit
-    `APPROVES_PHASE: 0`;
-21. Phase 1 is allowed only with the exact predecessor approval and completed
-    state;
-22. Phase 1.5 is accepted only as the immediate successor of completed
-    Phase 1 with `APPROVES_PHASE: 1`;
-23. Phase 2 is blocked directly from Phase 1;
-24. stale CLAIMED and RUNNING remain fail-closed;
-25. dirty worktree and unpushed/diverged commits remain blocked;
-26. a valid same-phase remediation run still completes as a negative control.
+1. A run writes a self-authored next instruction in a final instruction-only
+   commit, targets the immediately preceding implementation commit, uses
+   valid predecessor approval, and exits. The first tick enters terminal
+   trust-breach state and the second and all later ticks never launch it.
+2. Terminal trust-breach recovery cannot happen merely because a new
+   instruction ID appears.
+3. Target equal to HEAD is rejected for ACTIVE instructions.
+4. More than one commit between target and instruction HEAD is rejected.
+5. The exact valid case—one instruction-only commit directly atop target—is
+   accepted as a negative control.
+6. A failed `git log`/commit-body read fails attribution.
+7. A failed merge enumeration fails attribution.
+8. A failed `git status` never counts as clean.
+9. A failed `git diff` never counts as no drift.
+10. A failed run-range enumeration fails handoff verification.
+11. The exact instruction text in ordinary commit-body prose but not as a
+    terminal trailer is rejected.
+12. Duplicate or conflicting instruction trailers are rejected.
+13. One exact terminal trailer is accepted.
+14. A launch wrapper raising `RuntimeError` immediately persists FAILED,
+    including in `--once` behavior.
+15. Claude stdout/stderr containing a fake credential and embedded newline
+    never appears in the watcher log.
+16. Impossible but shape-matching instruction timestamps are rejected.
+17. Impossible but shape-matching handoff timestamps are rejected.
+18. A bundle containing a different structurally valid checkpoint is
+    rejected.
+19. Missing required handoff section headings are rejected.
+20. Invalid/contradictory checkpoint status or commit fields are rejected.
+21. All prior mandatory regression categories remain passing.
+22. A complete valid same-phase remediation run still reaches COMPLETED.
 
-Use real temporary git repositories for git behavior. The Claude process
-must remain mocked in unit tests. Ensure successful fake handoffs use
-realistic, structurally valid checkpoint/bundle content; a placeholder such
-as `checkpoint\n` must no longer count as success.
+Use real temporary Git repositories for Git behavior. The Claude subprocess
+must remain mocked. Where command-failure injection is required, inject a
+narrow deterministic failing command result while retaining a real
+temporary repository for the surrounding scenario.
 
-## Validation and handoff
+## Required validation and evidence
 
 Run and record exact results for:
 
@@ -249,26 +208,26 @@ Run and record exact results for:
 - `uv run mypy`
 - `uv run mypy scripts/argus_orchestrator_watch.py --ignore-missing-imports`
 
-Create new immutable evidence paths:
+Create new immutable evidence:
 
-- `orchestration/checkpoints/watcher_remediation_2.md`
-- `orchestration/bundles/watcher_remediation_2.txt`
+- `orchestration/checkpoints/watcher_remediation_3.md`
+- `orchestration/bundles/watcher_remediation_3.txt`
 
-Update `orchestration/AGENT_HANDOFF.md` with:
+Update the handoff with:
 
-- a new unique HANDOFF_ID;
-- `LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-watcher-remediation-002`
-  exactly;
-- the two new evidence paths above;
+- a new unique handoff ID;
+- exact last-instruction ID `argus-watcher-remediation-003`;
+- the new evidence paths;
 - honest failures, limitations, and deferred checks;
 - Phase 1 still blocked;
-- the real Claude CLI launch path and PG17 validation called out separately.
+- the real Claude CLI launch limitation and PG17 validation listed
+  separately.
 
-Every commit created for this run, including documentation/hash-fill commits,
-must include this exact commit-message trailer:
+Every commit created for this run must contain exactly one valid terminal
+trailer whose value is `argus-watcher-remediation-003`.
 
-`ARGUS-INSTRUCTION-ID: argus-watcher-remediation-002`
-
-Commit and push to `claude/argus-folder-setup-77ahrk`. Verify the remote
-branch equals local HEAD and the working tree is clean. Then STOP. Do not
-begin Phase 1 and do not modify this instruction file.
+Commit and push to `claude/argus-folder-setup-77ahrk`. Verify remote HEAD
+equals local HEAD and the worktree is clean. Then STOP. Do not begin Phase 1.
+Do not modify this instruction file. Do not perform or authorize any live
+trade, mainnet canary, credential entry, paid-provider upgrade, live arming,
+threshold relaxation, or phase skip.
