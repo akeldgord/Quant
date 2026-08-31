@@ -7,184 +7,157 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 ---
 
-HANDOFF_ID: handoff-0012-phase-1-remediation-5
-UTC_TIMESTAMP: 2026-08-31T16:42:35Z
-CURRENT_COMMIT: 6c7f4df1cce181dd54383b6dbb09f6be27df4471
+HANDOFF_ID: handoff-0013-phase-1-remediation-6
+UTC_TIMESTAMP: 2026-08-31T20:22:01Z
+CURRENT_COMMIT: 6e4aa5a9a0e2cdb2f75f1465d3939e8d73002ba0
 CURRENT_PHASE: 1
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
-LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-1-remediation-005
-CHECKPOINT_PATH: orchestration/checkpoints/phase_1_remediation_5.md
-BUNDLE_PATH: orchestration/bundles/phase_1_remediation_5.txt
-TEST_STATUS: unit 405/405 passed; integration 43/43 passed (real PostgreSQL 16, incl. 2/2 new migration 0007 populated-data downgrade tests); golden 32/32 passed; replay 10/10 passed; full suite 490/490 passed, 87% coverage; ruff clean; mypy clean; alembic downgrade-to-base/upgrade-to-head clean through migration 0007
+LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-1-remediation-006
+CHECKPOINT_PATH: orchestration/checkpoints/phase_1_remediation_6.md
+BUNDLE_PATH: orchestration/bundles/phase_1_remediation_6.txt
+TEST_STATUS: unit 458/458 passed (incl. watcher's 77/77); integration 43/43 passed (real PostgreSQL 16); golden 36/36 passed; replay 10/10 passed; full suite 547/547 passed, 86% coverage; ruff clean; mypy clean; alembic downgrade-to-base/upgrade-to-head clean through migration 0007
 WORKING_TREE: clean (verified via `git status --porcelain` before this commit)
-ORCHESTRATOR_REVIEW_REQUIRED: acceptance-matrix item 1 (fixture authenticity+review+binding+validation) carries one documented caveat -- the newly-sourced `real_mainnet_orca_increase_liquidity_multi_asset_outflow` fixture satisfies the "multiple token-account/LP-style action" required category's substance (a real multi-token-account liquidity transaction, correctly never a confident single-asset trade) but its own emitted classification is `UNKNOWN` via the ambiguous-multi-asset-outflow branch, not the `LP_ACTION` label (see checkpoint section E item 1 and `tests/golden/fixtures/real/SEARCH_LOG.md`'s "Round 5" section for the full reasoning and evaluated alternatives). Real-chain fixture coverage is otherwise complete: 9 of 9 required categories now have real-chain evidence, up from round 4's honest 6 of 9. PG17_COMPOSE_VALIDATION (deferred, unrelated, unchanged) still open -- see docs/BUILD_STATE.md.
+ORCHESTRATOR_REVIEW_REQUIRED: two open items -- (1) a newly discovered, honestly disclosed commit-trailer-formatting defect: `git interpret-trailers --parse` (the exact mechanism the watcher's own attribution check uses) recognizes only the last contiguous trailer-shaped paragraph in a commit message, so 3 of this round's own commits (`eea81f3`, `e0f7b9b`, `165c397`) carrying `ARGUS-INSTRUCTION-ID` immediately followed by a `Co-Authored-By`/`Claude-Session` paragraph do not have that trailer recognized by this mechanism (2 historical commits from rounds 1 and 5 carry the same pre-existing defect); not corrected via history rewrite -- see checkpoint section H and K for the full account and the orchestrator decision this raises. (2) Whether the round-6 remediation as a whole (19 of 20 acceptance-matrix items unconditional PASS, item 17 the standing permitted `DEFERRED_ENVIRONMENTAL_CHECK` for live Helius/PG17 connectivity) is sufficient for Phase 1 approval, or whether further remediation is required. Real-chain fixture coverage remains 9 of 9 required categories with NO remaining label caveat (round 5's LP-action caveat is resolved by this round's fixture replacement).
 
 ## Work completed
 
-Executed orchestrator instruction `argus-phase-1-remediation-005` in
-full: an independent audit rejected round 4 outright
-(`FAIL_REMEDIATION_REQUIRED`, not merely PARTIAL), citing 9 concrete
-findings and a 15-item mandatory acceptance matrix. All 9 findings are
-remediated with real, tested code:
+Executed orchestrator instruction `argus-phase-1-remediation-006` in
+full: an independent audit rejected round 5 as
+`FAIL_REMEDIATION_REQUIRED`, citing 6 findings. All 6 are remediated
+with real, tested code:
 
-1. **Production git identity could be spoofed by a dirty checkout's
-   override → fixed.** `resolve_production_git_commit()` checked the
-   `ARGUS_BUILD_GIT_COMMIT` override *before* checking whether the
-   checkout was dirty or even resolvable. Rewritten to a strict 4-step
-   order: validate the override's format; resolve dirty-state; if git
-   metadata is entirely absent, a well-formed override is the only path;
-   if git metadata is present, a dirty checkout is *always* rejected
-   regardless of any override; only then is HEAD resolved and checked
-   against a supplied override for exact equality.
-2. **The generic parser was not fail-closed for ambiguous/NFT/LP/
-   multi-hop assets → fixed.** `SWAP_COMPLEX` is no longer
-   copy-eligible; eligibility additionally requires both legs' decimals
-   be nonzero; two or more same-direction assets with no offsetting leg
-   now resolve to `UNKNOWN` at zero confidence instead of a
-   largest-leg guess. A new public `compute_asset_deltas()` exposes the
-   full ordered per-asset delta set, needed by finding #1's independent
-   fixture review below.
-3. **Golden fixture expectations were still circular-adjacent and
-   provenance was not fully tamper-evident → fixed.** Replaced the flat
-   `expected_classification`/`expected_confidence`/`upstream_license`
-   strings with a typed, immutable `ExpectedOutcome` (wallet
-   perspective, every asset delta, expected input/output, network fee,
-   failed-tx status, a confidence rule, reviewer method/rationale/
-   evidence) and real `git ls-tree`-backed `GitTreeAttestation`/
-   `LicenseEvidence` cryptographically binding upstream repo/commit/
-   path/blob/license, folded into one `evidence_chain_hash` so a
-   single-field edit is detectable offline. All 10 then-existing
-   fixtures were re-imported through the new schema with genuinely
-   independent, hand-reasoned expectations.
-4. **Two of nine required real-chain fixture categories were still
-   missing → fixed.** Searched the three named candidate repositories;
-   sourced a genuine failed on-chain transaction
-   (`real_mainnet_failed_nft_sale`, via a new deterministic
-   `extract_ts_const_export_default` transform step unlocking
-   TypeScript-wrapped upstream sources) and a genuine multi-token-account
-   Orca Whirlpool liquidity transaction
-   (`real_mainnet_orca_increase_liquidity_multi_asset_outflow`, with the
-   documented label caveat above). Combined with finding #2's fix
-   independently making the previously-imported DCA-close fixture
-   resolve to `UNKNOWN` (now genuinely satisfying the ambiguous-
-   multi-asset category), real-chain evidence now exists for all 9 of 9
-   required categories.
-5. **Helius HTTP contract validation was still incomplete → fixed.**
-   `get_slot`/`get_balance` now reject a JSON `bool` as an integer;
-   `get_transaction` now requires `meta.err`'s presence, validates
-   `meta.fee`/`preBalances`/`postBalances` as strict-nonnegative-int
-   arrays coherent in length with `accountKeys`, requires a top-level
-   `slot`, and fully validates any `preTokenBalances`/
-   `postTokenBalances` entries; `get_token_accounts` cross-checks a
-   returned entry's `owner` against the requested wallet and returns a
-   genuinely immutable `TokenAccountInfo.raw`.
-6. **WebSocket ack matching had a type-equality bug, lost early
-   notifications, had unbounded cleanup, and reconnected every
-   receive-timeout → fixed.** Ack matching is now an exact type+value
-   check (`"id": true` could previously match request id `1` under
-   Python's `==`); every non-matching message (including a genuine
-   notification arriving before the ack) is now buffered and replayed,
-   never discarded; a new transport-level ping/pong `check_liveness()`
-   lets the ingestion manager distinguish "quiet but alive" from
-   "genuinely dead", reusing a single pending receive task across
-   multiple timeout/liveness-probe cycles rather than reconnecting a
-   healthy-but-quiet socket; connect/send/ack/close are all bounded,
-   including the cleanup path itself.
-7. **Migration 0007's downgrade was unproven against populated,
-   multi-build data → fixed.** `downgrade()` now runs a preflight check
-   and fails closed with a precise, actionable reason
-   (`Downgrade0007IncompatibleDataError`) when incompatible
-   multi-build-hash `swaps` data exists, rather than an opaque Postgres
-   constraint-violation crash mid-migration; proceeds exactly as before
-   otherwise. Proven with 2 new real-Postgres tests against a genuinely
-   populated scratch database (one proving the supported path, one
-   proving the refusal).
-8. **Evidence/state reporting consistency → this checkpoint.**
-   `docs/BUILD_STATE.md`'s fixture-coverage blocker and phase-history
-   table, `tests/golden/fixtures/real/SEARCH_LOG.md`, and this
-   checkpoint's acceptance-matrix section E are cross-checked to state
-   the same 9-of-9-with-one-caveat disposition and the same
-   490-test/87%-coverage figures. An audit-of-the-audit (checkpoint
-   section H) checked for untested branches, skipped tests,
-   self-generated expected values, mocks bypassing production wiring,
-   stale evidence, changed category definitions, and cross-document
-   contradictions before this checkpoint was finalized.
+1. **Production Git identity still failed open when Git was present but
+   unverifiable → fixed.** An explicit `_GitCheckoutState` enum
+   (`ABSENT`/`PRESENT_CLEAN`/`PRESENT_DIRTY`/`PRESENT_UNVERIFIABLE`)
+   computed by a pure-filesystem-first `_probe_git_checkout_state()`
+   replaces the old boolean/`None` dirty check, so a `git status`/
+   `rev-parse` failure on a checkout whose `.git` metadata is genuinely
+   present is now `PRESENT_UNVERIFIABLE` (fails closed unconditionally,
+   even with a well-formed override), never misclassified as `ABSENT`.
+2. **Fixture provenance did not prove commit → tree/path → blob offline
+   → fixed.** `GitTreeAttestation` now stores raw base64 commit/tree
+   object bytes; `verify_git_object_chain()` independently recomputes
+   every object ID from that content via git's own content-addressing
+   and walks the path to the declared blob, entirely offline — replacing
+   round 5's saved `git ls-tree` text line, which only proved
+   self-consistency.
+3. **The golden oracle lost account-level context and record identity
+   fields were weakly bound → fixed.** `compute_account_level_deltas()`
+   preserves every wallet-owned account's own delta before by-mint
+   aggregation; `ExpectedOutcome` gained `account_deltas`, checked
+   against the rebuilt payload; a new `_check_record_identity()` binds
+   category/chain/signature/slot/transaction_version/upstream_path to
+   the rebuilt payload rather than trusting them as inputs. Round 5's
+   LP/multiple-account fixture was found, under this stronger oracle, to
+   have only one material non-SOL token account from the reviewed
+   wallet's perspective — replaced (not relabeled) with
+   `real_mainnet_orca_close_position_multi_account`, independently
+   proven to have two genuinely distinct material token accounts.
+4. **Helius HTTP/canonical-model validation was still incomplete →
+   fixed.** JSON-RPC envelope validation for every call (exact version,
+   exact id type/value, result/error exclusivity);
+   `get_transaction` signature-identity binding; strict `u64` numeric
+   domains; ASCII-bounded raw-amount-string validation;
+   `get_signature_statuses` required-key checks (`err` no longer
+   implicitly succeeds via `.get()`); genuinely deep, alias-safe
+   `_deep_freeze()` for `TokenAccountInfo.raw`.
+5. **The unattended watcher had a pre-launch remote-freshness race →
+   fixed.** A new final barrier performs a fresh fetch immediately
+   before launching Claude and re-verifies fetch success, worktree
+   cleanliness, HEAD==fresh-remote-HEAD, an explicit working-tree-hash-
+   vs-committed-blob snapshot, unchanged instruction fields,
+   target-commit provenance, and phase authorization; any failure
+   reverts to `IDLE` (never `FAILED`) without consuming the instruction.
+6. **Evidence/reporting honesty → this checkpoint.** Section E scores
+   all 20 acceptance-matrix items against exact evidence. This round's
+   own cross-check independently discovered and disclosed (rather than
+   silently working around) a pre-existing commit-trailer-formatting
+   defect affecting 3 of this round's own commits — see checkpoint
+   section H.
 
-Full per-finding detail, the complete 15-item acceptance-matrix
+Full per-finding detail, the complete 20-item acceptance-matrix
 disposition, and every command actually run:
-`orchestration/checkpoints/phase_1_remediation_5.md`.
+`orchestration/checkpoints/phase_1_remediation_6.md`.
 
 ## Important findings
 
-- Two existing ingestion-manager tests were found, on inspection, to be
-  *unknowingly depending on the very WebSocket reconnect-storm defect
-  finding #6 fixes* to reach their target state:
-  `test_multiple_wallets_remain_isolated_under_concurrent_subscriptions`
-  raced two wallets' reconnect cycles against each other and asserted on
-  whichever a tight poll loop happened to catch first; the clock-anomaly
-  recovery test's `script()` call nested two `ConnectionError`s inside
-  one session's items list (the second was dead code -- `raise` inside
-  `notifications()`'s for-loop never reaches a second item), and was, in
-  practice, reaching its target reconnect count only via the old
-  defect's every-timeout-reconnects-a-quiet-socket behavior. Both were
-  retimed/rescripted to prove the same properties without relying on the
-  defect -- caught during this round's own test-suite work, not left as
-  an unaddressed gap.
-- All fixture upstream evidence (git tree attestations, license
-  evidence, source bytes) was captured via real `git clone
-  --filter=blob:none --no-checkout` + `git ls-tree` against the actual
-  upstream repositories (this sandbox's confirmed-working `git`/
-  `raw.githubusercontent.com` access, unchanged from prior rounds), not
-  hand-transcribed -- the round 5 finding #3 fixtures' blob SHAs were
-  independently cross-verified against round 4's own recorded values
-  and matched exactly for the 9 fixtures carried over.
-- Round 2/3/4's own checkpoints and `docs/BUILD_STATE.md` phase-history
-  rows are left unmodified as immutable history of what was claimed at
-  the time -- matching this project's existing convention for
-  superseded rows.
-- `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is unchanged -- still the
-  orchestrator's `argus-phase-1-remediation-005` instruction,
+- **A genuinely new defect was discovered and disclosed, not hidden.**
+  `git interpret-trailers --parse` — the exact mechanism
+  `scripts/argus_orchestrator_watch.py`'s `git_trailer_values()`/
+  `verify_run_ancestry_and_attribution()` use to authenticate commit
+  attribution — recognizes only the *last* contiguous trailer-shaped
+  paragraph in a message. Commits carrying `ARGUS-INSTRUCTION-ID: ...`
+  immediately followed by a blank line and then a separate
+  `Co-Authored-By`/`Claude-Session` paragraph do not have
+  `ARGUS-INSTRUCTION-ID` recognized as a real trailer by this
+  mechanism. Affects 3 of this round's own commits (`eea81f3`,
+  `e0f7b9b`, `165c397`) plus 2 historical commits (round 1's and round
+  5's own final checkpoint/bundle/handoff commits — including
+  `fbe46c44861e489f65d55abac01eedc4934318a7`, this instruction's own
+  `TARGET_COMMIT`). Verified with a minimal `printf`-piped reproduction
+  and cross-checked against the full repository history (5 of 58 total
+  `ARGUS-INSTRUCTION-ID`-carrying commits affected). This is a
+  pre-existing, systemic-but-intermittent defect, not newly introduced
+  by this round's process, but 3 of this round's own commits are
+  affected. Not corrected via history rewrite (a destructive operation
+  on already-pushed history, with no user present in this autonomous
+  session to authorize it) — disclosed instead for orchestrator
+  disposition. This round's two most recent commits and this
+  checkpoint's own commit use a single, final trailer paragraph only,
+  verified correctly recognized before being reported.
+- Practically, this does not retroactively invalidate any already-
+  recorded orchestrator approval (no prior checkpoint claimed a
+  per-commit trailer-verification result this contradicts) and does not
+  block a future watcher-launched run from evaluating this round's work
+  correctly, since `verify_run_ancestry_and_attribution()` only checks
+  commits within one `tick()`-launched run's own before/after HEAD
+  range, not retroactively across sessions.
+- The Orca fixture replacement (finding #3) reused the same upstream
+  repository and commit as round 5's fixture, just a different source
+  file within it (`orca_remove_liq.json` vs. `orca_add_liq.json`) and a
+  different wallet perspective (the transaction's actual signer, not a
+  program-derived vault) — no new license/provenance chain needed
+  re-establishing from scratch.
+- All 6 finding-fix commits and this round's watcher tests were
+  confirmed, via `git stash` against the pre-fix code, to genuinely
+  exercise the defect each fix closes (documented per-finding in
+  checkpoint section B).
+- `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is unchanged — still the
+  orchestrator's `argus-phase-1-remediation-006` instruction,
   `STATUS: ACTIVE`. This task did not and could not self-approve any
   phase; `last_orchestrator_approved_phase` in `docs/BUILD_STATE.md`
   remains `0`, and the Phase 0 `approved_commit` is unchanged.
-- All changes stayed strictly within the existing Phase 1 module set
-  (`src/argus/{cli.py,config.py,golden_fixtures.py,ingestion,parsing,
-  providers}`, `migrations/`, `tests/`, `scripts/`, `docs/BUILD_STATE.md`)
-  -- confirmed via `git diff --stat` against the pre-remediation target
-  commit. No Phase 1.5 or later-phase code was started.
+- All changes stayed strictly within the existing Phase 1/watcher module
+  set (`scripts/argus_orchestrator_watch.py`,
+  `src/argus/{config.py,golden_fixtures.py,parsing,providers}`,
+  `tests/`) — confirmed via `git diff --stat` against the
+  pre-remediation target commit. No Phase 1.5 or later-phase code was
+  started.
 
 ## Failures or limitations
 
-- **Acceptance-matrix item 1 carries one documented caveat, not full
-  unqualified PASS.** The LP-action real-chain fixture's substantive
-  match (a real multi-token-account liquidity transaction, correctly
-  never a confident single-asset trade) is on a different emitted label
-  (`UNKNOWN`, not `LP_ACTION`) than the category name suggests -- see
-  checkpoint section E item 1 for the full reasoning. Not claimed as an
-  unqualified PASS.
+- **Section H's commit-trailer-formatting defect is disclosed, not
+  fixed via history rewrite** — see `ORCHESTRATOR_REVIEW_REQUIRED`
+  above and checkpoint section H/K. This is the one item this handoff
+  does not claim is fully closed.
 - **Live Helius RPC/WebSocket connectivity: NOT TESTED** (unchanged from
-  every prior handoff -- no `HELIUS_API_KEY` configured and no general
-  internet egress to chain-data hosts in this sandbox). The new
-  `check_liveness()` ping/pong probe is therefore also unexercised
-  live; proven against the fake connector's scripted pong/hang/raise
-  scenarios instead.
+  every prior handoff — no `HELIUS_API_KEY` configured and no general
+  internet egress to chain-data hosts in this sandbox).
 - **`PG17_COMPOSE_VALIDATION` remains `DEFERRED_ENVIRONMENTAL_CHECK`**
-  (unchanged, unrelated to this round -- see `docs/BUILD_STATE.md`). The
-  new migration 0007 populated-data downgrade tests were verified
-  against the same substitute local PostgreSQL 16 server used
-  throughout this project.
+  (unchanged, unrelated to this round — see `docs/BUILD_STATE.md`).
 - Coverage on a small number of modules is low for structural reasons,
   not because the behavior is unverified: `src/argus/ingestion/
   test_mode.py` (0%) and `src/argus/providers/helius/
   websocket_connector.py` (0%) are exercised through the real CLI
   process/adapter tests against a fake connector, never faked as
-  "tested". See `orchestration/checkpoints/phase_1_remediation_5.md`
+  "tested". See `orchestration/checkpoints/phase_1_remediation_6.md`
   section C for the full coverage breakdown.
 
 ## Deferred checks
 
-- Acceptance-matrix item 1's documented label caveat (see
-  `ORCHESTRATOR_REVIEW_REQUIRED` above and checkpoint section E item 1).
+- Section H's commit-trailer-formatting defect: orchestrator decision on
+  whether a corrective history rewrite is warranted (see
+  `ORCHESTRATOR_REVIEW_REQUIRED` above).
 - Live Solana RPC/WebSocket connectivity against a real `HELIUS_API_KEY`
   and real network access.
 - `PG17_COMPOSE_VALIDATION` (unchanged, unrelated).
@@ -192,15 +165,14 @@ disposition, and every command actually run:
 ## Exact next action requested from orchestrator
 
 Review this remediation round's evidence
-(`orchestration/checkpoints/phase_1_remediation_5.md` and
-`orchestration/bundles/phase_1_remediation_5.txt`) against the 15-item
+(`orchestration/checkpoints/phase_1_remediation_6.md` and
+`orchestration/bundles/phase_1_remediation_6.txt`) against the 20-item
 mandatory acceptance matrix in instruction
-`argus-phase-1-remediation-005`, and resolve the one open question:
-whether the LP-action real-chain fixture's substantive match on a
-different emitted label (`UNKNOWN`, not `LP_ACTION`) is an acceptable
-disposition for that required category, or whether a fixture that
-specifically triggers the `LP_ACTION` label must still be sourced. If
-accepted, write the next `ACTIVE` instruction into
+`argus-phase-1-remediation-006`, and resolve the two open items in
+`ORCHESTRATOR_REVIEW_REQUIRED` above: (1) whether the disclosed
+commit-trailer-formatting defect requires a corrective history rewrite
+of this branch, and (2) whether round 6's remediation is sufficient for
+Phase 1 approval. If accepted, write the next `ACTIVE` instruction into
 `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` (`TARGET_COMMIT` pinned to
 the exact commit named in this handoff) to authorize the next piece of
 work. Phase 1.5 and all later phases remain forbidden until then. Until a

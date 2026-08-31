@@ -1129,3 +1129,142 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/checkpoints/phase_1_remediation_5.md` section B for the
   complete per-finding commit list (`d924771`, `12fb70a`, `89dfc5b`,
   `0aa6c7a`, `a1c939b`, `6652be6`, `6c7f4df`).
+
+### 2026-08-31 — Phase 1 remediation round 6 (argus-phase-1-remediation-006)
+- requirement_id: MASTER_SPEC.md section 21 (golden fixture discipline),
+  section 108 (evidence accuracy / no fabricated claims), section 109
+  (this log)
+- decision: An independent orchestrator audit
+  (`argus-phase-1-remediation-006`) rejected round 5 as
+  `FAIL_REMEDIATION_REQUIRED`, citing 6 findings. All 6 were remediated:
+  (1) production Git identity now distinguishes absent-Git from
+  present-but-unverifiable-Git via an explicit `_GitCheckoutState` enum
+  (`ABSENT`/`PRESENT_CLEAN`/`PRESENT_DIRTY`/`PRESENT_UNVERIFIABLE`)
+  computed by a pure-filesystem-first `_probe_git_checkout_state()`,
+  closing a fail-open path where any `git status`/`rev-parse` failure on
+  a checkout whose `.git` metadata was genuinely present was
+  misclassified identically to "no checkout at all" and could accept an
+  arbitrary `ARGUS_BUILD_GIT_COMMIT` override; (2) fixture provenance now
+  preserves a genuine offline-verifiable Git object chain
+  (`GitTreeAttestation` storing raw base64 commit/tree object bytes,
+  `attest_git_tree()` walking the real chain via `git cat-file` at
+  capture time, `verify_git_object_chain()` independently recomputing
+  every object ID from that raw content via git's own content-addressing
+  and walking the path to the declared blob, entirely offline) replacing
+  round 5's saved `git ls-tree` text line, which the validator only
+  re-parsed and compared against itself; (3) the golden oracle now
+  preserves account-level deltas before by-mint aggregation
+  (`compute_account_level_deltas()`/`ExpectedAccountAssetDelta` in
+  `src/argus/parsing/generic_parser.py`) and binds/checks record
+  identity fields (category, chain, signature, slot,
+  transaction_version, upstream_path) against the rebuilt payload via a
+  new `_check_record_identity()`, rather than trusting them as inputs
+  fed straight back into the parser; independent re-review under this
+  stronger oracle found round 5's LP/multiple-account fixture
+  (`real_mainnet_orca_increase_liquidity_multi_asset_outflow`) had only
+  one material non-SOL token account from the reviewed wallet's own
+  perspective, so it was replaced (not relabeled, per the instruction's
+  explicit direction) with `real_mainnet_orca_close_position_multi_account`
+  (same upstream repo/commit, the transaction's actual signer wallet),
+  independently proven via `account_deltas` to have two genuinely
+  distinct material token accounts; (4) Helius HTTP/canonical-model
+  validation deepened further: JSON-RPC envelope validation (exact
+  `jsonrpc` version, exact request-id type/value match never via bare
+  `==`, `result`/`error` mutual exclusivity) for every RPC call,
+  `get_transaction` signature-identity binding to the request, strict
+  `u64` numeric domains (`_is_strict_u64`) replacing sign-agnostic-only
+  checks, ASCII-only bounded-digit-count raw-amount-string validation
+  (`_is_valid_raw_amount_string`) rejecting Unicode-digit and
+  oversized-but-plausible-looking strings before an expensive `int()`
+  conversion, `get_signature_statuses` now requiring both `slot` and
+  `err` as explicit keys (a missing `err` no longer silently implies
+  success via bare `.get()`), and a genuinely deep, alias-safe
+  `_deep_freeze()` replacing round 5's shallow `MappingProxyType(entry)`
+  for `TokenAccountInfo.raw`; (5) the unattended watcher's pre-launch
+  remote-freshness race is closed: `tick()`'s old
+  `head_before`/`git_remote_head()` comparison read only the locally
+  cached `origin/{branch}` ref set by the tick's early fetch, stale by
+  however long instruction/target-commit/phase validation took in
+  between -- a new final barrier performs a fresh `git_fetch()`
+  immediately before transitioning to `RUNNING`/launching Claude and
+  re-verifies fetch success, worktree cleanliness,
+  HEAD==freshly-fetched-remote-HEAD, an explicit working-tree-hash-vs-
+  committed-blob snapshot of `ORCHESTRATOR_INSTRUCTIONS.md`, unchanged
+  instruction fields, target-commit provenance, and phase authorization;
+  any failure reverts state to `IDLE` (never `FAILED`) without consuming
+  the instruction, per the instruction's explicit "do not consume or
+  mark the stale instruction complete"; (6) evidence/reporting honesty --
+  this round's own cross-check (in service of finding #6) independently
+  discovered and disclosed, rather than silently working around, a
+  pre-existing commit-trailer-formatting defect: `git interpret-trailers
+  --parse` (the exact mechanism the watcher's own
+  `verify_run_ancestry_and_attribution()` uses to authenticate commit
+  attribution) recognizes only the *last* contiguous trailer-shaped
+  paragraph in a message, so a commit carrying `ARGUS-INSTRUCTION-ID:
+  ...` immediately followed by a blank line and then a separate
+  `Co-Authored-By`/`Claude-Session` paragraph does not have its
+  `ARGUS-INSTRUCTION-ID` recognized as a real trailer by that mechanism
+  -- found to affect 3 of this round's own commits and 2 historical
+  commits (rounds 1 and 5); not corrected via history rewrite (a
+  destructive operation on already-pushed history with no user present
+  to authorize it), reported in
+  `orchestration/checkpoints/phase_1_remediation_6.md` section H for
+  orchestrator disposition instead. This round's own commits from the
+  point of discovery onward use a single, final trailer paragraph only.
+- lesson: an evidence-honesty finding ("reflect what is actually
+  proven") is itself falsifiable by the same standard it demands of
+  everything else -- the commit-trailer defect was found only because
+  this round's own cross-check applied the watcher's exact verification
+  mechanism to this round's own commits, rather than assuming a
+  previously-unflagged property must be fine. Disclosing a defect found
+  while writing the very checkpoint that reports "clean" evidence is the
+  behavior finding #6 is testing for; silently rewriting history to make
+  the defect disappear before anyone could see it would have been the
+  failure mode the finding exists to catch.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-1-remediation-006` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: fbe46c44861e489f65d55abac01eedc4934318a7`,
+  `AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_6_AND_WATCHER_HARDENING_ONLY`,
+  `AUTHORIZED_PHASE: 1`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: Extended `src/argus/config.py` (`_GitCheckoutState`,
+  `_probe_git_checkout_state()`); rewrote
+  `src/argus/golden_fixtures.py`'s `GitTreeAttestation`/
+  `attest_git_tree()`/validator internals and re-imported all 12
+  `tests/golden/fixtures/real/` fixtures (manifest shape changed for
+  every fixture; the Orca source file itself changed); extended
+  `src/argus/parsing/generic_parser.py`
+  (`compute_account_level_deltas()`, `AccountAssetDelta`); extended
+  `src/argus/providers/helius/client.py` (JSON-RPC envelope validation,
+  `_is_strict_u64`, `_is_valid_raw_amount_string`,
+  `_is_nonempty_identity_string`, `_deep_freeze()`); extended
+  `scripts/argus_orchestrator_watch.py`'s `tick()` with the final
+  pre-launch barrier. Substantially expanded
+  `tests/unit/{test_config,test_golden_fixtures,test_provider_adapters,
+  test_orchestrator_watch}.py` and `tests/golden/test_generic_parser.py`.
+  57 net new tests (490 -> 547). Full suite: 547 passed, 86% coverage,
+  ruff clean, mypy clean (bare `uv run mypy` invocation matching
+  `pyproject.toml`'s `packages = ["argus"]` scope), alembic
+  downgrade-to-base/upgrade-to-head clean through migration 0007.
+  Real-chain fixture coverage remains 9 of 9 required categories, now
+  with NO remaining label caveat (the round-5 LP/multiple-account
+  caveat is resolved by the fixture replacement above).
+  `orchestration/checkpoints/phase_1_remediation_6.md` and
+  `orchestration/bundles/phase_1_remediation_6.txt` record the full
+  20-item acceptance-matrix disposition (19 PASS, 1 standing permitted
+  environmental deferral). All prior Phase 0/Phase 1/round-1 through
+  round-5 evidence files are preserved unmodified as immutable history.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified;
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `0`
+  and the Phase 0 `approved_commit` is unchanged — this task did not and
+  could not self-approve Phase 1, and Phase 1.5 remains forbidden and
+  unattempted.
+- git_commit: 6e4aa5a9a0e2cdb2f75f1465d3939e8d73002ba0 (last code commit
+  of this round; a final docs-only commit follows for this log entry,
+  the checkpoint, the bundle, and the handoff); see
+  `orchestration/checkpoints/phase_1_remediation_6.md` section B for the
+  complete per-finding commit list (`eea81f3`, `e0f7b9b`, `165c397`,
+  `6adbea9`, `6e4aa5a`).
