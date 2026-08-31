@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -24,6 +25,7 @@ from argus.providers.helius.client import (
     resolve_helius_api_key,
 )
 from argus.providers.jupiter.client import JupiterClient
+from argus.providers.models import ExecutableQuote
 from argus.providers.usage import RequestUsageRecord, StreamingUsageRecord
 
 
@@ -222,7 +224,8 @@ async def test_dexscreener_token_snapshot() -> None:
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = DexScreenerClient(http_client=http_client)
     result = await client.token_snapshot("SomeMint")
-    assert result["pairs"][0]["priceUsd"] == "1.23"
+    assert result.price_usd == Decimal("1.23")
+    assert result.raw["pairs"][0]["priceUsd"] == "1.23"
     await http_client.aclose()
 
 
@@ -256,13 +259,13 @@ async def test_geckoterminal_historical_ohlcv_filters_by_start() -> None:
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = GeckoTerminalClient(http_client=http_client)
-    candles = await client.historical_ohlcv(
+    page = await client.historical_ohlcv(
         "SomeMint",
         start=datetime.fromtimestamp(1_735_002_000, tz=UTC),
         end=datetime.fromtimestamp(1_735_004_000, tz=UTC),
     )
-    assert len(candles) == 1
-    assert candles[0]["close"] == 1.05
+    assert len(page.candles) == 1
+    assert page.candles[0].close == Decimal("1.05")
     await http_client.aclose()
 
 
@@ -283,10 +286,11 @@ async def test_jupiter_quote_and_unsigned_order_never_signs() -> None:
     quote = await client.get_quote(
         input_mint="MintA", output_mint="MintB", amount_raw=1_000_000_000
     )
-    assert quote["outAmount"] == "500"
+    assert quote.out_amount_raw == 500
+    assert quote.in_amount_raw == 1_000_000_000
 
     order = await client.build_unsigned_order(quote=quote, wallet_address="SomeWallet")
-    assert order["swapTransaction"] == "base64-unsigned-tx-not-real"
+    assert order.unsigned_transaction_base64 == "base64-unsigned-tx-not-real"
 
     # No signing/execute/broadcast method exists anywhere on this client.
     assert not hasattr(client, "sign")
@@ -457,8 +461,16 @@ async def test_jupiter_unsigned_order_missing_swap_transaction_rejected() -> Non
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"notTheRightField": 1}))
     )
     client = JupiterClient(http_client=http_client)
+    fake_quote = ExecutableQuote(
+        provider="jupiter",
+        input_mint="A",
+        output_mint="B",
+        in_amount_raw=1,
+        out_amount_raw=1,
+        raw={},
+    )
     with pytest.raises(ProviderContractError, match="swapTransaction"):
-        await client.build_unsigned_order(quote={}, wallet_address="Wallet")
+        await client.build_unsigned_order(quote=fake_quote, wallet_address="Wallet")
     await http_client.aclose()
 
 

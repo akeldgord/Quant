@@ -24,6 +24,7 @@ from argus.providers.dexscreener.client import DexScreenerClient
 from argus.providers.geckoterminal.client import GeckoTerminalClient
 from argus.providers.helius.client import HeliusRpcClient, resolve_helius_api_key
 from argus.providers.jupiter.client import JupiterClient
+from argus.providers.models import ExecutableQuote, TokenSnapshot
 from argus.providers.retry import retry_policy_from_config
 
 RESPONSE_CONTRACT_OK: Final[str] = "OK"
@@ -143,7 +144,7 @@ async def probe_dexscreener(config: ArgusConfig, http_client: httpx.AsyncClient)
             detail=f"{type(exc).__name__}: {exc}",
         )
     latency_ms = (time.monotonic() - start) * 1000
-    contract_ok = isinstance(result, dict)
+    contract_ok = isinstance(result, TokenSnapshot)
     return ProbeResult(
         provider="dexscreener",
         reachable=True,
@@ -178,7 +179,7 @@ async def probe_geckoterminal(config: ArgusConfig, http_client: httpx.AsyncClien
             detail=f"{type(exc).__name__}: {exc}",
         )
     latency_ms = (time.monotonic() - start) * 1000
-    contract_ok = isinstance(result, dict)
+    contract_ok = isinstance(result, TokenSnapshot)
     return ProbeResult(
         provider="geckoterminal",
         reachable=True,
@@ -214,7 +215,7 @@ async def probe_jupiter(config: ArgusConfig, http_client: httpx.AsyncClient) -> 
             detail=f"{type(exc).__name__}: {exc}",
         )
     latency_ms = (time.monotonic() - start) * 1000
-    contract_ok = isinstance(result, dict)
+    contract_ok = isinstance(result, ExecutableQuote)
     return ProbeResult(
         provider="jupiter",
         reachable=True,
@@ -239,7 +240,7 @@ async def probe_history_geckoterminal(
         http_client=http_client, retry_policy=retry_policy_from_config(config)
     )
     try:
-        candles = await client.historical_ohlcv(
+        page = await client.historical_ohlcv(
             WSOL_MINT, start=datetime(2020, 1, 1, tzinfo=UTC), end=datetime.now(UTC)
         )
     except Exception as exc:  # noqa: BLE001
@@ -253,7 +254,8 @@ async def probe_history_geckoterminal(
             limitations=("provider unreachable in this environment",),
             detail=f"{type(exc).__name__}: {exc}",
         )
-    timestamps = [c["timestamp"] for c in candles]
+    candles = page.candles
+    timestamps = [c.timestamp for c in candles]
     return HistoryProbeResult(
         provider="geckoterminal",
         reachable=True,

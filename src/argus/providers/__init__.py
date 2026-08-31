@@ -16,6 +16,8 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol
 
+from argus.providers.models import ExecutableQuote, OhlcvPage, TokenSnapshot, UnsignedOrderResult
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SignatureInfo:
@@ -143,15 +145,19 @@ class LiveChainStream(Protocol):
 
 
 class MarketDataProvider(Protocol):
-    """DexScreener/GeckoTerminal-style market data (MASTER_SPEC.md section 10)."""
+    """DexScreener/GeckoTerminal-style market data (MASTER_SPEC.md section 10).
 
-    async def token_snapshot(self, mint: str) -> dict[str, Any]:
+    Returns the canonical models in :mod:`argus.providers.models` (Phase 1
+    remediation round 2, finding #7) -- never a provider-shaped
+    ``dict[str, Any]``. Provider-specific raw JSON stays inside the
+    adapter; only immutable raw evidence explicitly preserved on the
+    model's ``raw`` field is exposed."""
+
+    async def token_snapshot(self, mint: str) -> TokenSnapshot:
         """Current price/liquidity/volume/pair-creation metadata."""
         ...
 
-    async def historical_ohlcv(
-        self, mint: str, *, start: datetime, end: datetime
-    ) -> list[dict[str, Any]]: ...
+    async def historical_ohlcv(self, mint: str, *, start: datetime, end: datetime) -> OhlcvPage: ...
 
 
 class ExecutionProvider(Protocol):
@@ -162,14 +168,17 @@ class ExecutionProvider(Protocol):
     execution (MASTER_SPEC.md section 108 / this instruction's absolute
     prohibitions). Any later phase that adds real execution must do so on
     a separate, explicitly-isolated interface, not by extending this one.
+
+    Returns the canonical models in :mod:`argus.providers.models` (finding
+    #7) -- never a provider-shaped ``dict[str, Any]``.
     """
 
     async def get_quote(
         self, *, input_mint: str, output_mint: str, amount_raw: int
-    ) -> dict[str, Any]: ...
+    ) -> ExecutableQuote: ...
 
     async def build_unsigned_order(
-        self, *, quote: dict[str, Any], wallet_address: str
-    ) -> dict[str, Any]:
+        self, *, quote: ExecutableQuote, wallet_address: str
+    ) -> UnsignedOrderResult:
         """Constructs an unsigned order/transaction for inspection only."""
         ...

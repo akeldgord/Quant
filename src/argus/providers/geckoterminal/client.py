@@ -8,6 +8,7 @@ here.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -15,10 +16,21 @@ import httpx
 from argus.clock import Clock
 from argus.providers.contract import ProviderContractError, require_dict, require_list
 from argus.providers.http import send_with_usage
+from argus.providers.models import OhlcvCandle, OhlcvPage, TokenSnapshot
 from argus.providers.retry import RetryPolicy
 from argus.providers.usage import UsageRecorder
 
 DEFAULT_BASE_URL = "https://api.geckoterminal.com/api/v2"
+
+
+def _to_decimal(value: Any, *, context: str) -> Decimal:
+    """Coerces a provider-supplied numeric value (int, float, or numeric
+    string -- GeckoTerminal's OHLCV/price fields may arrive as any of
+    these) to ``Decimal``, never silently accepting a non-numeric value."""
+    try:
+        return Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ProviderContractError(f"{context}: expected a numeric value, got {value!r}") from exc
 
 
 class GeckoTerminalClient:
@@ -55,23 +67,40 @@ class GeckoTerminalClient:
             request_class="rest",
         )
 
-    async def token_snapshot(self, mint: str) -> dict[str, Any]:
+    async def token_snapshot(self, mint: str) -> TokenSnapshot:
         response = await self._get(
             f"{self._base_url}/networks/solana/tokens/{mint}", endpoint="token_snapshot"
         )
         response.raise_for_status()
         data = require_dict(response.json(), context="GeckoTerminal token_snapshot")
+        price_usd: Decimal | None = None
+        pairs_found = 0
         top = data.get("data")
         if top is not None:
             top_obj = require_dict(top, context="GeckoTerminal token_snapshot 'data'")
+            pairs_found = 1
             attributes = top_obj.get("attributes")
             if attributes is not None:
-                require_dict(attributes, context="GeckoTerminal token_snapshot 'data.attributes'")
-        return data
+                attributes_obj = require_dict(
+                    attributes, context="GeckoTerminal token_snapshot 'data.attributes'"
+                )
+                raw_price = attributes_obj.get("price_usd")
+                if raw_price is not None:
+                    price_usd = _to_decimal(
+                        raw_price,
+                        context="GeckoTerminal token_snapshot 'data.attributes.price_usd'",
+                    )
+        return TokenSnapshot(
+            provider="geckoterminal",
+            mint=mint,
+            price_usd=price_usd,
+            pairs_found=pairs_found,
+            raw=data,
+        )
 
     async def historical_ohlcv(
         self, mint: str, *, start: datetime, end: datetime, timeframe: str = "hour"
-    ) -> list[dict[str, Any]]:
+    ) -> OhlcvPage:
         response = await self._get(
             f"{self._base_url}/networks/solana/tokens/{mint}/ohlcv/{timeframe}",
             endpoint="historical_ohlcv",
@@ -89,7 +118,7 @@ class GeckoTerminalClient:
         candles = require_list(
             attributes.get("ohlcv_list", []), context="GeckoTerminal historical_ohlcv 'ohlcv_list'"
         )
-        result = []
+        result: list[OhlcvCandle] = []
         for row in candles:
             row_list = require_list(row, context="GeckoTerminal historical_ohlcv candle row")
             if len(row_list) != 6:
@@ -104,13 +133,17 @@ class GeckoTerminalClient:
             if timestamp < start.timestamp():
                 continue
             result.append(
-                {
-                    "timestamp": timestamp,
-                    "open": open_,
-                    "high": high,
-                    "low": low,
-                    "close": close,
-                    "volume": volume,
-                }
+                OhlcvCandle(
+                    timestamp=int(timestamp),
+                    open=_to_decimal(open_, context="GeckoTerminal historical_ohlcv candle 'open'"),
+                    high=_to_decimal(high, context="GeckoTerminal historical_ohlcv candle 'high'"),
+                    low=_to_decimal(low, context="GeckoTerminal historical_ohlcv candle 'low'"),
+                    close=_to_decimal(
+                        close, context="GeckoTerminal historical_ohlcv candle 'close'"
+                    ),
+                    volume=_to_decimal(
+                        volume, context="GeckoTerminal historical_ohlcv candle 'volume'"
+                    ),
+                )
             )
-        return result
+        return OhlcvPage(provider="geckoterminal", mint=mint, candles=tuple(result))
