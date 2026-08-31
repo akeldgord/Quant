@@ -7,10 +7,10 @@ acceptance detail.
 
 ---
 
-INSTRUCTION_ID: argus-phase-1-remediation-001
-ISSUED_AT: 2026-08-31T05:14:25Z
-TARGET_COMMIT: 32c2898ab8c278c2f75f4a2f40fedd9d35b24b08
-AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ONLY
+INSTRUCTION_ID: argus-phase-1-remediation-002
+ISSUED_AT: 2026-08-31T07:25:12Z
+TARGET_COMMIT: 04f367b8e03e99718812f872a34e73e170c44f0d
+AUTHORIZED_ACTION: REMEDIATE_PHASE_1_ROUND_2_ONLY
 AUTHORIZED_PHASE: 1
 APPROVES_PHASE: NONE
 STATUS: ACTIVE
@@ -19,15 +19,15 @@ STATUS: ACTIVE
 
 - Phase 0 remains approved as
   `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`.
-- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` remains open.
-  It does not block this remediation, but it must be closed against real
-  PostgreSQL 17 before live readiness may be approved.
-- Phase 1 at the target commit is **not approved**. The reported
-  `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` overstates the result
-  because multiple non-environmental implementation requirements remain
-  incomplete or incorrectly tested.
+- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK` remains open
+  and blocks live readiness, not this remediation.
+- Phase 1 remediation round 1 is **not approved**.
+- Phase 1 remains blocked because independent code review found additional
+  non-environmental correctness and safety defects described below.
+- Authenticated real-chain golden fixtures also remain incomplete.
 - Phase 1.5 and every later phase remain forbidden.
-- This instruction approves no phase and authorizes Phase 1 remediation only.
+- This instruction approves no phase and authorizes only the listed Phase 1
+  remediation.
 - No live trade, mainnet canary, signing, private-key access, credential
   disclosure, paid-provider upgrade, live arming, threshold relaxation, or
   phase skip is authorized.
@@ -38,272 +38,342 @@ Before changing code:
 
 1. Run `git status --porcelain`, `git pull --ff-only`, and
    `git log -5 --oneline`.
-2. Read the six canonical files in the exact order required by PROTOCOL.md.
+2. Read the six canonical files in the exact PROTOCOL.md order.
 3. Verify the checked-out instruction commit is exactly one
    instruction-file-only commit whose parent is the exact TARGET_COMMIT above.
 4. Verify the worktree is clean and local HEAD equals the remote branch.
-5. Verify `docs/BUILD_STATE.md` still has `current_phase: 1`,
+5. Verify BUILD_STATE still has `current_phase: 1`,
    `last_orchestrator_approved_phase: 0`, and
    `awaiting_orchestrator_review: true`.
 6. If any precondition is false, stop with an honest PARTIAL/FAIL handoff.
-   Do not improvise around the gate.
 
 ## Audit findings that must be remediated
 
-### 1. No production ingestion orchestration loop
+### 1. Recovery can report OK before a WebSocket is connected
 
-The target has a WebSocket adapter, reconciliation engine, clock monitor,
-scheduler, and streaming-usage model, but no continuously running code path
-that composes them. Consequently, per-wallet subscriptions, automatic
-disconnect/reconnect handling, scheduled truth reconciliation, clock-health
-ticks, and streaming usage accounting do not exist as runtime behavior.
+`IngestionManager._stream_once()` constructs an async generator and then
+calls reconciliation before the generator's first `__anext__()`. In the
+real Helius adapter, connection establishment, subscribe send, and subscribe
+ack all occur lazily inside that first iteration. Therefore a successful
+reconciliation can mark a wallet OK before any socket exists or subscription
+ack has been received.
 
-Implement a deterministic Phase 1 ingestion service and CLI entry point
-(for example, `argus ingest run`) that:
+Periodic reconciliation has the same safety flaw: it can set a disconnected
+wallet back to OK during reconnect backoff because
+`ReconciliationEngine.reconcile()` does not know whether the stream is
+connected. This violates the required three-part recovery gate.
 
-- accepts the tracked-wallet set through a typed repository/config boundary;
-- manages concurrent per-wallet subscriptions without sharing mutable wallet
-  state incorrectly;
-- records each WebSocket notification through the fast path;
-- detects connect, subscribe, receive, timeout, disconnect, cancellation,
-  and reconnect transitions;
-- marks the affected wallet DEGRADED before or atomically with any unresolved
-  transition;
-- invokes truth-path reconciliation on every trigger required by
-  MASTER_SPEC section 19 and also on a configurable periodic cadence;
-- uses bounded, configurable reconnect backoff with deterministic injectable
-  clock/sleep dependencies;
-- records connection, subscription, reconnect, byte, and estimated-credit
-  streaming counters at real invocation sites;
-- samples/persists clock health and requires provider reconnection, successful
-  reconciliation, and acknowledged clock recovery before restoring OK;
-- is cancellation-safe, restart-safe, and idempotent;
-- never treats a quiet stream, exhausted iterator, malformed message, or
-  cancelled task as evidence that the wallet is healthy;
-- exposes no signing, execution, broadcast, or live-entry path.
+Replace the implicit async-generator lifecycle with an explicit, typed
+subscription-session boundary that does not report ready until:
 
-All runtime components must be injectable so the complete manager can be
-tested without a credential or external network. Do not claim a fake
-connector is live-provider validation.
+- the socket connection exists;
+- the subscription request was sent;
+- a valid matching subscription acknowledgement was received.
 
-### 2. Truth-path pagination can permanently lose events
+Persist or atomically maintain independent recovery dimensions for each
+wallet:
 
-`ReconciliationEngine.reconcile()` performs one
-`getSignaturesForAddress` call with a 1000-record limit. If a gap contains
-more than one page, it processes only the newest page and advances the
-watermark past older unseen events.
+- stream connected/subscribed;
+- reconciliation complete through its safe boundary;
+- clock healthy/recovered.
 
-Implement complete, bounded pagination with explicit page cursors and a
-stable stop boundary. Requirements:
+Derive wallet live state from all three. No standalone scheduled
+reconciliation, finalization sweep, clock tick, or other background action may
+restore OK while the stream dimension is false. Disconnect, timeout,
+malformed message, iterator exhaustion, cancellation, host resume, and
+subscription failure must clear the stream dimension before recovery begins.
 
-- retrieve every signature after the persisted reconciliation boundary,
-  including gaps larger than 1000;
-- process canonical events oldest-first;
-- detect repeated cursors, non-progressing pages, inconsistent ordering,
-  truncation, and configured safety ceilings and fail DEGRADED rather than
-  skipping data;
-- persist partial progress transactionally so a crash resumes without loss;
-- do not advance a watermark beyond any unfetched or failed item;
-- cover boundary-present, boundary-absent, duplicate-across-pages,
-  empty-page, >1000-event, mid-page failure, and restart cases.
+Add a real lifecycle test whose fake has a lazy async-generator handshake so
+it proves reconciliation cannot restore OK before the first iteration
+actually establishes and acknowledges the subscription.
 
-Adjust the provider protocol and Helius adapter to expose the actual Solana
-pagination semantics rather than hiding them behind a single truncated list.
+### 2. One AsyncSession is shared across concurrent tasks
 
-### 3. Commitment progression is not actually stored
+The live CLI creates one SQLAlchemy `AsyncSession` and shares it through one
+reconciliation engine, all repositories, HTTP usage recording, every wallet
+task, periodic reconciliation, and clock work. SQLAlchemy AsyncSession is a
+mutable unit of work and is not safe for concurrent task use. Multi-wallet
+runtime can corrupt transaction state, cross-commit another wallet's work, or
+fail unpredictably even though in-memory tests pass.
 
-A fast-path row is inserted with `confirmed_at=None`. Truth-path
-reconciliation later attempts the same unique key; `SqlEventRecorder`
-returns `False` and never records the confirmed transition. The existing
-tests assert row count only and miss this. Also, `sig_info.err is None`
-is transaction execution success, not commitment status; a failed
-transaction can still be confirmed/finalized.
+Refactor live wiring around session/unit-of-work factories:
 
-Implement an auditable commitment model that:
+- no AsyncSession instance may be used concurrently by different tasks;
+- each wallet operation/reconciliation item gets an explicit transaction
+  boundary;
+- usage accounting uses a safe independent transaction path;
+- per-item event + commitment + parse result + watermark advancement is
+  atomic for that wallet;
+- a failure cannot commit another task's pending work;
+- partial progress remains restart-safe;
+- session rollback/closure is guaranteed on cancellation and exceptions.
 
-- keeps raw observations append-only;
-- preserves the original `first_seen_at`;
-- records processed/confirmed/finalized observations and their distinct
-  observation timestamps monotonically;
-- separates commitment status from transaction success/failure;
-- makes the current canonical commitment state queryable deterministically;
-- makes a fast-path event later become confirmed/finalized without rewriting
-  or losing its original raw observation evidence;
-- rejects commitment regression and conflicting source evidence;
-- ensures processed-only events remain mechanically ineligible for future
-  live execution;
-- populates finalized state through a real code path, not schema-only debt.
+Add real PostgreSQL integration tests with multiple wallets, simultaneous
+stream events, simultaneous periodic reconciliation, usage writes, forced
+failure in one wallet, and restart. Prove the unaffected wallet commits
+correctly and the failed wallet cannot cross-commit or corrupt it.
 
-Prefer an append-only commitment-observation/history table plus a
-deterministic derived current-state query. If a different design is used,
-document why it still satisfies CORE-002 and CORE-003 without mutating raw
-evidence. Add a migration and least-privilege grants as needed.
+### 3. Background task failures are silently lost
 
-### 4. Parsing is not connected to persistence
+`IngestionManager.run()` waits only on `stop_event`. If the periodic task,
+clock task, or a wallet task exits unexpectedly after an error in its own
+failure-handling path, the manager can remain alive forever with part of
+ingestion dead.
 
-The generic parser and `swaps` table exist, but reconciliation only writes
-`chain_events`; no production path parses a fetched transaction and
-persists the derived classification linked to its event. Implement the
-end-to-end canonical parse path:
+Implement structured supervision:
 
-- fetch and preserve raw transaction evidence first;
-- parse deterministically from that evidence;
-- persist one versioned derived classification linked to the canonical
-  event;
-- enforce deterministic dedup/replay constraints;
-- preserve UNKNOWN/ambiguous/failed classifications for research;
-- make UNKNOWN, ambiguous, failed, and insufficient-commitment records
-  mechanically incapable of producing an eligible copy signal;
-- support safe re-parsing under a new parser version without overwriting raw
-  evidence or prior point-in-time results.
+- any unexpected child completion or exception must be observed immediately;
+- mark affected/all relevant wallets DEGRADED before shutdown;
+- cancel and await sibling tasks;
+- close/unsubscribe resources;
+- propagate a typed terminal manager failure to the CLI/process;
+- never leave the process apparently healthy with a dead child;
+- normal operator shutdown remains distinct, deterministic, and fail-safe.
 
-Add restart, duplicate-delivery, parser-failure, and transaction-failure
-tests using the real SQL repositories.
+Test failures in the wallet loop, periodic loop, clock loop, degradation
+writer, usage writer, and cleanup path.
 
-### 5. Required golden evidence is synthetic
+### 4. Finalization tracking is still not a runtime path
 
-The target's golden-test source states that all fixtures are hand-built
-synthetic payloads. The ACTIVE Phase 1 instruction required sanitized
-real-chain golden transaction fixtures. Synthetic fixtures are useful unit
-tests but cannot satisfy that acceptance criterion.
+`sweep_finalization()` exists, but `IngestionManager` never calls it.
+A callable method that no production loop schedules is still dead code.
 
-Add sanitized real-chain fixtures for every required category: SOL-to-token,
-token-to-SOL, token-to-USDC, multi-hop swap, simple transfer, partial sell,
-multiple token accounts, ambiguous multi-asset transaction, and failed
-transaction. For each fixture preserve a non-secret provenance manifest with
-at least chain, transaction signature, slot, capture source, capture time,
-original-payload SHA-256, sanitized-payload SHA-256, sanitization operations,
-and expected parser output. Sanitization must not alter fields used by the
-parser.
+Add a configurable finalization sweep cadence to the real manager. It must:
 
-If network/credential restrictions make acquisition impossible, do not
-fabricate provenance and do not relabel synthetic data as real. Return
-PARTIAL with this criterion NOT TESTED/blocked. Existing synthetic fixtures
-may remain as additional unit fixtures but must be clearly labeled synthetic.
+- use the same safe per-wallet unit-of-work boundary;
+- batch within the provider's documented/request limits;
+- append FINALIZED only when the provider reports it;
+- distinguish duplicate/no-op from an actual new promotion;
+- record and surface failures without falsely restoring wallet health;
+- run after confirmed ingestion and across restart;
+- preserve provider usage accounting.
 
-### 6. Adapter boundaries and contract validation are too weak
+Add manager-level and real-SQL tests proving confirmed events are later
+promoted by the running manager, exactly once.
 
-DexScreener, GeckoTerminal, and Jupiter return provider-shaped dictionaries
-and accept essentially any JSON object. A top-level `dict` check is not
-response-contract validation, and Helius nested result entries are also read
-without complete structural validation.
+### 5. Commitment derivation and conflict handling are not deterministic or atomic
 
-Introduce typed canonical ARGUS response models and explicit validation:
+The SQL store orders only by `created_at`, yet derivation uses list position
+as the final tie-break. Rows sharing `created_at` have no guaranteed SQL
+order, so current state can vary between queries. Also,
+`CommitmentTracker.record()` examines the first same-level row. After an
+unknown-to-known refinement, a later conflicting known value can be compared
+against the older unknown row and wrongly appended. Read-check-append is also
+race-prone under concurrent stream/reconciliation/finalization work.
 
-- validate required keys, types, numeric-string formats, nullability, and
-  list/object nesting before returning success;
-- reject malformed success responses with typed provider-contract errors;
-- return canonical ARGUS models to domain/consumer code while retaining raw
-  provider evidence where required;
-- validate Helius JSON-RPC envelopes and nested results for every implemented
-  method;
-- validate WebSocket acknowledgement and notification subscription identity,
-  method, context, signature, slot, and error shape;
-- do not classify malformed responses as merely unreachable;
-- add adversarial malformed-response tests for every adapter and endpoint.
+Implement:
 
-### 7. Usage accounting misses transport failures
+- a durable monotonic per-event observation sequence or another explicit,
+  stable total order stored in the database;
+- deterministic SQL ordering by that total order;
+- validation against the full current same-level state, not the first row;
+- atomic per-event serialization using a database-safe mechanism;
+- an append-only durable audit record for rejected regression/conflict
+  attempts, including reason and source metadata;
+- a result type that distinguishes APPENDED, DUPLICATE_NOOP, REJECTED, and
+  FAILED, so finalization counts only actual promotions;
+- database CHECK constraints for commitment values and required invariants.
 
-When all retry attempts end in `httpx.TransportError`,
-`request_with_retry()` raises before adapters call the usage recorder, so
-real outbound attempts disappear from accounting. Streaming accounting has
-no runtime caller.
+Add concurrent real-SQL tests, exact timestamp-tie tests across independent
+sessions, unknown->known->conflicting-known tests, and repeated-finalization
+tests.
 
-Ensure every logical outbound operation records an auditable terminal row
-on success, HTTP error, contract error, timeout, cancellation where safe, and
-transport exhaustion. Record actual attempt/retry count, latency, bytes when
-known, status, endpoint, request class, and estimated credits. Recording
-failure must not mask the provider failure. Integrate streaming records with
-the ingestion manager. Test transport exhaustion and recorder-failure
-behavior explicitly.
+### 6. Immutable ledgers are writable after insert
 
-### 8. Scheduler tests do not prove starvation protection
+Migration 0003 grants `UPDATE` on `commitment_observations` to
+`argus_ingest`. Earlier Phase 1 grants also permit UPDATE on
+`chain_events`, despite the stated append-only raw-evidence rule.
 
-Strict priority alone can starve P1-P3 indefinitely under a sustained stream
-of higher-priority work. The existing test proves ordering and non-dropping,
-not bounded service.
+Enforce immutability mechanically:
 
-Add a deterministic starvation policy that preserves the canonical P0-P6
-priority semantics while guaranteeing safety-class requests P0-P3 are never
-silently starved. Document the exact bound or service rule. Add sustained-load
-tests showing each accepted safety request receives service, while P4-P6 may
-be delayed/dropped only with an explicit missing-data reason. Validate
-constructor limits (`max_concurrency > 0`, queue limits nonnegative) and
-ensure cancellation cannot leak capacity or leave futures wedged.
+- ingest may INSERT/SELECT immutable observation tables but not UPDATE or
+  DELETE;
+- add database-level protection against UPDATE/DELETE for raw chain events,
+  commitment observations, and rejection/audit observations;
+- retain UPDATE only where mutable derived state truly requires it, such as
+  wallet watermarks;
+- add role-level integration tests proving attempted mutation/deletion fails;
+- preserve migration downgrade correctness.
 
-### 9. Replay coverage is absent
+### 7. Provider protocols still expose provider-shaped dictionaries
 
-`tests/replay/` collected zero tests despite the required replay command.
-Add actual replay tests covering immutable raw evidence, deterministic parser
-output, duplicate delivery, process restart, commitment progression, and
-re-parse under a new parser version. The command must collect tests and pass.
+The checkpoint claims typed canonical ARGUS response models, but
+`MarketDataProvider` and `ExecutionProvider` still return
+`dict[str, Any]`, and the adapters return provider-shaped dictionaries.
+Validation helpers alone do not satisfy the typed canonical boundary.
 
-### 10. Evidence/status accuracy
+Introduce canonical immutable ARGUS models for:
 
-Do not mark an acceptance item PASS while its required runtime path is absent
-or while a caveat directly contradicts the item. Specifically, streaming
-usage without a caller, commitment progression without a promotion path,
-schema-only finalized state, hand-built fixtures standing in for real-chain
-fixtures, and a missing ingestion manager are not PASS.
+- token/pair market snapshot;
+- historical OHLCV candle/page;
+- executable quote;
+- unsigned order-construction result;
+- any other provider response consumed outside its adapter.
 
-Update BUILD_STATE, DECISION_LOG, checkpoint, bundle, and handoff with an
-honest per-item disposition. Preserve the existing Phase 1 evidence files as
-immutable history; create new remediation-specific files.
+Protocols must return these canonical models. Provider-specific raw JSON must
+remain inside adapters, except immutable raw evidence explicitly preserved
+alongside the canonical model. Use Decimal/integer raw units for financial
+fields. Validate all required nested values before construction. Update probes
+and tests so no domain/consumer code indexes provider-specific dictionaries.
 
-## Environmental validation disposition
+Raw Solana transaction evidence may remain a validated raw payload because its
+purpose is immutable replay, but all separately consumed metadata must use
+typed canonical models.
 
-The following may remain explicit deferred environmental checks after all
-non-environmental implementation work above is complete:
+### 8. Usage rows misclassify contract/application failures as OK
 
-- live Helius RPC connectivity;
-- live Helius WebSocket connectivity;
-- real PostgreSQL 17 Compose validation.
+`send_with_usage()` writes `status="ok"` immediately after an HTTP 2xx
+response, before JSON decoding, JSON-RPC error handling, or response-contract
+validation. A malformed body or provider application error is therefore
+persisted as success. Cancellation is also not represented.
 
-They may never be called PASS without actual execution. They do not authorize
-live readiness. A missing credential must produce only the section-108
-`LOCAL CREDENTIAL REQUIRED` notice and must never be printed, requested in
-chat, or replaced by a mocked live claim.
+Refactor the adapter lifecycle so one terminal logical-operation outcome is
+recorded after decode and validation:
 
-Real-chain golden fixtures are a data-evidence requirement, not automatically
-waived by the live-connection deferral. If authentic provenance cannot be
-obtained from already available safe sources, report Phase 1 PARTIAL and stop.
+- success;
+- HTTP error;
+- transport exhaustion;
+- timeout;
+- provider application/RPC error;
+- JSON decode error;
+- contract error;
+- cancellation where safely observable.
+
+Preserve actual attempt count, latency, bytes, endpoint, request class,
+cache-hit state, and estimated credits when known. Usage-recorder failure must
+not mask the provider error, but it must emit a safe operational-health signal
+rather than disappear silently. Ensure no duplicate contradictory terminal
+rows are created for one logical operation.
+
+Add adversarial tests for each terminal outcome on every adapter family.
+
+### 9. Parser failures are not durably recorded and can be skipped forever
+
+On parser error, reconciliation increments an in-memory counter and advances
+the durable watermark. After restart there is no durable record explaining
+why the event lacks a parsed row and no production retry/reparse queue.
+Also, `SqlSwapRecorder` catches every IntegrityError and labels it a
+duplicate, which can hide foreign-key, range, or schema failures.
+
+Implement a durable, versioned parse-attempt/result ledger:
+
+- record success, UNKNOWN, and failure with event ID, parser version,
+  attempted_at, error class/safe reason, input payload hash, code/config/git
+  identity, and retry disposition;
+- make pending/retryable parse failures queryable and replayable from
+  immutable raw evidence;
+- add a production CLI/sweep for deterministic reparse without rewriting
+  prior attempts or raw evidence;
+- watermark advancement may proceed only when the parse outcome is durably
+  recorded;
+- catch a uniqueness collision as idempotency only after confirming the
+  expected `(event_id, parser_version)` row exists; re-raise every other
+  IntegrityError;
+- apply the same collision-specific rule to event dedup rather than treating
+  arbitrary integrity failures as duplicates.
+
+Test malformed payload, DB constraint failure, duplicate version, new parser
+version, retry after restart, and concurrent duplicate attempts.
+
+### 10. Pagination does not validate continuity or ordering
+
+The pagination code checks only whether the oldest cursor repeats. It does not
+reject duplicate overlap across pages, inconsistent newest-first ordering,
+slot regression within a page, cursor cycles involving more than one value,
+or a missing/pruned persisted boundary. A short/empty page is treated as
+success even when the old boundary was never verifiably reached.
+
+Add deterministic validation that:
+
+- each page and the combined sequence are correctly ordered;
+- signatures are unique across pages unless a documented overlap rule is
+  explicitly normalized and audited;
+- every cursor value is globally non-repeating;
+- the persisted boundary is verified as reachable/continuous when one exists;
+- pruned/unavailable history fails DEGRADED with an explicit gap reason;
+- safety-ceiling behavior has a documented recovery/backfill path and cannot
+  remain permanently wedged without an operator-visible blocker;
+- no watermark advances on an unverified gap.
+
+Cover two-page cursor cycles, page overlap, out-of-order slots/signatures,
+missing boundary, pruned history, exact full final page, and >ceiling gaps.
+
+### 11. Scheduler submitter cancellation still leaves queued work executable
+
+If a caller awaiting `submit()` is cancelled before its queue item is
+dispatched, the future may be cancelled but the queue item remains and its
+`coro_factory` can later execute without a live requester.
+
+Remove cancelled queued items or skip them before dispatch, decrement pending
+counts exactly once, and prove cancellation cannot execute abandoned work,
+leak capacity, corrupt starvation age, or wedge later requests.
+
+### 12. Real-chain golden evidence remains required
+
+Synthetic fixtures remain useful but do not satisfy the real-chain fixture
+criterion. Do not permanently substitute synthetic data.
+
+The sandbox can access GitHub even though general RPC egress is blocked.
+Use read-only GitHub access to search established open-source Solana parser,
+indexer, or SDK repositories for authentic captured `getTransaction`
+fixtures. Import only fixtures whose upstream provenance is traceable to an
+immutable upstream repository commit and whose license permits reuse.
+
+For every required category preserve:
+
+- chain, signature, slot, and transaction version;
+- upstream repository, immutable commit SHA, and exact source path;
+- upstream license;
+- original bytes/hash;
+- sanitization transform and sanitized hash;
+- fields used by the parser and expected canonical output.
+
+Do not invent a signature or claim authenticity from payload shape alone. If
+a category cannot be sourced and independently supported from GitHub evidence,
+leave it NOT TESTED and return PARTIAL. Also add an offline import/validation
+command so a future network-enabled host can capture and verify missing
+fixtures without changing parser expectations.
+
+Live RPC/WebSocket checks and real PostgreSQL 17 Compose validation may remain
+explicit environmental deferrals, but real-chain fixture authenticity must
+remain open until actually supported.
 
 ## Mandatory acceptance tests
 
-Add and independently demonstrate at least:
+Independently demonstrate at least:
 
-1. end-to-end manager: connect -> A -> disconnect -> B missed -> reconnect ->
-   reconciliation -> A/B exactly once;
-2. the same scenario across manager process restart and duplicate delivery;
-3. multiple wallets remain isolated under concurrent subscriptions;
-4. stream timeout, malformed message, exhausted iterator, subscription
-   failure, host resume, and clock anomaly all fail DEGRADED;
-5. recovery requires reconnection + complete reconciliation + healthy clock;
-6. streaming usage is recorded from the manager's real code path;
-7. a gap larger than 1000 is fully paginated with no loss;
-8. repeated/non-progressing cursors and safety-ceiling exhaustion fail closed;
-9. mid-page fetch failure resumes at the exact safe boundary after restart;
-10. fast-path first-seen time survives confirmed and finalized progression;
-11. failed on-chain transactions can be confirmed/finalized while remaining
-    execution-failed and copy-ineligible;
-12. commitment regression/conflict is rejected and audited;
-13. reconciliation actually persists versioned parser output;
-14. parser/repository duplication is idempotent across restart;
-15. all required authenticated real-chain golden fixtures pass and their
-    manifests/hash checks validate;
-16. malformed contract responses are rejected for every provider endpoint;
-17. transport exhaustion still produces usage evidence;
-18. P0-P3 accepted requests receive bounded service under sustained load;
-19. scheduler cancellation/invalid configuration cannot wedge capacity;
-20. `tests/replay` collects and passes meaningful tests;
-21. migration from zero and upgrade from Phase 0 head succeed where a
+1. no wallet becomes OK before a real subscription-ready acknowledgement;
+2. periodic reconciliation cannot restore OK while disconnected;
+3. recovery requires stream-ready + complete reconciliation + healthy clock;
+4. multi-wallet real-SQL concurrency uses no shared AsyncSession and has no
+   cross-commit/cross-rollback;
+5. any child-task death terminates the manager fail-closed;
+6. manager shutdown/cancellation closes resources and leaves safe state;
+7. running manager performs confirmed-to-finalized promotion exactly once;
+8. commitment ordering is stable across independent SQL sessions and ties;
+9. unknown->known->conflicting-known rejects and durably audits conflict;
+10. concurrent commitment writes serialize safely;
+11. immutable ledger UPDATE/DELETE is denied at the database and role layers;
+12. provider protocols return canonical typed ARGUS models;
+13. contract/RPC/JSON failures produce non-OK terminal usage records;
+14. usage recorder failure is visible but never masks provider outcome;
+15. parser failures persist and are replayable after restart;
+16. unrelated IntegrityError is never swallowed as a duplicate;
+17. pagination rejects overlap, cycles, ordering faults, and missing boundary;
+18. safety-ceiling recovery is deterministic and operator-visible;
+19. cancelled scheduler submissions never execute;
+20. replay tests cover the new concurrency, commitment, parser, and pagination
+    paths;
+21. every required authenticated real-chain fixture and provenance hash
+    validates, or the item remains explicitly NOT TESTED/PARTIAL;
+22. migration from zero and upgrade from Phase 0 head succeed where a
     database is available;
-22. DB role grants remain least privilege;
-23. no signing, signer, private-key, seed-phrase, live-arm, or broadcast path
+23. DB grants remain least privilege;
+24. no signing, signer, private-key, seed-phrase, live-arm, or broadcast path
     exists;
-24. secret scan is clean;
-25. no paid-provider feature is enabled;
-26. no Phase 1.5 or later-phase code is started.
+25. secret scan is clean;
+26. no paid-provider feature is enabled;
+27. no Phase 1.5 or later-phase code is started.
 
 Run and record exact results for:
 
@@ -319,34 +389,35 @@ Run and record exact results for:
 - `uv run argus providers probe`;
 - `uv run argus providers probe-history`;
 - `uv run argus providers usage --provider helius`;
-- an offline deterministic `argus ingest run` smoke test using injected
-  fakes or a dedicated test-mode harness that cannot broadcast transactions.
+- offline deterministic `argus ingest run --test-mode`;
+- the real-chain fixture import/validation command in offline validation mode.
 
-Do not claim an unrun test. A substitute PostgreSQL server may support code
-tests but must not be described as PostgreSQL 17 validation.
+Do not claim an unrun test. PostgreSQL 16 may support code tests but must not
+be described as PostgreSQL 17 validation.
 
 ## Checkpoint, bundle, and handoff
 
 At completion:
 
-- keep Phase 1 awaiting orchestrator review; do not mark it approved;
+- keep Phase 1 awaiting orchestrator review and not approved;
 - leave `last_orchestrator_approved_phase: 0` and the Phase 0
   `approved_commit` unchanged;
-- create new immutable evidence paths:
-  - `orchestration/checkpoints/phase_1_remediation_1.md`
-  - `orchestration/bundles/phase_1_remediation_1.txt`;
+- preserve all earlier evidence files as immutable history;
+- create:
+  - `orchestration/checkpoints/phase_1_remediation_2.md`
+  - `orchestration/bundles/phase_1_remediation_2.txt`;
 - generate the canonical runtime checkpoint/bundle required by MASTER_SPEC;
 - use a new unique handoff ID;
 - set `LAST_ORCHESTRATOR_INSTRUCTION_ID` exactly to
-  `argus-phase-1-remediation-001`;
-- identify all commits and environmental deferrals exactly;
-- state that Phase 1.5 remains blocked;
+  `argus-phase-1-remediation-002`;
+- identify all commits, test results, open failures, and deferrals exactly;
+- state clearly that Phase 1.5 remains blocked;
 - verify remote HEAD equals local HEAD and the worktree is clean.
 
 Every commit created during this run must contain exactly one valid terminal
 trailer:
 
-`ARGUS-INSTRUCTION-ID: argus-phase-1-remediation-001`
+`ARGUS-INSTRUCTION-ID: argus-phase-1-remediation-002`
 
 Then STOP. Do not modify this instruction file. Do not self-authorize Phase
 1.5 or any later work.
