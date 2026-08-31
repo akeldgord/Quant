@@ -6,6 +6,7 @@ against `argus.providers.credentials`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -74,6 +75,84 @@ async def test_helius_get_transaction_via_mock_transport() -> None:
     await http_client.aclose()
 
 
+async def test_helius_get_transaction_null_transaction_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"meta": {"fee": 5000}, "transaction": None},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'transaction' is not an object"):
+        await client.get_transaction("some-signature")
+    await http_client.aclose()
+
+
+async def test_helius_get_transaction_missing_message_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"meta": {"fee": 5000}, "transaction": {"signatures": []}},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'transaction.message' is not an object"):
+        await client.get_transaction("some-signature")
+    await http_client.aclose()
+
+
+async def test_helius_get_transaction_non_string_signature_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "meta": {"fee": 5000},
+                    "transaction": {"message": {}, "signatures": [123]},
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'transaction.signatures' is not a list of strings"):
+        await client.get_transaction("some-signature")
+    await http_client.aclose()
+
+
+async def test_helius_get_transaction_invalid_meta_err_type_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "meta": {"fee": 5000, "err": 42},
+                    "transaction": {"message": {}, "signatures": []},
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'meta.err' has an invalid type"):
+        await client.get_transaction("some-signature")
+    await http_client.aclose()
+
+
 async def test_helius_get_signatures_for_address_parses_entries() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -95,6 +174,112 @@ async def test_helius_get_signatures_for_address_parses_entries() -> None:
     assert signatures[0].block_time is not None
     assert signatures[1].block_time is None
     assert signatures[1].err == {"x": 1}
+    await http_client.aclose()
+
+
+async def test_helius_get_signatures_for_address_bool_as_slot_rejected() -> None:
+    """``bool`` is an ``int`` subclass in Python -- ``slot: true`` must
+    never silently pass an ``isinstance(value, int)`` check."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": [{"signature": "sig-1", "slot": True, "err": None}],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'signature'/'slot' have wrong type"):
+        await client.get_signatures_for_address("SomeWallet")
+    await http_client.aclose()
+
+
+async def test_helius_get_signatures_for_address_invalid_err_type_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": [{"signature": "sig-1", "slot": 100, "err": 7}],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'err' has an invalid type"):
+        await client.get_signatures_for_address("SomeWallet")
+    await http_client.aclose()
+
+
+async def test_helius_get_signature_statuses_bool_as_slot_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"value": [{"confirmationStatus": "confirmed", "slot": True}]},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'slot' has an invalid type"):
+        await client.get_signature_statuses(["sig-1"])
+    await http_client.aclose()
+
+
+async def test_helius_get_signature_statuses_invalid_err_type_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"value": [{"confirmationStatus": "confirmed", "err": ["not", "valid"]}]},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'err' has an invalid type"):
+        await client.get_signature_statuses(["sig-1"])
+    await http_client.aclose()
+
+
+async def test_helius_get_signature_statuses_object_err_and_slot_accepted() -> None:
+    """A real object-variant ``TransactionError`` and a genuine slot must
+    still be accepted -- this is a positive control for the two rejection
+    tests immediately above."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "value": [
+                        {
+                            "confirmationStatus": "finalized",
+                            "slot": 999,
+                            "err": {"InstructionError": [0, "Custom"]},
+                        }
+                    ]
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    [status] = await client.get_signature_statuses(["sig-1"])
+    assert status.slot == 999
+    assert status.err == {"InstructionError": [0, "Custom"]}
     await http_client.aclose()
 
 
@@ -214,6 +399,155 @@ async def test_helius_ws_stream_bad_subscribe_ack_raises() -> None:
 
     with pytest.raises(HeliusRpcError, match="logsSubscribe failed"):
         await stream.open_subscription("SomeWallet")
+
+
+async def test_helius_ws_stream_skips_mismatched_id_before_matching_ack() -> None:
+    """An ack (or any message) for a different request id must be
+    skipped, not mistaken for this subscription's own acknowledgement --
+    the real acceptance signal is a matching ``id``, not just "the next
+    message that arrived". Proven observably: a notification tagged with
+    the *real* (post-skip) subscription id is correctly recognized and
+    yielded."""
+    unrelated = json.dumps({"jsonrpc": "2.0", "id": 999, "result": 42})
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": 12345})
+    notification = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "logsNotification",
+            "params": {
+                "subscription": 12345,
+                "result": {
+                    "context": {"slot": 7},
+                    "value": {"signature": "ws-sig-2", "err": None, "logs": []},
+                },
+            },
+        }
+    )
+    connection = _FakeWebSocketConnection([unrelated, ack, notification])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    subscription = await stream.open_subscription("SomeWallet")
+    received = []
+    async for note in subscription.notifications():
+        received.append(note)
+        break
+    assert len(received) == 1
+    assert received[0].signature == "ws-sig-2"
+    assert received[0].slot == 7
+
+
+async def test_helius_ws_stream_wrong_jsonrpc_version_on_matching_id_raises() -> None:
+    bad_ack = json.dumps({"jsonrpc": "1.0", "id": 1, "result": 12345})
+    connection = _FakeWebSocketConnection([bad_ack])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    with pytest.raises(HeliusRpcError, match="logsSubscribe failed"):
+        await stream.open_subscription("SomeWallet")
+
+
+async def test_helius_ws_stream_bool_result_on_ack_rejected() -> None:
+    """``bool`` is an ``int`` subclass -- ``result: true`` must never be
+    accepted as a genuine subscription id."""
+    bad_ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": True})
+    connection = _FakeWebSocketConnection([bad_ack])
+    connector = _FakeWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector)
+
+    with pytest.raises(HeliusRpcError, match="logsSubscribe failed"):
+        await stream.open_subscription("SomeWallet")
+
+
+class _HangingWebSocketConnection:
+    """Never resolves ``recv``/``send`` -- used to exercise the bounded
+    connect/send/ack timeouts (Phase 1 remediation round 4, finding #4).
+    """
+
+    def __init__(self, *, hang_on: str) -> None:
+        self._hang_on = hang_on
+        self.sent: list[str] = []
+
+    async def send(self, message: str) -> None:
+        if self._hang_on == "send":
+            await asyncio.Event().wait()
+        self.sent.append(message)
+
+    async def recv(self) -> str:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def close(self) -> None:
+        return None
+
+
+class _TrackingWebSocketConnector:
+    """Like ``_FakeWebSocketConnector``, but records whether ``__aexit__``
+    was actually invoked (proving cleanup happened after a timeout) and
+    can simulate a ``connect`` that never resolves."""
+
+    def __init__(self, connection: Any, *, hang_on_connect: bool = False) -> None:
+        self._connection = connection
+        self._hang_on_connect = hang_on_connect
+        self.aexit_called = False
+
+    @asynccontextmanager
+    async def _cm(self, url: str) -> AsyncIterator[Any]:
+        if self._hang_on_connect:
+            await asyncio.Event().wait()
+        try:
+            yield self._connection
+        finally:
+            self.aexit_called = True
+
+    def connect(self, url: str) -> Any:
+        return self._cm(url)
+
+
+async def test_helius_ws_stream_connect_timeout_raises_and_leaves_nothing_to_clean_up() -> None:
+    connector = _TrackingWebSocketConnector(
+        _HangingWebSocketConnection(hang_on="recv"), hang_on_connect=True
+    )
+    stream = HeliusWebSocketStream("fake-key", connector=connector, connect_timeout_seconds=0.01)
+
+    with pytest.raises(HeliusRpcError, match="connect timed out"):
+        await stream.open_subscription("SomeWallet")
+    # __aenter__ never completed -- there is no entered context, so
+    # __aexit__ (and its cleanup) never runs, and never should.
+    assert connector.aexit_called is False
+
+
+async def test_helius_ws_stream_send_timeout_raises_and_cleans_up() -> None:
+    connection = _HangingWebSocketConnection(hang_on="send")
+    connector = _TrackingWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector, send_timeout_seconds=0.01)
+
+    with pytest.raises(HeliusRpcError, match="send timed out"):
+        await stream.open_subscription("SomeWallet")
+    assert connector.aexit_called is True
+
+
+async def test_helius_ws_stream_ack_timeout_raises_and_cleans_up() -> None:
+    connection = _HangingWebSocketConnection(hang_on="recv")
+    connector = _TrackingWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector, ack_timeout_seconds=0.01)
+
+    with pytest.raises(HeliusRpcError, match="no matching acknowledgement"):
+        await stream.open_subscription("SomeWallet")
+    assert connector.aexit_called is True
+
+
+async def test_helius_ws_stream_cancellation_during_ack_wait_cleans_up() -> None:
+    connection = _HangingWebSocketConnection(hang_on="recv")
+    connector = _TrackingWebSocketConnector(connection)
+    stream = HeliusWebSocketStream("fake-key", connector=connector, ack_timeout_seconds=30.0)
+
+    task = asyncio.ensure_future(stream.open_subscription("SomeWallet"))
+    await asyncio.sleep(0)  # let it reach the hanging recv()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert connector.aexit_called is True
 
 
 async def test_dexscreener_token_snapshot() -> None:
@@ -825,8 +1159,32 @@ async def test_helius_get_balance_malformed_response_records_contract_error_not_
     await http_client.aclose()
 
 
+def _jsonparsed_token_account(
+    *,
+    pubkey: str = "acct-1",
+    mint: str = "MintA",
+    owner: str = "SomeWallet",
+    amount: str = "1000000",
+    decimals: Any = 6,
+) -> dict[str, Any]:
+    return {
+        "pubkey": pubkey,
+        "account": {
+            "data": {
+                "parsed": {
+                    "info": {
+                        "mint": mint,
+                        "owner": owner,
+                        "tokenAmount": {"amount": amount, "decimals": decimals},
+                    }
+                }
+            }
+        },
+    }
+
+
 async def test_helius_get_token_accounts_happy_path_records_ok() -> None:
-    accounts = [{"pubkey": "acct-1", "account": {"data": {}}}]
+    accounts = [_jsonparsed_token_account()]
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": accounts}})
@@ -835,9 +1193,73 @@ async def test_helius_get_token_accounts_happy_path_records_ok() -> None:
     usage = _InMemoryUsageRecorder()
     client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
     result = await client.get_token_accounts("SomeWallet")
-    assert result == accounts
+    assert len(result) == 1
+    account = result[0]
+    assert account.pubkey == "acct-1"
+    assert account.mint == "MintA"
+    assert account.owner == "SomeWallet"
+    assert account.amount_raw == 1_000_000
+    assert account.decimals == 6
+    assert account.raw == accounts[0]
     assert len(usage.requests) == 1
     assert usage.requests[0].status == "ok"
+    await http_client.aclose()
+
+
+async def test_helius_get_token_accounts_missing_parsed_info_rejected() -> None:
+    accounts = [{"pubkey": "acct-1", "account": {"data": {}}}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": accounts}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    usage = _InMemoryUsageRecorder()
+    client = HeliusRpcClient("fake-key", http_client=http_client, usage_recorder=usage)
+    with pytest.raises(HeliusRpcError, match="missing 'account.data.parsed.info'"):
+        await client.get_token_accounts("SomeWallet")
+    assert usage.requests[0].status == "contract_error"
+    await http_client.aclose()
+
+
+async def test_helius_get_token_accounts_non_object_account_rejected() -> None:
+    accounts = [{"pubkey": "acct-1", "account": "not-an-object"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": accounts}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'account' is not an object"):
+        await client.get_token_accounts("SomeWallet")
+    await http_client.aclose()
+
+
+async def test_helius_get_token_accounts_bool_as_decimals_rejected() -> None:
+    """``bool`` is an ``int`` subclass in Python -- a provider response
+    with ``decimals: true`` must never silently pass an
+    ``isinstance(value, int)`` check."""
+    accounts = [_jsonparsed_token_account(decimals=True)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": accounts}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'tokenAmount.decimals' is not an integer"):
+        await client.get_token_accounts("SomeWallet")
+    await http_client.aclose()
+
+
+async def test_helius_get_token_accounts_non_numeric_amount_rejected() -> None:
+    accounts = [_jsonparsed_token_account(amount="not-a-number")]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": accounts}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = HeliusRpcClient("fake-key", http_client=http_client)
+    with pytest.raises(HeliusRpcError, match="'tokenAmount.amount' is not a numeric string"):
+        await client.get_token_accounts("SomeWallet")
     await http_client.aclose()
 
 

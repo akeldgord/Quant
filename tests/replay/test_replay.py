@@ -126,7 +126,7 @@ class _FakeChainProvider:
     async def get_balance(self, wallet_address: str) -> int:
         return 0
 
-    async def get_token_accounts(self, wallet_address: str) -> list[dict[str, Any]]:
+    async def get_token_accounts(self, wallet_address: str) -> list[Any]:
         return []
 
     async def get_slot(self) -> int:

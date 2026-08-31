@@ -41,7 +41,7 @@ from argus.ingestion.reconciliation import (
     WalletWatermark,
 )
 from argus.parsing.generic_parser import ParsedTransaction
-from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification
+from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotification, TokenAccountInfo
 
 
 class NullStreamSubscription:
@@ -93,7 +93,7 @@ class NullChainProvider:
     async def get_balance(self, wallet_address: str) -> int:
         return 0
 
-    async def get_token_accounts(self, wallet_address: str) -> list[dict[str, Any]]:
+    async def get_token_accounts(self, wallet_address: str) -> list[TokenAccountInfo]:
         return []
 
     async def get_slot(self) -> int:

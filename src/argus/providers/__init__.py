@@ -16,7 +16,13 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol
 
-from argus.providers.models import ExecutableQuote, OhlcvPage, TokenSnapshot, UnsignedOrderResult
+from argus.providers.models import (
+    ExecutableQuote,
+    OhlcvPage,
+    TokenAccountInfo,
+    TokenSnapshot,
+    UnsignedOrderResult,
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -93,7 +99,12 @@ class ChainProvider(Protocol):
         """Lamports balance."""
         ...
 
-    async def get_token_accounts(self, wallet_address: str) -> list[dict[str, Any]]: ...
+    async def get_token_accounts(self, wallet_address: str) -> list[TokenAccountInfo]:
+        """SPL token accounts owned by ``wallet_address``, normalized into
+        the canonical :class:`~argus.providers.models.TokenAccountInfo`
+        shape (Phase 1 remediation round 4, finding #4) -- never the
+        provider-shaped ``getTokenAccountsByOwner`` dict."""
+        ...
 
     async def get_slot(self) -> int: ...
 

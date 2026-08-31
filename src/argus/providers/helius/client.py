@@ -15,11 +15,12 @@ fake transport instead of a live network connection.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 import httpx
 
@@ -28,6 +29,7 @@ from argus.providers import SignatureInfo, SignatureStatusInfo, StreamNotificati
 from argus.providers.contract import ProviderResponseError
 from argus.providers.credentials import require_env_credential
 from argus.providers.http import send_with_usage
+from argus.providers.models import TokenAccountInfo
 from argus.providers.retry import RetryPolicy
 from argus.providers.usage import UsageRecorder
 
@@ -36,6 +38,26 @@ DEFAULT_RPC_BASE_URL = "https://mainnet.helius-rpc.com/"
 DEFAULT_WS_BASE_URL = "wss://mainnet.helius-rpc.com/"
 
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+_DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+_DEFAULT_SEND_TIMEOUT_SECONDS = 10.0
+_DEFAULT_ACK_TIMEOUT_SECONDS = 10.0
+
+
+def _is_strict_int(value: Any) -> TypeGuard[int]:
+    """``True``/``False`` are ``int`` subclasses in Python -- a provider
+    response with a bool where an integer slot/id/decimals field belongs
+    must never silently pass an ``isinstance(value, int)`` check (Phase 1
+    remediation round 4, finding #4)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_valid_tx_err(value: Any) -> bool:
+    """A Solana ``TransactionError`` is either ``null`` (success), a bare
+    string variant (e.g. ``"AccountInUse"``), or an object variant (e.g.
+    ``{"InstructionError": [...]}"``) -- never a number, bool, or list at
+    the top level."""
+    return value is None or isinstance(value, str | dict)
 
 
 class HeliusRpcError(ProviderResponseError):
@@ -133,9 +155,36 @@ class HeliusRpcClient:
                     f"'transaction': {result!r}",
                     usage_status="contract_error",
                 )
-            if not isinstance(result["meta"], dict):
+            meta = result["meta"]
+            if not isinstance(meta, dict):
                 raise HeliusRpcError(
-                    f"getTransaction: 'meta' is not an object: {result['meta']!r}",
+                    f"getTransaction: 'meta' is not an object: {meta!r}",
+                    usage_status="contract_error",
+                )
+            if "err" in meta and not _is_valid_tx_err(meta["err"]):
+                raise HeliusRpcError(
+                    f"getTransaction: 'meta.err' has an invalid type: {meta['err']!r}",
+                    usage_status="contract_error",
+                )
+            transaction = result["transaction"]
+            if not isinstance(transaction, dict):
+                raise HeliusRpcError(
+                    f"getTransaction: 'transaction' is not an object: {transaction!r}",
+                    usage_status="contract_error",
+                )
+            message = transaction.get("message")
+            if not isinstance(message, dict):
+                raise HeliusRpcError(
+                    f"getTransaction: 'transaction.message' is not an object: {message!r}",
+                    usage_status="contract_error",
+                )
+            signatures = transaction.get("signatures")
+            if not isinstance(signatures, list) or not all(
+                isinstance(sig, str) for sig in signatures
+            ):
+                raise HeliusRpcError(
+                    "getTransaction: 'transaction.signatures' is not a list of strings: "
+                    f"{signatures!r}",
                     usage_status="contract_error",
                 )
             return result
@@ -174,15 +223,21 @@ class HeliusRpcClient:
                         f"'signature'/'slot': {entry!r}",
                         usage_status="contract_error",
                     )
-                if not isinstance(entry["signature"], str) or not isinstance(entry["slot"], int):
+                if not isinstance(entry["signature"], str) or not _is_strict_int(entry["slot"]):
                     raise HeliusRpcError(
                         f"getSignaturesForAddress: 'signature'/'slot' have wrong type: {entry!r}",
                         usage_status="contract_error",
                     )
                 block_time_raw = entry.get("blockTime")
-                if block_time_raw is not None and not isinstance(block_time_raw, int):
+                if block_time_raw is not None and not _is_strict_int(block_time_raw):
                     raise HeliusRpcError(
                         f"getSignaturesForAddress: non-integer blockTime: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                err = entry.get("err")
+                if not _is_valid_tx_err(err):
+                    raise HeliusRpcError(
+                        f"getSignaturesForAddress: 'err' has an invalid type: {entry!r}",
                         usage_status="contract_error",
                     )
                 entries.append(
@@ -194,7 +249,7 @@ class HeliusRpcClient:
                             if block_time_raw is not None
                             else None
                         ),
-                        err=entry.get("err"),
+                        err=err,
                     )
                 )
             return entries
@@ -241,12 +296,24 @@ class HeliusRpcClient:
                         f"getSignatureStatuses: unknown confirmationStatus {confirmation_status!r}",
                         usage_status="contract_error",
                     )
+                slot = entry.get("slot")
+                if slot is not None and not _is_strict_int(slot):
+                    raise HeliusRpcError(
+                        f"getSignatureStatuses: 'slot' has an invalid type: {entry!r}",
+                        usage_status="contract_error",
+                    )
+                err = entry.get("err")
+                if not _is_valid_tx_err(err):
+                    raise HeliusRpcError(
+                        f"getSignatureStatuses: 'err' has an invalid type: {entry!r}",
+                        usage_status="contract_error",
+                    )
                 statuses.append(
                     SignatureStatusInfo(
                         signature=signature,
                         confirmation_status=confirmation_status,
-                        err=entry.get("err"),
-                        slot=entry.get("slot"),
+                        err=err,
+                        slot=slot,
                     )
                 )
             return statuses
@@ -273,8 +340,62 @@ class HeliusRpcClient:
 
         return await self._rpc("getBalance", [wallet_address], validate=_validate)
 
-    async def get_token_accounts(self, wallet_address: str) -> list[dict[str, Any]]:
-        def _validate(result: Any) -> list[dict[str, Any]]:
+    async def get_token_accounts(self, wallet_address: str) -> list[TokenAccountInfo]:
+        def _validate_entry(entry: Any) -> TokenAccountInfo:
+            if not isinstance(entry, dict) or not isinstance(entry.get("pubkey"), str):
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: malformed entry, missing 'pubkey': {entry!r}",
+                    usage_status="contract_error",
+                )
+            account = entry.get("account")
+            if not isinstance(account, dict):
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: 'account' is not an object: {entry!r}",
+                    usage_status="contract_error",
+                )
+            data = account.get("data")
+            parsed = data.get("parsed") if isinstance(data, dict) else None
+            info = parsed.get("info") if isinstance(parsed, dict) else None
+            if not isinstance(info, dict):
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: missing 'account.data.parsed.info': {entry!r}",
+                    usage_status="contract_error",
+                )
+            mint = info.get("mint")
+            owner = info.get("owner")
+            token_amount = info.get("tokenAmount")
+            if (
+                not isinstance(mint, str)
+                or not isinstance(owner, str)
+                or not isinstance(token_amount, dict)
+            ):
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: missing 'mint'/'owner'/'tokenAmount': {entry!r}",
+                    usage_status="contract_error",
+                )
+            amount_str = token_amount.get("amount")
+            decimals = token_amount.get("decimals")
+            if not isinstance(amount_str, str) or not amount_str.isdigit():
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: 'tokenAmount.amount' is not a numeric "
+                    f"string: {entry!r}",
+                    usage_status="contract_error",
+                )
+            if not _is_strict_int(decimals):
+                raise HeliusRpcError(
+                    f"getTokenAccountsByOwner: 'tokenAmount.decimals' is not an integer: {entry!r}",
+                    usage_status="contract_error",
+                )
+            return TokenAccountInfo(
+                pubkey=entry["pubkey"],
+                mint=mint,
+                owner=owner,
+                amount_raw=int(amount_str),
+                decimals=decimals,
+                raw=entry,
+            )
+
+        def _validate(result: Any) -> list[TokenAccountInfo]:
             if (
                 not isinstance(result, dict)
                 or "value" not in result
@@ -285,8 +406,7 @@ class HeliusRpcClient:
                     f"{{'value': list}}: {result!r}",
                     usage_status="contract_error",
                 )
-            value: list[dict[str, Any]] = result["value"]
-            return value
+            return [_validate_entry(entry) for entry in result["value"]]
 
         return await self._rpc(
             "getTokenAccountsByOwner",
@@ -363,7 +483,7 @@ class HeliusSubscription:
                 raise HeliusRpcError(f"logsNotification missing 'result': {message!r}")
             context = result.get("context")
             value = result.get("value")
-            if not isinstance(context, dict) or not isinstance(context.get("slot"), int):
+            if not isinstance(context, dict) or not _is_strict_int(context.get("slot")):
                 raise HeliusRpcError(f"logsNotification missing context.slot: {message!r}")
             if (
                 not isinstance(value, dict)
@@ -394,32 +514,92 @@ class HeliusWebSocketStream:
         *,
         connector: WebSocketConnector,
         base_url: str = DEFAULT_WS_BASE_URL,
+        connect_timeout_seconds: float = _DEFAULT_CONNECT_TIMEOUT_SECONDS,
+        send_timeout_seconds: float = _DEFAULT_SEND_TIMEOUT_SECONDS,
+        ack_timeout_seconds: float = _DEFAULT_ACK_TIMEOUT_SECONDS,
     ) -> None:
         self._api_key = api_key
         self._connector = connector
         self._base_url = base_url
+        self._connect_timeout_seconds = connect_timeout_seconds
+        self._send_timeout_seconds = send_timeout_seconds
+        self._ack_timeout_seconds = ack_timeout_seconds
+
+    async def _read_matching_ack(
+        self, connection: WebSocketConnection, request_id: int
+    ) -> dict[str, Any]:
+        # Phase 1 remediation round 4, finding #4: a WebSocket connection
+        # can carry messages for *other* pending requests, or stray
+        # notifications, interleaved with this subscribe request's own
+        # acknowledgement. The previous implementation treated the very
+        # next message received as the ack unconditionally -- a
+        # mismatched-id message (an ack for someone else's request, or a
+        # notification) could be misread as this subscription becoming
+        # ready. This loop skips anything that isn't a JSON object whose
+        # 'id' matches our own request, and the whole loop (not each
+        # individual recv) is bounded by one ack timeout so an endless
+        # stream of unrelated messages can't stall a caller forever.
+        async def _loop() -> dict[str, Any]:
+            while True:
+                raw = await connection.recv()
+                message = json.loads(raw)
+                if isinstance(message, dict) and message.get("id") == request_id:
+                    return message
+
+        try:
+            return await asyncio.wait_for(_loop(), timeout=self._ack_timeout_seconds)
+        except TimeoutError as exc:
+            raise HeliusRpcError(
+                f"logsSubscribe: no matching acknowledgement (id={request_id}) within "
+                f"{self._ack_timeout_seconds}s"
+            ) from exc
 
     async def open_subscription(self, wallet_address: str) -> HeliusSubscription:
         url = f"{self._base_url}?api-key={self._api_key}"
         connector_cm = self._connector.connect(url)
-        connection = await connector_cm.__aenter__()
+        try:
+            connection = await asyncio.wait_for(
+                connector_cm.__aenter__(), timeout=self._connect_timeout_seconds
+            )
+        except TimeoutError as exc:
+            # __aenter__ never completed -- there is no entered context to
+            # exit, so there is nothing to clean up beyond re-raising.
+            raise HeliusRpcError(
+                f"connect timed out after {self._connect_timeout_seconds}s for {wallet_address!r}"
+            ) from exc
+
+        request_id = 1
         try:
             subscribe_request = {
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": request_id,
                 "method": "logsSubscribe",
                 "params": [{"mentions": [wallet_address]}, {"commitment": "confirmed"}],
             }
-            await connection.send(json.dumps(subscribe_request))
-            ack_raw = await connection.recv()
-            ack = json.loads(ack_raw)
-            if "result" not in ack or not isinstance(ack["result"], int):
+            try:
+                await asyncio.wait_for(
+                    connection.send(json.dumps(subscribe_request)),
+                    timeout=self._send_timeout_seconds,
+                )
+            except TimeoutError as exc:
+                raise HeliusRpcError(
+                    f"logsSubscribe send timed out after {self._send_timeout_seconds}s "
+                    f"for {wallet_address!r}"
+                ) from exc
+
+            ack = await self._read_matching_ack(connection, request_id)
+            if (
+                ack.get("jsonrpc") != "2.0"
+                or "error" in ack
+                or not _is_strict_int(ack.get("result"))
+            ):
                 raise HeliusRpcError(f"logsSubscribe failed for {wallet_address!r}: {ack}")
             subscription_id = ack["result"]
         except BaseException:
-            # Connect or subscribe/ack failed -- never leave a partially
-            # opened connection dangling; the caller gets a clean
-            # exception, not a leaked socket.
+            # Connect succeeded but subscribe/ack failed (send timeout,
+            # ack timeout, a malformed/error ack, or cancellation) --
+            # never leave a partially opened connection dangling; the
+            # caller gets a clean exception, not a leaked socket.
             await connector_cm.__aexit__(*sys.exc_info())
             raise
         return HeliusSubscription(

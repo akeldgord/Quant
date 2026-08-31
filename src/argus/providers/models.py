@@ -92,6 +92,24 @@ class ExecutableQuote:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class TokenAccountInfo:
+    """One SPL token account entry from
+    :meth:`argus.providers.ChainProvider.get_token_accounts` -- the
+    canonical shape every adapter normalizes into (Phase 1 remediation
+    round 4, finding #4), never the provider-shaped
+    ``getTokenAccountsByOwner`` ``jsonParsed`` dict handed straight to
+    callers. ``amount_raw`` is the token's raw base-unit balance (never a
+    float-parsed UI amount)."""
+
+    pubkey: str
+    mint: str
+    owner: str
+    amount_raw: int
+    decimals: int
+    raw: Mapping[str, Any]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class UnsignedOrderResult:
     """The canonical shape :meth:`argus.providers.ExecutionProvider.build_unsigned_order`
     returns -- an unsigned transaction payload for inspection only. No
