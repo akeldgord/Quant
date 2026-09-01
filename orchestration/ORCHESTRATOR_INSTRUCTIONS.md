@@ -2,533 +2,395 @@
 
 OWNER: ARGUS ORCHESTRATOR. The implementation agent must not modify this file.
 Execute only the ACTIVE instruction below. MASTER_SPEC.md remains authoritative
-except where this instruction explicitly records an orchestrator approval,
-clarification, or change-control decision.
+except for explicit orchestrator decisions recorded here.
 
 ---
 
-INSTRUCTION_ID: argus-phase-3-remediation-001
-ISSUED_AT: 2026-09-01T04:14:16Z
-TARGET_COMMIT: 69a8de622b1977f92999ca680fcb8d851ba78c9f
-AUTHORIZED_ACTION: REMEDIATE_ALL_FROZEN_PHASE_3_BLOCKERS_ONLY
+INSTRUCTION_ID: argus-phase-3-remediation-002
+ISSUED_AT: 2026-09-01T06:29:00Z
+TARGET_COMMIT: 3fb7d5675bf4b6c1c497dad08eb319a0e349d188
+AUTHORIZED_ACTION: CLOSE_REMAINING_FROZEN_PHASE_3_DEFECTS_AND_MIGRATION_REGRESSION
 AUTHORIZED_PHASE: 3
 APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
-## Independent audit disposition
+## Disposition and approved state
 
-Phase 0 remains approved as PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
-Phase 1 remains approved at 2fbc566af74832bc6523648f60ba8cb60d98eb31 as
-PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
-Phase 1.5 remains approved at c3148cc191de58ecab9b11cd05291cc8ffe45455 as
-PASS_WITH_LIMITATIONS.
-Phase 2 remains approved at a13ba2ab8729a08de3c571b7b12c32cc3f14c56b as
-PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
+AUDIT_ID: argus-phase-3-remediation-audit-001
+DISPOSITION: FAIL_REMEDIATION_REQUIRED
 
-Phase 3 at exact audited remote commit
-69a8de622b1977f92999ca680fcb8d851ba78c9f is NOT APPROVED.
-Disposition: FAIL_REMEDIATION_REQUIRED.
-Phase 4 and every later phase remain blocked.
+Phase 3 is NOT approved. Phase 4 remains blocked.
+This is ONE consolidated second remediation, justified below. Implement all
+listed work in one batch, produce one fresh handoff, then STOP. Do not retune,
+redesign accepted behavior, or expand into future phases.
 
-This is the first and only consolidated Phase 3 remediation. It closes every
-currently knowable blocking finding from the full frozen-gate audit. No optional
-hardening item may be promoted into a blocker during this remediation.
+Predecessor approvals remain unchanged:
+- Phase 0: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
+- Phase 1: 2fbc566af74832bc6523648f60ba8cb60d98eb31,
+  PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
+- Phase 1.5: c3148cc191de58ecab9b11cd05291cc8ffe45455,
+  PASS_WITH_LIMITATIONS.
+- Phase 2: a13ba2ab8729a08de3c571b7b12c32cc3f14c56b,
+  PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION.
 
-## Audit identity and scope
+The accepted PHASE_3_CANDIDATE_SAMPLE_BLOCKED outcome (one genuine candidate,
+zero usable positions) remains accepted and is NOT a remediation item.
+No additional candidate, provider purchase, or live validation is required to
+close this remediation. Zero A/S wallets is a valid result.
 
-- AUDIT_ID: argus-phase-3-audit-001
-- AUDITED_BRANCH: claude/argus-folder-setup-77ahrk
-- AUDITED_REMOTE_HEAD: 69a8de622b1977f92999ca680fcb8d851ba78c9f
-- IMPLEMENTATION_COMMIT: f2e69423c1f93beb657ccc0bc415828ac2de046b
-- EVIDENCE_HASH_FILL_COMMIT: 69a8de622b1977f92999ca680fcb8d851ba78c9f
-- ACTIVE_INSTRUCTION_AUDITED: argus-phase-3-001
-- FROZEN_PHASE_TARGET: a13ba2ab8729a08de3c571b7b12c32cc3f14c56b
-- MASTER_SPEC: v2.0, Phase 3 and sections 34 through 43, plus CORE-001,
-  CORE-004, sections 104 through 109, and section 116
-- HANDOFF: handoff-0020-phase-3
-- CHECKPOINT: orchestration/checkpoints/phase_3.md
-- BUNDLE: orchestration/bundles/phase_3.txt
-- AUDIT_ENVIRONMENT: immutable GitHub reads and source/test/evidence inspection.
-  The auditor did not have the builder's local PostgreSQL service, so builder
-  command results were checked against raw committed bundle output and test
-  source but were not independently rerun.
-- EXCLUDED_SCOPE: Phase 4 prospective monitoring/shadow copying, live execution,
-  paid providers, canary, signing, threshold retuning, and deeper graph work.
+## Audit identity, authority, and independent work
 
-The exact PHASE_3_CANDIDATE_SAMPLE_BLOCKED result is accepted. The committed
-sample report honestly proves one genuine candidate and zero usable positions,
-does not fabricate five wallets, does not loosen thresholds, and follows the
-frozen fallback. It is not a remediation item.
+Repository akeldgord/Quant, branch claude/argus-folder-setup-77ahrk.
+Audited remote HEAD: 3fb7d5675bf4b6c1c497dad08eb319a0e349d188.
+Direct parent / implementation: 5713e9bd86011ae1033507fbdab349cc3dc5fdbd.
+Pre-work instruction commit: da09d4f4d68d3120e865ffec5b5470d6b2ec86c0.
+Audited instruction: argus-phase-3-remediation-001, targeting
+69a8de622b1977f92999ca680fcb8d851ba78c9f.
+Handoff: handoff-0021-phase-3-remediation, exact instruction-ID match.
+Checkpoint: orchestration/checkpoints/phase_3_remediation.md.
+Bundle: orchestration/bundles/phase_3_remediation.txt.
 
-The previously approved environmental deferrals remain unchanged:
-LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION,
-PG17_COMPOSE_VALIDATION, and BQ_PUBLIC_DATASET_ACCESS. They must remain
-explicitly deferred and must not be reported as passed or as live readiness.
+Frozen authority: MASTER_SPEC v2.0 as at original Phase 3 authorization,
+plus argus-phase-3-001 and remediation-001's explicit existing-requirement
+clarifications. MASTER_SPEC remains byte-identical to the Phase 2 approved
+target: Git blob 34538249bd6d617777e36768f0fc2a27fdf554b6,
+SHA-256 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011.
+PROTOCOL.md and orchestrator-owned instructions were not changed by the builder.
+Both submitted commits are linear descendants of the instruction commit and
+have the required sole terminal instruction trailer. Fresh evidence paths are
+newly added. The hash-fill commit is permitted by PROTOCOL section 5.
 
-## Requirement-to-evidence disposition
+The auditor fetched GitHub HEAD, read the canonical/control/evidence files,
+cloned an isolated checkout and fetched the exact remote commit, inspected all
+20 changed files and affected Phase 3 call sites, and independently executed:
+- uv sync --frozen: PASS (offline cache attempt lacked typer; normal locked
+  dependency installation succeeded).
+- uv run pytest tests/unit/test_phase3_wallet_qualification.py -q:
+  23 passed.
+- uv run pytest tests/unit/test_orchestrator_watch.py -q: 79 passed.
+- uv run pytest tests/unit tests/golden tests/replay tests/phase_1_5 -q:
+  651 passed, 9 setup errors, no assertion failures. All nine errors are
+  database-backed replay cases stopped by MissingCredentialError for the
+  absent local database admin credential. They are NOT counted as passes.
+- uv run ruff check .: PASS.
+- uv run ruff format --check .: PASS, 212 files.
+- uv run mypy: PASS, 110 source files.
+- uv run argus fixtures validate-real-chain: all 12 PASS.
+- Independent deterministic probes of forged completeness, exact same-slot
+  ties, cross-quote round trips, missing/tied exit times, persistence precision,
+  and migration operations: concrete results recorded below.
+- Twelve independent boundary cases at 7/30/90/180 days, each at one second
+  outside / exactly on / one second inside: PASS. Empty outcome stats: PASS.
+- Actual production checkpoint and bundle validators: old phase_3.md rejected,
+  remediation checkpoint accepted, exact embedded checkpoint accepted.
 
-| Frozen requirement | Independent result | Gate status |
+The auditor had no configured PostgreSQL service/credentials. No credential
+was entered or requested and no live/provider call was made. Integration,
+populated migrations and the full 738-test claim were NOT independently rerun.
+This environmental limit is not itself a new phase blocker. The findings below
+are demonstrated by executable offline probes and source, not missing access.
+
+## Frozen requirement-to-evidence matrix
+
+| Requirement | Observed implementation and proof | Disposition |
 |---|---|---|
-| Structural discovery-contamination exclusion | Filtered qualification pass exists and direct unit/integration tests prove the ordinary same-time case | PASS, subject only to P3-R1 point-in-time repair |
-| Descriptive and qualification scores differ | Independently visible in scoring code and tests | PASS |
-| Weighted-average ledger and round-trip derivation | One token is collapsed into one lifetime row; current open basis and quote-unit separation are incorrect or absent | FAIL: P3-R3 |
-| Transfer uncertainty | Transfer-only stays unresolved; mixed transfer evidence lowers confidence | PASS |
-| Decimal/raw-unit accounting | Decimal arithmetic is used, but incomparable quote units can be summed | FAIL: P3-R3 |
-| History completeness affects confidence/eligibility | LOW/UNKNOWN gate exists, but HIGH can be created from caller text and wallet-address-only history | FAIL: P3-R2 |
-| Frozen score weights and separate penalties | Weights are exact; later service/tier handling is inconsistent and missing evidence does not lower confidence as claimed | FAIL: P3-R6 |
-| Small samples constrained | 20-position/10-token/completeness gate and shrinkage exist | PASS |
-| Lottery dominance and required metrics | Threshold comparison exists, but denominator, usable-token count, and drawdown order are wrong | FAIL: P3-R5 |
-| Lifetime/180D/90D/30D/7D metrics | Schema accepts five windows; production service writes LIFETIME only | FAIL: P3-R4 |
-| Point-in-time recency/no future leakage | Pure test changes as_of but never inserts future evidence; production queries are unbounded by as_of | FAIL: P3-R1 |
-| Initial clustering | Pairwise evidence schema and conservative consumer exist; absence remains unknown | PASS to frozen minimum; automated link discovery is HARDENING_BACKLOG |
-| Immutable timestamped tier lifecycle | Append-only table exists, but first-run/replay and adjusted-score consistency fail | FAIL: P3-R6 |
-| Replay/idempotency | Narrow test passes; full semantic snapshot identity and eligible first-run tier replay fail | FAIL: P3-R6 |
-| Five genuine wallets or exact blocked fallback | Exact blocked fallback with one genuine wallet and missing evidence is present | PASS_WITH_ALLOWED_ENVIRONMENTAL_LIMITATION |
-| Checkpoint/bundle protocol | Bundle contains checkpoint bytes, but checkpoint has no required terminal END marker | FAIL: P3-R7 |
-| Phase and safety boundaries | No Phase 4, trade, signer, credential, paid-provider, or live-arming work found | PASS |
+| P3-R1 knowledge-time queries | Service bounds swaps.first_seen_at, discovery.created_at, early_buyers.created_at, and both cluster times; inspected SQL predicates; existing cluster test | CLOSED for these predicates; retain them |
+| P3-R1 malformed economic timestamps and reason | Reconstruction silently drops future block_time; history assessment still receives the unfiltered list; no persisted rejection reason | REMAINS OPEN, P3-R1 |
+| P3-R2 evidence-derived completeness | CLI constructs AcquisitionManifest from arbitrary JSON; no producer/load verification; executable fabricated manifest returns HIGH | REMAINS OPEN, P3-R2 |
+| P3-R3 independent round trips / current WAC | Full-close/reopen and partial-sell/rebuy tests pass; source state machine verified | CLOSED for these cases |
+| P3-R3 mixed quote within one round trip | Conflicting leg retained in references and forces LOW; supplied test passes | CLOSED for this case |
+| P3-R3 total deterministic ordering / quote-safe downstream math | Exact same-key permutations differ; two independent SOL/USDC trips sum 1 SOL + 1000 USDC as 1001 | REMAINS OPEN, P3-R3 |
+| P3-R4 five windows | Five production inserts, closed membership by final_exit_at, independent 12-boundary and empty-stat probes pass; clean qualification token filter inspected | CLOSED; no new window gate |
+| P3-R5 lottery denominator / usable-token counts | Net PnL, strict 70%, nonpositive null cases and closed outcome counts verified in passing tests | CLOSED for these cases |
+| P3-R5 deterministic realization curve | Null exit mixed with aware time raises TypeError; same token/exit ties give drawdown 0.9 versus 0 when permuted | REMAINS OPEN, P3-R5 |
+| P3-R6 cluster score / initial desired tier / missing forward confidence | Canonical adjusted result feeds both consumers; initial forced-DISCOVERED removed; missing forward component now caps confidence; tests/source verified | CLOSED for these cases |
+| P3-R6 exact replay / full decision identity | Storage rounds non-terminating score before equality; history manifest absent from score key; latest-row-only matching and current tier mishandle historical replay | REMAINS OPEN, P3-R6 |
+| P3-R6 immutable historical decisions | New 0011 upgrade deletes score, tier, metric and position history and resets current tiers | REGRESSION, P3-R6 |
+| P3-R7 terminal checkpoint / exact bundle | Actual production validators accept new pair and reject old malformed file; old files unchanged | CLOSED |
+| Required raw validation evidence | Bundle has raw Git/dependency/compose/Alembic output, but test/lint/type/fixture results are narrative claims, not their required raw command output | OPEN, E1 |
+| Inherited firewall, weights, thresholds, transfer uncertainty, small samples | Passing Phase 3/unit/golden tests and changed-source inspection; unchanged Phase 2 production source | Remain accepted, subject only to listed integration fixes |
+| Candidate sample and earlier environmental deferrals | Explicit honest unchanged limitations | Accepted; do not reopen |
 
-## Adversarial coverage disposition
+No accepted Phase 2 finding is reopened. No unrelated future-phase concern is
+part of this audit.
 
-| Failure class | Independent result |
+## Adversarial matrix and claim ledger
+
+| Scenario | Independent method and result |
 |---|---|
-| Future swap, discovery event, early-buyer evidence, and cluster link | TESTED_FAIL by source trace: service selects all rows and scoring grants future timestamps full recency |
-| Late-arriving historical event | TESTED_FAIL by source trace: no first_seen_at <= as_of knowledge boundary |
-| Caller-forged acquisition completeness | TESTED_FAIL: CLI accepts free-text acquisition status and unit test supplies the claimed status directly |
-| Associated-token-account omission | TESTED_FAIL: complete wallet-address pagination alone maps to HIGH |
-| Full close then reopen same token | TESTED_FAIL by state-machine trace: one lifetime position is returned |
-| Mixed SOL/USDC quote legs | TESTED_FAIL by state-machine trace: quantities are summed under the first quote mint |
-| Partial sell then later buy while still open | TESTED_FAIL by arithmetic trace: persisted average uses lifetime buys, not current open inventory basis |
-| Empty and populated recency windows | TESTED_FAIL: only LIFETIME is written |
-| Net-PnL lottery dominance with offsetting losses | TESTED_FAIL: denominator is positive gains, not estimated lifetime P&L |
-| Drawdown realization ordering | TESTED_FAIL: last_entry_at is used instead of final_exit_at |
-| Cluster penalty crossing a tier cutoff | TESTED_FAIL: persisted score is adjusted, tier receives the unadjusted ScoringResult |
-| Eligible wallet first invocation then exact replay | TESTED_FAIL: first invocation is forced to DISCOVERED; identical second invocation can create A/S |
-| Same final score with changed components/exclusions/identity | TESTED_FAIL: score equality compares only two scores and eligibility |
-| Missing forward-information evidence | TESTED_FAIL: it is explicitly excluded from the confidence-missing count |
-| Checkpoint terminal marker | TESTED_FAIL: zero END-marker occurrences |
-| Credential, signer, broadcast, paid/live side effects | INSPECTED PASS |
-| Candidate scarcity | INSPECTED PASS: exact allowed blocked fallback |
-
-## Claim-verification ledger
-
-| Builder claim | Independent result |
-|---|---|
-| 721/721 tests, Ruff, format, mypy, migrations, fixtures, secret scan pass | Confirmed as committed raw bundle claims; not independently rerun in auditor environment |
-| Discovery firewall is structural | Confirmed for same-time inputs; narrower than claimed because production as_of filtering is absent |
-| History completeness derives from real acquisition status, not a claim | FALSE: the CLI accepts --acquisition-status and the test passes STATUS_COMPLETE directly |
-| Weighted-average reconstruction and round-trip derivation are complete | FALSE for full-close/reopen, current open cost basis, and mixed quote assets |
-| Point-in-time recency has no future leakage | FALSE: the test checks clock sensitivity only; future evidence is not excluded |
-| All required recency windows are maintained where data exists | FALSE: production writes LIFETIME only, which the handoff also discloses |
-| Tier lifecycle replay is idempotent | NARROWER_THAN_CLAIMED: the test uses an ineligible wallet; an eligible first run changes tier on identical replay |
-| Missing prospective evidence lowers confidence | FALSE for forward_information because code excludes it from the missing count |
-| Initial clustering is conservative | Confirmed for consumption of persisted links; automatic link detection is not required for this remediation |
-| Candidate sample fallback is honest | Confirmed |
-| Checkpoint follows the standard marker contract | FALSE: the required terminal marker is absent |
-| No prohibited live/paid/credential action occurred | Confirmed by changed-source inspection and committed evidence |
-
-## Frozen findings
-
-### P3-R1 — point-in-time firewall is absent in the production service
-
-Classification: SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING.
-Severity: HIGH.
-
-Governing requirements: CORE-001 point-in-time truth; Phase 3 discovery
-firewall; argus-phase-3-001 required test 7; the frozen rule that earlier score
-snapshots cannot use future observations.
-
-Observed proof:
-- reconstruct_and_score_wallet selects every Swap for the wallet with no
-  Swap.first_seen_at <= now boundary.
-- It selects every WalletDiscoveryEvent with no discovered_at/created_at <= now
-  boundary.
-- It selects every EarlyBuyer with no observed/created time boundary.
-- It selects every WalletClusterLink with no as_of/created_at <= now boundary.
-- score_wallet accepts every supplied position. compute_feature_fingerprint
-  clamps a future last_entry_at to zero days old, awarding full recency.
-- The submitted recency test only compares one already-known position at two
-  later as_of values. It never adds or mutates future evidence.
-
-Risk: an earlier score, component, sample count, exclusion set, cluster penalty,
-or tier can be changed by evidence ARGUS had not observed at that time. That
-materially falsifies research conclusions and violates the project's highest
-data-integrity rule.
-
-### P3-R2 — history completeness can be asserted by the caller and ignores token accounts
-
-Classification: SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING.
-Severity: HIGH.
-
-Governing requirements: MASTER_SPEC section 34 and argus-phase-3-001 section 1:
-do not assume getSignaturesForAddress(wallet) is complete; include associated
-token-account evidence where available; missing history is explicit; HIGH must
-rest on actual evidence.
-
-Observed proof:
-- The CLI accepts --evidence-source LIVE_ACQUISITION_WALK plus caller-provided
-  --acquisition-status COMPLETE/PARTIAL/FAILED and --acquisition-known-gaps.
-- assess_wallet_history maps caller-supplied COMPLETE directly to HIGH.
-- No persisted acquisition result or event manifest is loaded and verified.
-- No associated token-account enumeration/coverage state participates in HIGH.
-- The test named derives_from_real_acquisition_status passes STATUS_COMPLETE as a
-  function argument; it does not prove the status came from a real acquisition.
-
-Risk: any existing swaps fragment can be labeled HIGH by typing COMPLETE, which
-can unlock historical eligibility and A/S tiers with incomplete evidence.
-
-### P3-R3 — the ledger does not implement correct round trips or quote-safe weighted average
-
-Classification: SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING.
-Severity: HIGH.
-
-Governing requirements: MASTER_SPEC Phase 3 build items position ledger and
-round-trip derivation; section 35 deterministic weighted-average inventory;
-frozen acceptance for weighted-average ledger and exact Decimal/raw accounting.
-
-Observed proof:
-- reconstruct_positions_for_wallet emits one ReconstructedPosition per token,
-  not one per completed/reopened round trip.
-- A buy after a full close merely clears final_exit_at inside the same aggregate;
-  earlier entry totals and realized PnL remain merged.
-- quote_asset_mint is taken from the first leg, but later SOL and USDC legs are
-  accumulated without conversion or an unresolved-state veto.
-- average_cost_quote is total lifetime entry value divided by total lifetime
-  buys. After a partial sale and later buy, that is not the weighted-average
-  basis of the remaining open inventory.
-- The submitted arithmetic test never closes and reopens, never mixes quote
-  assets, and ends fully flat, so these paths are untested.
-
-Risk: position count, distinct-token/sample evidence, cost basis, realized PnL,
-holding period, and every downstream score can be materially wrong.
-
-### P3-R4 — required recency-window metrics are schema-only
-
-Classification: SPEC_BLOCKING.
-Severity: MEDIUM.
-
-Governing requirements: MASTER_SPEC section 41 and the frozen instruction:
-maintain lifetime, 180-day, 90-day, 30-day, and 7-day metrics where data exists.
-
-Observed proof: qualification_service imports WINDOW_LIFETIME and inserts
-exactly one WalletMetricsSnapshot per run. It never computes or persists 180D,
-90D, 30D, or 7D windows. The handoff discloses this as debt, but the obligation
-was frozen before implementation.
-
-Risk: the Phase 3 feature fingerprint and decay surface are incomplete, and
-later comparisons can silently use lifetime metrics where a bounded window was
-required.
-
-### P3-R5 — lottery/sample/risk metrics use incorrect populations or ordering
-
-Classification: SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING.
-Severity: HIGH.
-
-Governing requirements: MASTER_SPEC sections 39 through 41 and frozen lottery,
-recency, and no-future-leakage tests.
-
-Observed proof:
-- largest_trade_contribution_pct divides the largest profitable position by
-  total positive gains, not estimated lifetime net PnL as frozen.
-- max drawdown is ordered by last_entry_at while the comment claims realization
-  order; final_exit_at is not even present on PositionForScoring.
-- distinct_tokens counts every position, including open positions without a
-  usable closed outcome, despite the gate requiring distinct tokens with usable
-  outcomes.
-
-Risk: a lottery-driven wallet can avoid the required flag, drawdown can be
-misordered, and unusable tokens can inflate eligibility evidence.
-
-### P3-R6 — score, confidence, snapshot identity, and tier state disagree
-
-Classification: SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING.
-Severity: HIGH.
-
-Governing requirements: MASTER_SPEC sections 36 through 39; CORE-004;
-argus-phase-3-001 missing-evidence rule; required tier/replay tests.
-
-Observed proof:
-- The service subtracts cluster_uncertainty_penalty into a local
-  qualification_score, but determine_tier_transition receives the original
-  unadjusted ScoringResult.
-- determine_tier_transition forces any first scoring run to DISCOVERED. An
-  otherwise eligible wallet can therefore transition to A/S on an identical
-  second invocation, violating replay determinism.
-- missing_required explicitly excludes forward_information, so its known
-  absence has no confidence effect despite the frozen rule.
-- _score_equal compares only qualification_score, descriptive_score, and
-  eligibility. Changed component values, penalties, confidence, exclusion IDs,
-  sample reason, as_of, config/spec/git/build identity, or input references can
-  reuse a stale snapshot.
-- history-row equality similarly ignores history_completeness_reason.
-- BUILD_HASH hashes only qualification_service.py, not the scoring artifact or
-  full build identity.
-
-Risk: the tier can be justified by a different score than the persisted one;
-identical replay changes state; changed evidence can be hidden behind an old
-snapshot; audit identity can be false.
-
-### P3-R7 — submitted checkpoint violates the frozen evidence protocol
-
-Classification: SPEC_BLOCKING.
-Severity: MEDIUM.
-
-Governing requirements: MASTER_SPEC section 104 and PROTOCOL.md section 5.
-
-Observed proof: orchestration/checkpoints/phase_3.md begins with the required
-ARGUS marker but contains zero occurrences of the required terminal line:
-================ END ARGUS CHECKPOINT =========================
-The bundle does contain the checkpoint bytes, so the defect is the missing
-checkpoint terminator, not a bundle mismatch.
-
-Risk: the submission does not satisfy the mechanically frozen phase-handoff
-contract and indicates the claimed watcher verification did not enforce its own
-documented check.
-
-## Non-blocking findings frozen as HARDENING_BACKLOG
-
-These must not block this remediation and must not be pulled into its tests:
-
-- Automated discovery of new wallet-cluster links from raw chain evidence.
-  Phase 3's minimum pairwise evidence schema and conservative consumer are
-  accepted.
-- Database enforcement of canonical wallet_a_id/wallet_b_id ordering.
-- Automatic assignment of every rare lifecycle state such as RETIRED.
-- Additional cluster signals, probabilistic calibration, or Phase 4 graph work.
-- Broader metric-snapshot deduplication beyond the exact frozen
-  position/score/tier replay requirements, unless touched directly to fix
-  P3-R6.
-
-## Mandatory session start and change control
-
-Before changing code:
-
-1. Run git status --porcelain, git pull --ff-only, and git log -5 --oneline.
-2. Read in exact order: MASTER_SPEC.md, docs/BUILD_STATE.md,
-   docs/DECISION_LOG.md, orchestration/PROTOCOL.md, this file,
-   orchestration/AGENT_HANDOFF.md, orchestration/checkpoints/phase_3.md,
-   orchestration/bundles/phase_3.txt, and
-   orchestration/phase_3/SAMPLE_REPORT.md.
-3. Verify the instruction-only commit containing this file has parent exactly
-   TARGET_COMMIT, changes only this file, and local HEAD equals the freshly
-   fetched remote branch HEAD.
-4. Verify Phase 3 is awaiting review and is not marked orchestrator-approved.
-   On any mismatch, fail closed and STOP.
-
-## Required remediation
-
-### 1. Enforce one knowledge-time cutoff across the complete scoring path
-
-- Treat the service parameter now as the immutable score as_of.
-- Query only swaps with Swap.first_seen_at <= as_of. A transaction whose chain
-  time is earlier but first_seen_at is later remains unknown at that snapshot.
-- Query only wallet discovery provenance observed by as_of, only early-buyer
-  evidence created/observed by as_of, and only cluster links with both
-  link.as_of <= as_of and link.created_at <= as_of.
-- Position reconstruction, descriptive metrics, qualification metrics,
-  contamination exclusions, recency windows, penalties, score snapshots, and
-  tiers must all use that same bounded evidence manifest.
-- Reject or exclude malformed future-dated economic timestamps rather than
-  clamping them into full recency credit. Preserve the raw row and record the
-  exclusion/reason.
-- Persist an input-manifest digest and enough stable input references/counts to
-  reproduce the score.
-
-### 2. Make history completeness evidence-bound and token-account-aware
-
-- Remove the ability for a caller to manufacture HIGH by passing free-text
-  acquisition status. The ordinary CLI must either:
-  a) execute the typed acquisition path and pass its actual result directly
-  through the same process, or
-  b) load a persisted, immutable acquisition-run record and manifest produced
-  by that path.
-- Persist/verify the wallet address walk, associated token-account enumeration,
-  each included account-history walk, terminal statuses, known gaps, provider
-  set, time range, and event references used for reconstruction.
-- HIGH requires the wallet-address walk and all known associated token-account
-  coverage to be complete through the stated boundary. Wallet-address-only
-  COMPLETE is not HIGH. Missing enumeration or any unresolved account history
-  must produce MEDIUM, LOW, or UNKNOWN with an exact reason.
-- Link the history-quality snapshot to the verified acquisition run/manifest.
-  STREAM_FORWARD_ONLY remains LOW and zero evidence remains UNKNOWN.
-- A changed reason, provider set, boundary, coverage state, or manifest must
-  append a new history-quality snapshot rather than silently reuse the old row.
-- Tests use a deterministic fake provider/acquisition manifest. No credential,
-  live call, or paid provider is authorized.
-
-### 3. Implement round-trip-safe, quote-safe weighted-average inventory
-
-- Emit a separate deterministic position/round-trip result whenever inventory
-  reaches zero and later reopens. Add a stable round_trip_index or equivalent
-  identity to the forward schema; do not rewrite migration 0010.
-- Preserve every raw swap reference that fed each round trip, directly or via a
-  stable input-manifest digest.
-- Maintain open_quantity and open_cost_basis exactly with Decimal arithmetic.
-  For an open round trip, average_cost_quote must equal
-  open_cost_basis / open_quantity after partial exits and later buys.
-  For a closed round trip, persist the deterministic entry-weighted average for
-  that round trip and its final realized PnL.
-- Never add SOL and USDC or any two incomparable quote units. If quote asset
-  changes while inventory is open and no frozen conversion evidence exists,
-  preserve the legs, mark the affected round trip UNRESOLVED/LOW as appropriate,
-  and exclude it from qualification. Do not invent a conversion.
-- Use a total stable event order with slot plus immutable transaction/event
-  identity as the final tie-breaker. Input/query permutations must yield
-  byte-identical results.
-- Sample counts use closed HIGH/MEDIUM round trips. Distinct-token eligibility
-  counts only tokens with at least one such usable closed outcome.
-
-### 4. Materialize all five metric windows
-
-- At each score as_of, compute and persist LIFETIME, 180D, 90D, 30D, and 7D
-  WalletMetricsSnapshot rows from the same bounded, contamination-filtered
-  evidence manifest.
-- Use final_exit_at for closed-position outcome-window membership and the
-  appropriate last-known activity time for open-position recency only.
-- A window with no qualifying evidence must be explicit with zero counts and
-  null metrics, never copied from LIFETIME.
-- Do not use a later observation in an earlier window snapshot.
-- Keep the frozen V1 weights and thresholds unchanged.
-
-### 5. Correct lottery dominance, drawdown ordering, and usable-outcome counts
-
-- For estimated lifetime net PnL > 0, compute largest-trade contribution as the
-  largest positive closed-round-trip PnL divided by total net closed-round-trip
-  PnL. If net lifetime PnL <= 0, contribution is null/not-applicable and cannot
-  be described as a positive lifetime-profit contribution.
-- LOTTERY_DOMINATED is true only when that defined ratio is strictly greater
-  than 0.70. Preserve the flag/penalty rule; it is not an automatic rejection.
-- Order the closed-trade equity curve by final_exit_at with a stable immutable
-  tie-breaker, not last_entry_at.
-- Count distinct usable tokens only from closed HIGH/MEDIUM-confidence
-  round trips with a usable outcome.
-- Keep Decimal arithmetic exact and document all null/zero boundary semantics.
-
-### 6. Make one canonical adjusted score drive persistence and tiers
-
-- Fold every applied penalty, including cluster uncertainty, into one final
-  ScoringResult or equivalent immutable decision object before persistence and
-  tier evaluation. The score stored, score printed, and score used for the tier
-  must be byte-identical.
-- Determine the desired tier from the current complete score on the first
-  scoring invocation. Do not force an eligible wallet to DISCOVERED only
-  because current_tier is null. Exact replay of identical inputs/as_of must not
-  create a second transition.
-- The known missing forward_information component must cap/lower confidence
-  according to one documented V1 rule. It remains null and contributes the
-  neutral prior without weight redistribution; it must not be excluded from the
-  missing-evidence confidence count.
-- Snapshot idempotency must compare or key the full semantic decision:
-  as_of, input-manifest digest/references, score version, all components, all
-  penalties, final/descriptive score, confidence, exclusions, eligibility,
-  gate reason, algorithm/build/config/spec/git identity. Equal final numbers
-  with changed evidence or identity are not the same snapshot.
-- Preserve append-only history. Do not update prior score or tier rows.
-- Include history reason/manifest in history-snapshot equality.
-- Use a build identity that changes whenever any scoring/ledger artifact
-  affecting the decision changes.
-
-### 7. Repair the checkpoint protocol in fresh remediation evidence
-
-- Do not overwrite orchestration/checkpoints/phase_3.md or its bundle.
-- Create orchestration/checkpoints/phase_3_remediation.md beginning with:
-  ================ ARGUS ORCHESTRATOR CHECKPOINT ================
-  and ending with:
-  ================ END ARGUS CHECKPOINT =========================
-- Create orchestration/bundles/phase_3_remediation.txt containing the
-  checkpoint bytes verbatim plus every PROTOCOL.md-required review item.
-- Add a direct automated protocol regression test proving a missing terminal
-  marker fails validation. If the existing watcher validator already has such a
-  test, fix the production path that allowed this submission and prove the exact
-  Phase 3 malformed checkpoint is rejected.
-- Do not rewrite the historical malformed checkpoint; preserve it as evidence.
-
-## Prospective acceptance tests
-
-All tests below must fail the audited code for the named reason and pass only
-after the remediation.
-
-1. P3-R1 service as-of matrix:
-   - Insert past and future swaps distinguished by first_seen_at, a late-arriving
-     old-block-time swap, past/future discovery events, past/future early-buyer
-     rows, and past/future cluster links.
-   - Score at T and T+delta through the production service.
-   - At T, every component, count, exclusion, penalty, window, score, and tier
-     uses only evidence known by T. At T+delta the newly known evidence may
-     appear. The T snapshot remains unchanged.
-
-2. P3-R1 future-timestamp fail-closed:
-   - Supply a position/economic timestamp later than as_of.
-   - Assert it receives no recency credit and cannot enter qualification.
-     Assert the raw evidence remains and the exclusion reason is recorded.
-
-3. P3-R2 completeness provenance:
-   - Prove the CLI cannot promote a wallet by typing COMPLETE.
-   - A complete wallet-address walk with missing token-account enumeration is
-     not HIGH.
-   - A complete wallet walk plus complete enumeration and complete histories for
-     every known associated token account may be HIGH.
-   - One partial/failed account walk lowers completeness and records the exact
-     gap.
-   - The persisted history row references the immutable acquisition manifest.
-
-4. P3-R3 round-trip matrix:
-   - Buy, full close, reopen, full close yields two separately identified closed
-     round trips with independently hand-calculated PnL and holding times.
-   - Buy, partial sell, further buy while open yields the exact current
-     open_quantity/open_cost_basis/average_cost.
-   - Mixed SOL/USDC within one open inventory never sums units and is excluded
-     as unresolved without losing raw legs.
-   - Input permutations and same-slot ties produce byte-identical output.
-   - Decimal boundary values prove no float conversion.
-
-5. P3-R4 window matrix:
-   - Hand-place closed round trips just inside/outside 7D, 30D, 90D, and 180D.
-   - Assert five distinct persisted windows with exact counts/metrics.
-   - A contaminated token is absent from every qualification window.
-   - Empty windows contain zero counts/null metrics, not lifetime copies.
-   - Re-scoring an earlier as_of after later evidence exists is byte-identical.
-
-6. P3-R5 metrics:
-   - PnLs +100 and -90 produce net lifetime PnL 10 and a ratio >0.70, so the
-     lottery flag/penalty fires.
-   - Exact 0.70 is not flagged; just above is flagged.
-   - Net PnL <=0 has explicit null/not-applicable contribution semantics.
-   - Drawdown follows final_exit_at order with a tie-breaker.
-   - Open/unresolved positions do not inflate closed-position or distinct-token
-     eligibility counts.
-
-7. P3-R6 canonical score/tier:
-   - A cluster penalty that crosses an A/S/B cutoff changes both persisted score
-     and tier from the same adjusted value.
-   - An eligible wallet's first score produces its score-derived tier; exact
-     replay produces no new score or tier row.
-   - Missing forward information prevents HIGH confidence under the documented
-     V1 rule while remaining null and retaining its 15% neutral-prior weight.
-   - Same final score but different components, penalties, exclusions, history
-     reason, input manifest, as_of, or build/config/spec/git identity creates the
-     required new immutable snapshot.
-   - Exact identical full semantic input remains idempotent.
-
-8. P3-R7 protocol:
-   - The historical Phase 3 checkpoint without an END marker is rejected.
-   - The fresh remediation checkpoint is accepted.
-   - The fresh bundle contains its checkpoint bytes exactly.
-
-9. Frozen regression:
-   - Original contamination fixture still proves descriptive inclusion and
-     qualification exclusion through components, counts, windows, penalties,
-     confidence, and tier eligibility.
-   - Transfer uncertainty, small-sample shrinkage, frozen weights, threshold
-     values, migration history, Phase 0 through 2 semantics, golden fixtures,
-     replay, and all safety prohibitions remain unchanged.
-
-## Required commands and evidence
-
-Run and record exact raw results for at least:
-
+| Caller invents COMPLETE, enumerated=true, empty accounts, provider="invented", reference="does-not-exist" | TESTED_FAIL: assess_wallet_history returns HIGH without any acquisition |
+| Exact same slot/type/mints/raw amounts, different immutable IDs and timestamps, reverse input order | TESTED_FAIL: different first/last entry and ordered references |
+| Two closed round trips, first SOL and second USDC | TESTED_FAIL: production scoring input shape loses quote mint; compute_position_stats sums incompatible values |
+| Closed exits mix None and UTC datetime | TESTED_FAIL: offset-naive/aware TypeError |
+| Distinct trips with same token and exit timestamp | TESTED_FAIL: +100,-90,+100 produces max drawdown .9; -90,+100,+100 gives 0 |
+| Unrounded score versus Numeric(6,3) representation | TESTED_FAIL: 35.10833333333333333333333333 stores as 35.108; _score_equal is false on identical replay |
+| Changed acquisition manifest/history reason with same visible swap IDs and final numbers | INSPECTED_FAIL: no history reference/content participates in score digest/equality |
+| T, later T, then exact T replay | INSPECTED_FAIL: only latest score is compared; tier uses current mutable wallet tier and can append a backdated reverse transition |
+| Upgrade 0010 with existing decisions | TESTED_FAIL by executing upgrade against a recording op adapter: four DELETE statements plus current_tier reset |
+| Five windows, exact cutoffs and empty outcomes | TESTED_PASS pure boundaries; INSPECTED production persistence; DB rerun unavailable |
+| Checkpoint old/new/exact bundle | TESTED_PASS using actual validator |
+| Same-time discovery firewall, weights, thresholds, transfers | TESTED_PASS existing deterministic tests |
+| PostgreSQL replay/integration/migration end-to-end | BLOCKED in auditor environment; builder results unverified, not deemed failures merely for environment |
+| Live, paid, signing, credentials | INSPECTED: no such new action; remain prohibited |
+| Concurrency / future live readiness unrelated to this patch | NOT_APPLICABLE to additional gate; no new requirement |
+
+Material builder claims:
+- "All 7 fixed / all 9 acceptance categories pass": FALSE as a complete gate
+  claim; successful narrow tests do not cover the remaining cases above.
+- "Real structured manifest, never caller-typed claim": FALSE. Wrapping caller
+  assertions in a frozen dataclass is not acquisition evidence.
+- "Same-slot ties": UNSUPPORTED by the named supplied test, which uses slots
+  1 and 2; the independent actual-tie probe fails.
+- "Round trips / open WAC / within-trip mixed quote": CONFIRMED for the tested
+  ordinary cases, not for total order or downstream currency aggregation.
+- "All windows": CONFIRMED for production writes and closed-boundary rules.
+- "Canonical score / replay / full identity": NARROWER_THAN_CLAIMED; ordinary
+  cluster example works, storage and historical replay/identity remain wrong.
+- "Immutable history": FALSE for the new migration. Disclosure does not waive
+  the explicit prohibition on deleting prior score/tier decisions.
+- "738 tests / migrations / lint / type checks": partly independently confirmed
+  as above; DB totals remain UNSUPPORTED by raw committed test output. Do not
+  infer dishonesty; provide the missing proof in fresh evidence.
+- "Checkpoint marker/bundle fixed": CONFIRMED.
+- "No deviations": FALSE: migration deletion contradicts remediation-001
+  required task 6 and MASTER_SPEC section 36.
+- "Sample blocked and deferrals unchanged": CONFIRMED and accepted.
+
+## Seven-part no-moving-goalposts justification for round 2
+
+Each row supplies all seven parts. These are continuations of concrete frozen
+requirements or a directly introduced integrity regression, not new product
+scope. A second round is necessary because passing the supplied tests leaves
+these exact failures; it is not authorized merely to improve test depth.
+
+| 1. Exact blocker | 2. Classification | 3. Frozen authority | 4. Concrete consequence | 5. Why prior remediation did not close it | 6. Why not backlog/environmental | 7. No backlog promotion / bounded closure |
+|---|---|---|---|---|---|---|
+| P3-R1 future economic input silently discarded after history assessment | SPEC_BLOCKING | remediation-001 task 1 and acceptance 1-2: same bounded evidence, record exclusion reason; CORE-001/004 | history range can extend beyond as_of; omitted events have no required decision reason | filter added only inside ledger; tests assert list unchanged, not persisted reason/history cutoff | explicit previously requested behavior missing from production | finish common filter and reason only; no new source checks |
+| P3-R2 caller-authored manifest still promotes HIGH | SAFETY_OR_INTEGRITY_BLOCKING | remediation-001 task 2: execute typed acquisition or load its immutable produced run; MASTER_SPEC 34 | fabricated completeness can justify eligibility | same status strings moved into JSON/dataclass; no trusted acquisition producer or verified loader exists | demonstrably false current research confidence, not provenance depth | wire existing provider/acquisition and persisted results; no paid service or new standard |
+| P3-R3 unstable exact ties and cross-trip currency aggregation | SAFETY_OR_INTEGRITY_BLOCKING | remediation-001 task 3: total immutable event tie-break; never add SOL and USDC; MASTER_SPEC 35 | order changes positions; incomparable cash PnLs alter risk/lottery scores | tie-break not added; newly separate trips lose quote unit in PositionForScoring | executable wrong current-phase accounting | complete ordering and unit propagation; no FX provider or alternate accounting |
+| P3-R5 undefined exit times / repeated-token tied exits | SPEC_BLOCKING | remediation-001 task 5 and acceptance 6: final_exit order with stable immutable tie-break | ordinary permitted missing time crashes; permutation changes drawdown | new field uses naive datetime.min and token_id rather than unique round-trip identity | failed frozen deterministic metric, no external dependency | deterministic known order, honest unknown order; no metric retuning |
+| P3-R6b lossy replay / missing history identity / historical replay | SPEC_BLOCKING | remediation-001 task 6 and acceptance 7: same stored/printed/tier score, full semantic equality, exact replay | duplicates, stale provenance, backdated tier changes | comparison expanded but storage scale, history input and non-latest replay omitted | code failure under identical inputs, not optional dedup | fix only position/score/tier identity; broad metrics dedup stays backlog |
+| P3-R6a migration deletes prior decisions | SAFETY_OR_INTEGRITY_BLOCKING | remediation-001 task 6: preserve append-only history, do not update prior score/tier rows; MASTER_SPEC CORE-001/004 and 36 | irreversible loss of historical scores/transitions; recomputation cannot restore past beliefs | introduced for new NOT NULL columns; empty-DB migration tests miss loss | direct integrity regression from this implementation | preserve legacy rows honestly; no falsified reconstruction or prior-evidence rewrite |
+| E1 missing raw command evidence | SPEC_BLOCKING | remediation-001 Required commands and evidence: exact raw results, no narrative-only claim | full integration/migration PASS is not independently checkable from bundle | normal bundle generator collects metadata but not the claimed test command streams | explicitly frozen deliverable, not a new test-count demand | capture existing required checks plus listed defect probes; no optional coverage target |
+
+P3-R4 and the P3-R7 marker defect are CLOSED. The non-goals below remain
+HARDENING_BACKLOG. No SHOULD/MAY is promoted to MUST.
+
+## Session start and work order
+
+1. git status --porcelain; git pull --ff-only; git log -5 --oneline.
+2. Read in order MASTER_SPEC.md, docs/BUILD_STATE.md, docs/DECISION_LOG.md,
+   orchestration/PROTOCOL.md, this file, orchestration/AGENT_HANDOFF.md,
+   orchestration/checkpoints/phase_3_remediation.md, its bundle.
+3. Verify fresh remote/local equality. This instruction must be introduced by
+   exactly one instruction-only commit whose direct parent is TARGET_COMMIT.
+   On mismatch, dirty overlap, self-approval, or unexpected branch movement STOP.
+4. First remove the destructive migration path; then implement common input
+   evidence/acquisition binding; then ledger/metric ordering and unit safety;
+   then lossless decision identity/replay; then regression/evidence. Complete
+   all tasks before a single new handoff. Never run the current destructive
+   migration against a non-disposable database.
+
+## Required implementation, with precise limits
+
+### P3-R6a — preserve existing history across upgrades FIRST
+
+Affected: migrations/versions/0011_phase3_remediation_point_in_time_and_ledger_integrity.py,
+Phase 3 ORM models, new forward migration if needed, migration tests.
+
+The current upgrade executes:
+DELETE FROM wallet_tier_history
+DELETE FROM wallet_score_snapshots
+DELETE FROM wallet_metrics_snapshots
+DELETE FROM wallet_positions
+UPDATE wallets SET current_tier = NULL
+
+Remove this data-loss path. Explicit narrow change-control authorization:
+amend the UNAPPROVED 0011 migration code so new 0010->head upgrades preserve
+every existing row and relationship. This is a code correction, not permission
+to edit historical checkpoints, recorded decisions, approved migration 0010,
+or raw evidence. Add a new forward migration for databases already stamped
+0011 whenever the final schema requires it.
+
+Keep old decision rows byte-for-byte in their existing economic/result/time/
+identity fields. New provenance fields may be null for legacy rows; do not
+invent a digest, round-trip identity, or "verified" manifest for legacy results.
+Use existing algorithm version plus nullable new metadata to distinguish legacy
+results; require real metadata for newly computed results in the production
+write path. New recomputations append and never rewrite old scores/transitions.
+
+Do not run a destructive downgrade to repair history. If 0011 already deleted
+records in the builder's disposable dev database, disclose which environment/
+tables were affected and whether a genuine pre-upgrade backup exists. Do not
+claim recomputation restored original beliefs. Recovery of non-disposable
+historical data requires explicit human authority; STOP that recovery action,
+not the independent safe code/tests. No live database is authorized here.
+
+Test a populated 0010 database with identifiable legacy position, score, metric,
+tier transition and current-tier rows, upgrade to head, and assert all original
+values/FKs/counts remain. Also test already-0011->head, fresh zero->head and a
+safe repeat upgrade. Tests use disposable local data, never real credentials
+entered for this task.
+
+### P3-R1/P3-R2 — actual acquisition evidence and one bounded input manifest
+
+Affected: history_reconstruction.py, qualification_service.py, cli.py,
+existing historical_acquisition.py/ChainProvider integration and minimal
+append-only schema.
+
+Choose the existing typed-acquisition-in-process route from remediation-001,
+then persist its actual result for replay. Do not accept an arbitrary JSON file
+as authority for HIGH/MEDIUM history. Remove the current status-bearing file
+promotion path (or treat files strictly as unverified input that cannot raise
+completeness). The evidence_reference string alone is not verification.
+
+Compose existing acquire_historical_transactions and
+ChainProvider.get_token_accounts:
+- Actual wallet-address walk, actual token-account enumeration, and actual
+  walks for the returned account pubkeys. Store pubkey, owner and mint; mint
+  alone is not an account identity.
+- Record terminal statuses/gaps and known expected boundary where available,
+  run/as_of identity, provider set, observation times, page/transaction evidence
+  references and the exact raw/parser input set used for reconstruction.
+- Preserve approved Phase 2 page/cost/failure semantics; do not introduce a new
+  provider framework or a historical-account archival completeness requirement.
+  Missing enumeration/coverage remains explicitly non-HIGH, as frozen.
+- Persist a real immutable acquisition-run result/manifest with wallet binding.
+  For subsequent scores, load by run ID from that persisted record and verify
+  wallet, observation cutoff, coverage and evidence refs. Do not load statuses
+  from an arbitrary caller file or accept bool("false") as enumeration.
+- Feed acquired transactions through existing raw preservation/parser machinery,
+  not merely use a successful walk to bless an unrelated swaps fragment.
+- HIGH requires the actual complete wallet and covered account walks; any
+  partial/failed account or enumeration error is explicit and non-HIGH.
+  STREAM_FORWARD_ONLY stays LOW, no evidence stays UNKNOWN.
+
+This authorizes software wiring and deterministic fake-provider tests only.
+Existing live-capable adapters must retain fail-closed credentials and accounting;
+do not invoke a live/paid provider or request credentials.
+
+Apply as_of and future economic-time validation once before history assessment,
+position reconstruction and scoring. Persist excluded swap IDs with a specific
+reason (e.g. FUTURE_ECONOMIC_TIMESTAMP) in the input evidence manifest while
+retaining raw rows. No rejected event may extend the usable history range.
+Existing first_seen/created_at/cluster SQL predicates must remain.
+
+Acceptance:
+- Arbitrary JSON claiming COMPLETE + true + empty accounts + nonexistent ref
+  cannot produce verified HIGH or an eligible promotion; string "false" is not
+  accepted as true.
+- Fake provider performs wallet pagination, token-account enumeration and each
+  account walk; resulting persisted manifest binds the exact wallet/events.
+  Complete, missing enumeration, partial account, failed fetch and genuine
+  enumerated-empty outcomes have the frozen honest classifications.
+- A run from another wallet or learned after T cannot justify history at T.
+- Add the already-requested full production as-of matrix (future/late swaps,
+  discovery, early-buyer and cluster evidence) and inspect history, exclusions,
+  components, all windows, score and tier; T is unchanged by later evidence.
+- A future-economic-time-only event is preserved as rejected evidence with its
+  reason, not counted as usable history or given recency credit.
+- Changed manifest/reason/provider/boundary creates the necessary new history
+  snapshot and participates in score identity even when numeric score matches.
+
+### P3-R3/P3-R5 — stable ledger identity and unit-safe deterministic metrics
+
+Affected: position_reconstruction.py, PositionForScoring/service construction,
+scoring.py, minimal provenance/schema fields.
+
+Keep the working WAC, independent round trips and within-trip LOW handling.
+Append immutable transaction/event identity as the final ledger sort tie-break.
+Carry stable round-trip identity (not token_id alone) into scoring. Input
+permutations of the same manifest must not change first/last times, contributing
+refs, round-trip indices, economics or drawdown.
+
+Preserve quote_asset_mint through the scoring boundary. Never add currency-valued
+PnL/cost/gains/losses across SOL and USDC, including separate trips of the same
+token or different tokens. No invented conversion or new FX provider:
+keep currency-valued metrics per quote asset, and mark cross-currency aggregate
+net-PnL/profit-factor/drawdown/lottery-contribution unavailable when no common
+unit exists. Dimensionless per-position return/count statistics may still be
+computed over usable positions. Use the existing missing-component neutral prior,
+no weight redistribution or threshold change. Report mixed-unit unavailability;
+never silently compute 1001 from 1 SOL plus 1000 USDC.
+
+Known realization times sort by final_exit_at then immutable round-trip identity.
+Unknown exit time is missing ordering evidence, not datetime.min disguised as an
+actual realization time. Preserve the position and order-independent metrics;
+mark the affected realization-ordered drawdown unavailable with a reason when
+its chronology cannot be established. Do not crash, manufacture timing, or give
+unknown-time positions invented bounded-window membership.
+
+Acceptance:
+- Same slot, classification, mints and equal raw amounts; two distinct immutable
+  IDs with distinct observed economic times: all permutations byte-identical.
+  The prior test with slots 1 and 2 does NOT test this.
+- Independent closed trips +1 SOL and +1000 USDC never yield cash PnL 1001;
+  include both same-token-reopened and different-token cases.
+- Mixed None/UTC exit times do not raise TypeError; unavailable chronology is
+  reported rather than fabricated.
+- Distinct trips sharing token and final_exit_at have identical drawdown across
+  permutations using their immutable identity; compare fixed hand-calculated
+  order, not an expected result generated by the implementation.
+- Existing +100/-90 net ratio, exactly .70/just above, nonpositive net, usable
+  closed-token counts, Decimal WAC, uncertainty, contamination and all windows
+  remain passing.
+
+### P3-R6b — lossless canonical decisions, complete identity, historical replay
+
+Affected: qualification_service.py, score/position snapshot models and migrations,
+tier_lifecycle.py only as needed.
+
+Preserve the working canonical cluster-adjusted result, score-derived first tier,
+missing-forward confidence rule and fixed weights.
+
+Scores are currently unrestricted Decimal calculations stored as Numeric(6,3).
+Do not compare unrounded computed scores to silently rounded database values.
+Use lossless NUMERIC storage for newly computed score Decimals (with corresponding
+safe schema migration), so the value persisted, returned and tier-evaluated is
+identical. Do not retune cutoffs or silently round across them. For position
+snapshot comparisons, use a documented deterministic storage representation of
+existing fixed-scale fields while preserving exact ledger computation and the
+same input identity; repeated database round trips must not append duplicates.
+
+Bind score identity to the acquisition/history manifest and its semantics
+(reason, provider, boundary, coverage), as well as the existing bounded raw-input
+manifest, as_of, score/algorithm version, all components/penalties/confidence/
+exclusions/gate reason and build/config/spec/git identities. A changed history
+reason or manifest with equal score is not the same decision.
+
+Search for an existing full semantic decision, not just the latest row. Exact
+replay of T after T+delta must reuse T's score and position snapshots and must
+not create another tier transition or replace the current tier with an older
+decision. Historical analysis may append a genuinely new historical score,
+but must not overwrite a later current-tier state. A new later decision can
+append its own immutable transition. Keep score/position/transition writes atomic
+inside the service transaction; failures must roll back the run.
+
+Acceptance:
+- A score with >3 fractional decimal places is stored/returned/tier-used exactly;
+  identical invocation writes no duplicate score/position/tier row.
+- Exact T, T+delta (different tier), T replay preserves both prior decisions,
+  original transition IDs/timestamps/counts and the later current tier.
+- Changed components, penalties, exclusions, acquisition/history reason or
+  manifest, as_of, score version, build/config/spec/git identity each yields
+  the appropriate new score even with equal final numbers.
+- Exact full-semantic replay is idempotent after a DB session restart.
+- Existing eligible first invocation and cluster penalty cutoff tests remain.
+
+### E1 — fresh complete evidence; do not reopen the fixed marker
+
+Keep the old Phase 3 and remediation-001 checkpoints/bundles immutable.
+Create only:
+- orchestration/checkpoints/phase_3_remediation_2.md
+- orchestration/bundles/phase_3_remediation_2.txt
+
+Use the standard start/end markers; verify the actual production validators and
+exact checkpoint bytes inside the new bundle. Include raw output AND exit status
+for commands, not only prose PASS counts:
 - uv run pytest tests/unit/test_phase3_wallet_qualification.py -q
+- uv run pytest tests/unit/test_orchestrator_watch.py -q
+- all new focused tests for this instruction
 - uv run pytest tests/integration/test_phase3_wallet_qualification.py -q
-- the new focused remediation test modules
 - uv run pytest tests/integration/test_migrations.py -q
 - uv run pytest tests/golden tests/replay tests/phase_1_5 -q
 - uv run pytest tests/integration -q
@@ -537,56 +399,51 @@ Run and record exact raw results for at least:
 - uv run ruff format --check .
 - uv run mypy
 - uv run alembic current
-- repository-standard zero-to-head, upgrade-from-0010, and
-  downgrade/re-upgrade checks for every new forward migration
+- populated 0010 preservation, already-0011 upgrade, zero->head and safe
+  idempotent-upgrade migration tests
 - uv run argus fixtures validate-real-chain
-- changed-file secret scan
+- existing changed-file secret scan, with secret values never emitted
 
-No unexplained skip, xfail, flaky retry, failed command, or narrative-only
-claim is allowed. PostgreSQL 16 may remain the explicit functional substitute;
-do not call it PostgreSQL 17.
+No unexplained skip/xfail/retry; identify environmental inability honestly.
+PostgreSQL 16 remains an allowed functional substitute, not PG17 validation.
+Do not claim "upgrade-from-0010" using only a second upgrade of an empty head DB.
 
-Create fresh immutable evidence only:
+Include a row for every remaining finding and its exact test/output, all closed
+items retained, run identity, database-history loss disclosure, approved
+deferrals, preserved safety state and STOP. Update docs/BUILD_STATE.md, append
+docs/DECISION_LOG.md, replace handoff with a fresh HANDOFF_ID. Do not apply Phase 3
+approval. The new handoff must have exactly:
 
-- orchestration/checkpoints/phase_3_remediation.md
-- orchestration/bundles/phase_3_remediation.txt
+LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-3-remediation-002
 
-The checkpoint must contain:
-- one row for P3-R1 through P3-R7 with exact code/test/evidence;
-- the complete point-in-time, history-coverage, round-trip, window, metrics,
-  score/tier, and protocol matrices;
-- exact test counts, failures, skips, environment, migrations, and commands;
-- the accepted PHASE_3_CANDIDATE_SAMPLE_BLOCKED result unchanged unless new
-  authorized authentic evidence genuinely changes it;
-- all environmental deferrals and prohibited live operations;
-- an explicit STOP.
+Every builder commit, including hash-fill commits, must end with exactly one
+real terminal Git trailer and no paragraph after it:
 
-Update docs/BUILD_STATE.md, append docs/DECISION_LOG.md, and replace
-orchestration/AGENT_HANDOFF.md. Do not mark Phase 3 orchestrator-approved.
-Use a new HANDOFF_ID and exactly:
+ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-002
 
-LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-3-remediation-001
+Push and verify clean worktree plus exact fresh remote/local equality; STOP.
 
-Every implementation-agent commit must end with exactly one real terminal Git
-trailer, with no paragraph after it:
+## Accepted deferrals, non-goals, and prohibitions
 
-ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-001
+LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION, PG17_COMPOSE_VALIDATION,
+and BQ_PUBLIC_DATASET_ACCESS remain DEFERRED_ENVIRONMENTAL_CHECK. Their prior
+closure procedures/owners remain unchanged; operator-supplied approved environments
+are required before dependent live-readiness claims. This remediation must not
+enter credentials or close them by assertion.
 
-Push, verify clean worktree and exact local/remote HEAD equality, then STOP.
+HARDENING_BACKLOG remains non-blocking: automatic cluster detection, canonical
+pair-order DB enforcement, extra clustering/calibration, automatic rare tier
+assignment, broader metric-snapshot dedup, and additional reporting polish.
+Open-position descriptive/fingerprint refinements do not create a new blocker:
+closed outcome counts and returns are already restricted correctly; do not
+retune the scoring population for speculative improvements.
 
-## Frozen accepted areas and prohibitions
+No Phase 4, mainnet trading, canary, signing/broadcast, private-key/seed access,
+credential entry/disclosure, paid-provider use/upgrade, live arming, threshold
+relaxation, prior-evidence rewrite, or phase skipping is authorized.
+No historical data restoration may be fabricated. Do not modify this instruction.
 
-Do not redesign or retune the already-accepted structural contamination split,
-frozen component weights, 20-position/10-token thresholds, transfer-uncertainty
-rule, honest candidate-sample fallback, Phase 2 acquisition safety cases, or
-approved provider architecture except for the minimal wiring required by these
-findings.
-
-This instruction does not authorize Phase 4, prospective shadow copying,
-mainnet strategy trading, canary execution, signing/broadcast, signer/private
-key/seed access, credential entry/disclosure, paid-provider upgrade/use, live
-arming, threshold relaxation, evidence rewrite, or phase skip. Claude must not
-modify this instruction file or self-authorize Phase 3 or any later phase.
-
-Passing builder tests does not approve Phase 3. After the matching remediation
-handoff, STOP for independent audit.
+Once these remaining frozen cases and regressions are proven, the orchestrator
+should approve Phase 3 and authorize immediate Phase 4 in the same audit cycle,
+subject only to MASTER_SPEC's explicit STOP/human gates. No further optional
+hardening gate may be introduced.
