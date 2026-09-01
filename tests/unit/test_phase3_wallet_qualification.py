@@ -405,8 +405,12 @@ def test_p3_history_assessment_derives_from_real_acquisition_manifest_not_a_clai
             wallet_walk_status=STATUS_COMPLETE,
             token_accounts_enumerated=True,
             associated_token_accounts=(
-                TokenAccountCoverage(mint="acct-1", status=STATUS_COMPLETE),
-                TokenAccountCoverage(mint="acct-2", status=STATUS_COMPLETE),
+                TokenAccountCoverage(
+                    pubkey="pubkey-acct-1", mint="acct-1", owner=WALLET, status=STATUS_COMPLETE
+                ),
+                TokenAccountCoverage(
+                    pubkey="pubkey-acct-2", mint="acct-2", owner=WALLET, status=STATUS_COMPLETE
+                ),
             ),
         ),
     )
@@ -422,8 +426,12 @@ def test_p3_history_assessment_derives_from_real_acquisition_manifest_not_a_clai
             wallet_walk_status=STATUS_COMPLETE,
             token_accounts_enumerated=True,
             associated_token_accounts=(
-                TokenAccountCoverage(mint="acct-1", status=STATUS_COMPLETE),
-                TokenAccountCoverage(mint="acct-2", status=STATUS_PARTIAL),
+                TokenAccountCoverage(
+                    pubkey="pubkey-acct-1", mint="acct-1", owner=WALLET, status=STATUS_COMPLETE
+                ),
+                TokenAccountCoverage(
+                    pubkey="pubkey-acct-2", mint="acct-2", owner=WALLET, status=STATUS_PARTIAL
+                ),
             ),
         ),
     )
@@ -836,3 +844,189 @@ def test_p3_decimal_boundary_values_prove_no_float_conversion() -> None:
     positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
     assert positions[0].entry_quantity == Decimal(precise_qty)
     assert isinstance(positions[0].entry_quantity, Decimal)
+
+
+# ---------------------------------------------------------------------
+# P3-R3 remediation round 2 (`argus-phase-3-remediation-002`): a total,
+# fully immutable event-ordering tie-break, and quote-unit-safe
+# cross-round-trip scoring aggregates.
+# ---------------------------------------------------------------------
+
+
+def test_p3_exact_same_slot_type_mints_raw_amounts_tie_break_by_immutable_swap_id() -> None:
+    """Two genuinely distinct buys sharing the exact same (slot,
+    classification, input_mint, output_mint, raw amounts) sort-key tuple
+    -- a real possibility the prior test (slots 1 and 2, never colliding)
+    never exercised -- must still order deterministically by their own
+    immutable swap_id, regardless of input list order. Before the P3-R3
+    remediation-002 fix, the original input list's own order silently
+    decided ties, so first_entry_at would differ between permutations of
+    the identical evidence set."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    later = t0 + timedelta(hours=1)
+    # Both legs: slot=1, SWAP_SIMPLE, SOL->TOKEN_MINT, and (since this
+    # fixture never sets input_amount_raw/output_amount_raw) both raw
+    # amounts default to the same 0 -- genuinely identical on every
+    # pre-swap_id sort-key component despite different UI quantities and
+    # different block_times.
+    buy_high_id = _buy(1, token_qty="50", sol_qty="50", at=t0, swap_id="zzz-higher")
+    buy_low_id = _buy(1, token_qty="30", sol_qty="30", at=later, swap_id="aaa-lower")
+
+    forward = reconstruct_positions_for_wallet(  # type: ignore[arg-type]
+        [buy_high_id, buy_low_id], as_of=_FAR_FUTURE_AS_OF
+    )
+    reversed_order = reconstruct_positions_for_wallet(  # type: ignore[arg-type]
+        [buy_low_id, buy_high_id], as_of=_FAR_FUTURE_AS_OF
+    )
+    assert forward == reversed_order
+    # The lower swap_id ("aaa-lower", the `later`-timed leg) is processed
+    # first regardless of input order -- so first_entry_at is always
+    # `later`, never t0, in both permutations.
+    assert forward[0].first_entry_at == later
+    assert forward[0].entry_quantity == Decimal("80")  # 30 + 50, order-independent total
+
+
+def test_p3_mixed_currency_closed_trips_never_sum_incompatible_units() -> None:
+    """Two independently closed round trips -- one realizing +1 SOL, one
+    realizing +1000 USDC -- must never be summed into a single cash PnL
+    of 1001. Covers both a same-token-reopened case and a different-token
+    case: total_realized_pnl/profit_factor/largest_trade_contribution_pct/
+    max_drawdown all become explicitly unavailable (None), never a
+    fabricated cross-currency total. lottery_dominated is False (never
+    determinable as True without a real ratio)."""
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    sol_trip = PositionForScoring(
+        token_id="token-a",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal(1),
+        entry_value_quote=Decimal(10),
+        peak_profit_capture=Decimal("0.5"),
+        first_entry_at=now - timedelta(days=20),
+        last_entry_at=now - timedelta(days=10),
+        final_exit_at=now - timedelta(days=10),
+        quote_asset_mint="SOL",
+        round_trip_index=0,
+    )
+    usdc_trip = PositionForScoring(
+        token_id="token-b",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal(1000),
+        entry_value_quote=Decimal(10),
+        peak_profit_capture=Decimal("0.5"),
+        first_entry_at=now - timedelta(days=15),
+        last_entry_at=now - timedelta(days=5),
+        final_exit_at=now - timedelta(days=5),
+        quote_asset_mint=USDC,
+        round_trip_index=0,
+    )
+    stats = compute_position_stats([sol_trip, usdc_trip])
+    assert stats.closed_count == 2
+    assert stats.total_realized_pnl is None
+    assert stats.profit_factor is None
+    assert stats.largest_trade_contribution_pct is None
+    assert stats.top_three_trade_contribution_pct is None
+    assert stats.max_drawdown is None
+    assert stats.lottery_dominated is False
+    # Per-position dimensionless returns remain fully computable --
+    # currency-agnostic ratios, never a cross-currency sum.
+    assert stats.median_return is not None
+
+    # Same-token-reopened case: two round trips of the SAME token_id, one
+    # opened/closed in SOL, later reopened and closed in USDC.
+    sol_reopen = dataclasses.replace(sol_trip, token_id="token-c", round_trip_index=0)
+    usdc_reopen = dataclasses.replace(usdc_trip, token_id="token-c", round_trip_index=1)
+    reopened_stats = compute_position_stats([sol_reopen, usdc_reopen])
+    assert reopened_stats.total_realized_pnl is None
+    assert reopened_stats.max_drawdown is None
+    # Still exactly one distinct token -- two round trips of it.
+    assert reopened_stats.distinct_tokens == 1
+
+
+def test_p3_none_and_aware_exit_times_never_crash_drawdown_reported_unavailable() -> None:
+    """A closed position with a genuinely unknown final_exit_at mixed
+    with ordinary timezone-aware ones must never raise a naive/aware
+    datetime TypeError -- the whole drawdown metric is reported
+    unavailable (None) rather than fabricating a sentinel ordering, while
+    order-independent metrics (returns, profit_factor within one
+    currency) are entirely unaffected."""
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    known = PositionForScoring(
+        token_id="token-a",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal(5),
+        entry_value_quote=Decimal(10),
+        peak_profit_capture=Decimal("0.5"),
+        first_entry_at=now - timedelta(days=20),
+        last_entry_at=now - timedelta(days=10),
+        final_exit_at=now - timedelta(days=10),
+        quote_asset_mint="SOL",
+    )
+    unknown_exit = PositionForScoring(
+        token_id="token-b",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal(3),
+        entry_value_quote=Decimal(10),
+        peak_profit_capture=Decimal("0.5"),
+        first_entry_at=now - timedelta(days=15),
+        last_entry_at=now - timedelta(days=5),
+        final_exit_at=None,  # genuinely unknown, never fabricated
+        quote_asset_mint="SOL",
+    )
+    # Must not raise -- this is the exact scenario that previously
+    # compared a naive datetime.min sentinel against real aware datetimes.
+    stats = compute_position_stats([known, unknown_exit])
+    assert stats.max_drawdown is None
+    assert stats.closed_count == 2
+    assert stats.total_realized_pnl == Decimal(8)  # order-independent, unaffected
+    assert stats.profit_factor is None  # no losses at all, gross_loss == 0
+
+
+def test_p3_drawdown_tie_break_uses_immutable_round_trip_identity_not_just_token_id() -> None:
+    """Distinct round trips sharing BOTH token_id and final_exit_at (a
+    real possibility once P3-R3 allows more than one round trip per
+    token) must produce an identical drawdown across input-order
+    permutations using their own immutable round_trip_index, not merely
+    token_id (which cannot disambiguate them at all) -- compared against
+    a fixed, hand-calculated expected order, not a value the
+    implementation itself generated."""
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    exit_at = now - timedelta(days=10)
+    # Two round trips of the SAME token, same exit instant: a loss then a
+    # gain, identified only by round_trip_index (0 then 1).
+    loss_first = PositionForScoring(
+        token_id="token-a",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal(-40),
+        entry_value_quote=Decimal(100),
+        peak_profit_capture=Decimal("0"),
+        first_entry_at=now - timedelta(days=30),
+        last_entry_at=now - timedelta(days=20),
+        final_exit_at=exit_at,
+        quote_asset_mint="SOL",
+        round_trip_index=0,
+    )
+    gain_second = PositionForScoring(
+        token_id="token-a",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal(100),
+        entry_value_quote=Decimal(100),
+        peak_profit_capture=Decimal("1"),
+        first_entry_at=now - timedelta(days=20),
+        last_entry_at=now - timedelta(days=15),
+        final_exit_at=exit_at,
+        quote_asset_mint="SOL",
+        round_trip_index=1,
+    )
+    # Hand-calculated expected order (loss then gain, by round_trip_index
+    # 0 then 1): running -40 (peak 0, drawdown undefined since peak<=0),
+    # then running +60 (peak 60, drawdown 0) -- max_dd = 0. This fixed
+    # expectation is independent of the implementation's own output.
+    forward = compute_position_stats([loss_first, gain_second])
+    reversed_order = compute_position_stats([gain_second, loss_first])
+    assert forward.max_drawdown == reversed_order.max_drawdown == Decimal(0)

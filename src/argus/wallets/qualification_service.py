@@ -49,8 +49,13 @@ from argus.domain.wallet_positions import WalletPosition
 from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
 from argus.domain.wallet_tier_history import WalletTierTransition
 from argus.domain.wallets import Wallet
+from argus.wallets.acquisition import load_verified_acquisition_manifest
 from argus.wallets.clustering import ClusterLinkEvidence, assess_wallet_cluster_risk
-from argus.wallets.history_reconstruction import assess_wallet_history, manifest_as_dict
+from argus.wallets.history_reconstruction import (
+    EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+    assess_wallet_history,
+    manifest_as_dict,
+)
 from argus.wallets.position_reconstruction import (
     ReconstructedPosition,
     reconstruct_positions_for_wallet,
@@ -58,7 +63,6 @@ from argus.wallets.position_reconstruction import (
 from argus.wallets.scoring import (
     WINDOW_DAYS,
     PositionForScoring,
-    ScoringResult,
     compute_feature_fingerprint,
     compute_position_stats,
     filter_positions_for_window,
@@ -92,7 +96,43 @@ _PHASE3_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "history_reconstruction.py",
     "tier_lifecycle.py",
     "clustering.py",
+    "acquisition.py",
 )
+
+_EXCLUSION_REASON_FUTURE_ECONOMIC_TIMESTAMP: Final[str] = "FUTURE_ECONOMIC_TIMESTAMP"
+
+# Matches wallet_score_snapshots.{descriptive_score,qualification_score}'s
+# own Numeric(20, 15) column precision exactly (P3-R6b remediation round
+# 2) -- see the quantize() call site below for why this must happen
+# before persistence, not merely be tolerated by it.
+_SCORE_STORAGE_QUANTUM: Final[Decimal] = Decimal("1.000000000000000")
+
+
+def _filter_swaps_by_as_of(
+    swaps: list[Swap], *, as_of: datetime
+) -> tuple[list[Swap], list[dict[str, str]]]:
+    """P3-R1 remediation round 2: the ONE shared future-economic-time
+    filter applied before history assessment, position reconstruction,
+    AND scoring all see the same usable-evidence set -- previously this
+    filtering existed only inside ``reconstruct_positions_for_wallet``,
+    invisible to ``assess_wallet_history``, and left no persisted
+    rejection reason. A swap whose own chain timestamp (``block_time``)
+    is later than ``as_of`` is excluded from the usable set (never
+    counted as history, never given recency credit) but its raw row is
+    never touched -- only recorded here with an explicit reason."""
+    usable: list[Swap] = []
+    excluded: list[dict[str, str]] = []
+    for swap in swaps:
+        if swap.block_time is not None and swap.block_time > as_of:
+            excluded.append(
+                {
+                    "swap_id": str(swap.swap_id),
+                    "reason": _EXCLUSION_REASON_FUTURE_ECONOMIC_TIMESTAMP,
+                }
+            )
+        else:
+            usable.append(swap)
+    return usable, excluded
 
 
 def _compute_build_hash() -> str:
@@ -152,7 +192,12 @@ def _positions_equal(a: WalletPosition, r: ReconstructedPosition) -> bool:
     )
 
 
-def _history_rows_equal(a: WalletHistoryQuality, assessment: HistoryAssessment) -> bool:
+def _history_rows_equal(
+    a: WalletHistoryQuality,
+    assessment: HistoryAssessment,
+    *,
+    excluded_evidence: list[dict[str, str]],
+) -> bool:
     manifest_dict = (
         manifest_as_dict(assessment.acquisition_manifest)
         if assessment.acquisition_manifest
@@ -165,6 +210,7 @@ def _history_rows_equal(a: WalletHistoryQuality, assessment: HistoryAssessment) 
         and a.history_provider_set == assessment.history_provider_set
         and a.history_completeness_reason == assessment.history_completeness_reason
         and a.acquisition_manifest == manifest_dict
+        and a.excluded_evidence == excluded_evidence
     )
 
 
@@ -181,6 +227,7 @@ def _score_equal(
     sample_gate_reason: str,
     as_of: datetime,
     input_manifest_digest: str,
+    history_id: uuid.UUID,
     build_hash: str,
     config_hash: str,
     master_spec_hash: str,
@@ -188,9 +235,14 @@ def _score_equal(
 ) -> bool:
     """P3-R6: full semantic decision equality -- two runs landing on the
     same final numbers from a genuinely different evidence set, penalty
-    mix, confidence, exclusion set, sample-gate reason, as_of, or
-    algorithm/build/config/spec/git identity are never treated as the
-    same snapshot."""
+    mix, confidence, exclusion set, sample-gate reason, as_of, history/
+    acquisition identity, or algorithm/build/config/spec/git identity are
+    never treated as the same snapshot. ``history_id`` (P3-R6 remediation
+    round 2) binds this comparison to the exact, append-only history-
+    quality row (and therefore its acquisition manifest/reason/provider/
+    boundary/coverage) that justified this score -- a changed history
+    reason or manifest always produces a different history_id, so it is
+    always caught here even when every other field happens to match."""
     return (
         a.qualification_score == qualification_score
         and a.descriptive_score == descriptive_score
@@ -202,6 +254,7 @@ def _score_equal(
         and a.sample_gate_reason == sample_gate_reason
         and a.as_of == as_of
         and a.input_manifest_digest == input_manifest_digest
+        and a.history_id == history_id
         and a.build_hash == build_hash
         and a.config_hash == config_hash
         and a.master_spec_hash == master_spec_hash
@@ -213,6 +266,7 @@ def _manifest_digest(
     *,
     as_of: datetime,
     swap_ids: list[uuid.UUID],
+    excluded_swap_ids: list[str],
     discovery_event_ids: list[uuid.UUID],
     early_buyer_ids: list[uuid.UUID],
     cluster_link_ids: list[uuid.UUID],
@@ -220,10 +274,15 @@ def _manifest_digest(
     """A stable SHA-256 hex digest binding ``as_of`` to the exact, sorted
     set of raw evidence row identities visible at that knowledge-time
     cutoff (P3-R1/P3-R6) -- "enough stable input references/counts to
-    reproduce the score," independent of the derived numbers themselves."""
+    reproduce the score," independent of the derived numbers themselves.
+    ``excluded_swap_ids`` (P3-R1 remediation round 2) is part of this
+    identity too: a swap newly excluded (or no longer excluded) as
+    FUTURE_ECONOMIC_TIMESTAMP is a genuinely different evidence manifest
+    even when the usable set's own totals happen to match."""
     parts = [
         as_of.isoformat(),
         ",".join(sorted(str(i) for i in swap_ids)),
+        ",".join(sorted(excluded_swap_ids)),
         ",".join(sorted(str(i) for i in discovery_event_ids)),
         ",".join(sorted(str(i) for i in early_buyer_ids)),
         ",".join(sorted(str(i) for i in cluster_link_ids)),
@@ -236,7 +295,7 @@ async def reconstruct_and_score_wallet(
     *,
     wallet_address: str,
     evidence_source: EvidenceSource,
-    acquisition_manifest: AcquisitionManifest | None,
+    acquisition_run_id: uuid.UUID | None,
     config: ArgusConfig,
     git_commit: str,
     now: datetime,
@@ -264,25 +323,64 @@ async def reconstruct_and_score_wallet(
             .scalars()
             .all()
         )
-        swaps = list(swap_rows)
+        # ONE shared future-economic-time filter (P3-R1 remediation round
+        # 2): history assessment, position reconstruction, and scoring all
+        # see the exact same usable-evidence set -- never independently
+        # re-filtered, never silently dropped with no persisted reason.
+        usable_swaps, excluded_evidence = _filter_swaps_by_as_of(list(swap_rows), as_of=now)
+
+        # --- 0b. real, verified acquisition manifest (P3-R2) -------------
+        acquisition_manifest: AcquisitionManifest | None = None
+        if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK:
+            if acquisition_run_id is None:
+                raise ValueError(
+                    "acquisition_run_id is required when evidence_source is "
+                    "LIVE_ACQUISITION_WALK -- a real acquisition walk must actually be "
+                    "executed and persisted (see 'argus wallets acquire-history') and "
+                    "loaded by its verified run_id; an arbitrary caller-supplied manifest "
+                    "is never accepted"
+                )
+            acquisition_manifest = await load_verified_acquisition_manifest(
+                session, run_id=acquisition_run_id, wallet_id=wallet_id, as_of=now
+            )
 
         # --- 1. history completeness -----------------------------------
         assessment = assess_wallet_history(
-            swaps,
+            usable_swaps,
             wallet_address=wallet_address,
             evidence_source=evidence_source,
             acquisition_manifest=acquisition_manifest,
         )
-        latest_history = (
-            await session.execute(
-                select(WalletHistoryQuality)
-                .where(WalletHistoryQuality.wallet_id == wallet_id)
-                .order_by(WalletHistoryQuality.created_at.desc())
-                .limit(1)
+        # P3-R6b remediation round 2: search ALL of this wallet's history
+        # rows for a full content match, never just "the latest row" --
+        # the same class of bug the score/position searches had. A
+        # wallet's assessed history content is a function of its usable
+        # evidence set alone, not of `now` -- so an earlier `now`
+        # replayed after a later `now` already ran can legitimately
+        # reproduce content identical to an EARLIER row than the most
+        # recently created one; comparing only against "latest" would
+        # wrongly call that a mismatch, minting a spurious new
+        # history_id and, through the history_id binding above,
+        # cascading into a spurious duplicate score row too.
+        candidate_history_rows = (
+            (
+                await session.execute(
+                    select(WalletHistoryQuality).where(WalletHistoryQuality.wallet_id == wallet_id)
+                )
             )
-        ).scalar_one_or_none()
-        if latest_history is not None and _history_rows_equal(latest_history, assessment):
-            history_row = latest_history
+            .scalars()
+            .all()
+        )
+        matching_history = next(
+            (
+                candidate
+                for candidate in candidate_history_rows
+                if _history_rows_equal(candidate, assessment, excluded_evidence=excluded_evidence)
+            ),
+            None,
+        )
+        if matching_history is not None:
+            history_row = matching_history
         else:
             history_row = WalletHistoryQuality(
                 history_id=uuid.uuid4(),
@@ -297,6 +395,7 @@ async def reconstruct_and_score_wallet(
                     if assessment.acquisition_manifest
                     else None
                 ),
+                excluded_evidence=excluded_evidence,
                 algorithm_version="history_reconstruction_v2",
                 created_at=now,
             )
@@ -321,7 +420,7 @@ async def reconstruct_and_score_wallet(
         )
 
         # --- 3. position reconstruction ----------------------------------
-        reconstructed = reconstruct_positions_for_wallet(swaps, as_of=now)
+        reconstructed = reconstruct_positions_for_wallet(usable_swaps, as_of=now)
         early_buyer_rows = (
             (
                 await session.execute(
@@ -349,20 +448,41 @@ async def reconstruct_and_score_wallet(
                 positions_skipped += 1
                 continue
 
-            latest_position = (
-                await session.execute(
-                    select(WalletPosition)
-                    .where(
-                        WalletPosition.wallet_id == wallet_id,
-                        WalletPosition.token_id == token.token_id,
-                        WalletPosition.round_trip_index == recon.round_trip_index,
+            # P3-R6b remediation round 2: search ALL rows sharing this
+            # (wallet_id, token_id, round_trip_index) key for a full
+            # content match, never just "the latest row" -- the same
+            # class of bug as the score search above. wallet_positions
+            # has no as_of column of its own, so an out-of-order replay
+            # (a later, more-complete `now` reconstructed and persisted
+            # before an earlier, partial `now` is replayed) can leave the
+            # single latest row holding content for a DIFFERENT `now`
+            # than the one currently being replayed; comparing only
+            # against that row would spuriously insert a THIRD,
+            # duplicate row on a subsequent exact re-replay of either
+            # `now` instead of finding the row that already matches.
+            candidate_positions = (
+                (
+                    await session.execute(
+                        select(WalletPosition).where(
+                            WalletPosition.wallet_id == wallet_id,
+                            WalletPosition.token_id == token.token_id,
+                            WalletPosition.round_trip_index == recon.round_trip_index,
+                        )
                     )
-                    .order_by(WalletPosition.created_at.desc())
-                    .limit(1)
                 )
-            ).scalar_one_or_none()
+                .scalars()
+                .all()
+            )
+            matching_position = next(
+                (
+                    candidate
+                    for candidate in candidate_positions
+                    if _positions_equal(candidate, recon)
+                ),
+                None,
+            )
 
-            if latest_position is not None and _positions_equal(latest_position, recon):
+            if matching_position is not None:
                 positions_unchanged += 1
             else:
                 session.add(
@@ -409,6 +529,8 @@ async def reconstruct_and_score_wallet(
                     first_entry_at=recon.first_entry_at,
                     last_entry_at=recon.last_entry_at,
                     final_exit_at=recon.final_exit_at,
+                    quote_asset_mint=recon.quote_asset_mint,
+                    round_trip_index=recon.round_trip_index,
                     early_buyer_sequence_number=(
                         early_buyer.sequence_number if early_buyer is not None else None
                     ),
@@ -466,8 +588,24 @@ async def reconstruct_and_score_wallet(
             Decimal(0),
             raw_result.qualification_score - cluster_assessment.cluster_uncertainty_penalty,
         )
-        result: ScoringResult = dataclasses.replace(
+        result = dataclasses.replace(
             raw_result, qualification_score=adjusted_qualification_score, penalties=penalties
+        )
+        # P3-R6b remediation round 2: quantize to Numeric(20, 15)'s own
+        # 15 fractional digits BEFORE this value is used for anything --
+        # persistence, the returned QualificationRunResult, or the tier
+        # decision. Decimal division's default context computes up to 28
+        # significant digits, which can genuinely exceed the column's
+        # own precision; Postgres itself quietly rounds to 15 fractional
+        # digits on INSERT, so an in-memory value left unrounded would
+        # silently diverge from what a later read of the very same row
+        # returns -- "stored/returned/tier-used exactly" requires this
+        # value to be identical everywhere it is used, not merely
+        # internally self-consistent within this one run.
+        result = dataclasses.replace(
+            result,
+            qualification_score=result.qualification_score.quantize(_SCORE_STORAGE_QUANTUM),
+            descriptive_score=result.descriptive_score.quantize(_SCORE_STORAGE_QUANTUM),
         )
 
         component_values_json = {
@@ -477,40 +615,62 @@ async def reconstruct_and_score_wallet(
         excluded_ids_sorted = sorted(contaminated_token_ids)
         input_manifest_digest = _manifest_digest(
             as_of=now,
-            swap_ids=[s.swap_id for s in swaps],
+            swap_ids=[s.swap_id for s in usable_swaps],
+            excluded_swap_ids=[e["swap_id"] for e in excluded_evidence],
             discovery_event_ids=[r.discovery_event_id for r in discovery_rows],
             early_buyer_ids=[r.early_buyer_id for r in early_buyer_rows],
             cluster_link_ids=[link.link_id for link in link_rows],
         )
 
-        latest_score = (
-            await session.execute(
-                select(WalletScoreSnapshot)
-                .where(WalletScoreSnapshot.wallet_id == wallet_id)
-                .order_by(WalletScoreSnapshot.created_at.desc())
-                .limit(1)
+        # P3-R6b remediation round 2: search for an EXISTING row with the
+        # full semantic decision identity, never just "the latest row" --
+        # the latest row can belong to a chronologically later as_of (a
+        # score computed for T after T+delta already exists), which must
+        # never be mistaken for -- or overwritten by -- a replay of T.
+        # Scoped to this exact as_of since as_of is itself part of the
+        # semantic identity; two rows can never be a full match across
+        # different as_of values.
+        candidate_scores = (
+            (
+                await session.execute(
+                    select(WalletScoreSnapshot).where(
+                        WalletScoreSnapshot.wallet_id == wallet_id,
+                        WalletScoreSnapshot.as_of == now,
+                    )
+                )
             )
-        ).scalar_one_or_none()
+            .scalars()
+            .all()
+        )
+        matching_score = next(
+            (
+                candidate
+                for candidate in candidate_scores
+                if _score_equal(
+                    candidate,
+                    qualification_score=result.qualification_score,
+                    descriptive_score=result.descriptive_score,
+                    eligible=result.eligible_for_qualification,
+                    component_values=component_values_json,
+                    penalties=penalties_json,
+                    confidence=result.confidence,
+                    excluded_discovery_token_ids=excluded_ids_sorted,
+                    sample_gate_reason=result.sample_gate_reason,
+                    as_of=now,
+                    input_manifest_digest=input_manifest_digest,
+                    history_id=history_row.history_id,
+                    build_hash=BUILD_HASH,
+                    config_hash=config.config_hash,
+                    master_spec_hash=config.spec_hash,
+                    git_commit=git_commit,
+                )
+            ),
+            None,
+        )
 
         score_written = False
-        if latest_score is not None and _score_equal(
-            latest_score,
-            qualification_score=result.qualification_score,
-            descriptive_score=result.descriptive_score,
-            eligible=result.eligible_for_qualification,
-            component_values=component_values_json,
-            penalties=penalties_json,
-            confidence=result.confidence,
-            excluded_discovery_token_ids=excluded_ids_sorted,
-            sample_gate_reason=result.sample_gate_reason,
-            as_of=now,
-            input_manifest_digest=input_manifest_digest,
-            build_hash=BUILD_HASH,
-            config_hash=config.config_hash,
-            master_spec_hash=config.spec_hash,
-            git_commit=git_commit,
-        ):
-            score_row = latest_score
+        if matching_score is not None:
+            score_row = matching_score
         else:
             score_row = WalletScoreSnapshot(
                 score_id=uuid.uuid4(),
@@ -526,6 +686,7 @@ async def reconstruct_and_score_wallet(
                 eligible_for_qualification=result.eligible_for_qualification,
                 sample_gate_reason=result.sample_gate_reason,
                 input_manifest_digest=input_manifest_digest,
+                history_id=history_row.history_id,
                 build_hash=BUILD_HASH,
                 config_hash=config.config_hash,
                 master_spec_hash=config.spec_hash,
@@ -594,27 +755,79 @@ async def reconstruct_and_score_wallet(
             )
 
         # --- 6. tier lifecycle -----------------------------------------
+        # P3-R6b remediation round 2: the FROM tier for this decision is
+        # the tier that was actually in effect AS OF `now` -- the latest
+        # transition with transitioned_at <= now -- never
+        # wallet.current_tier, which is the wallet's global latest state
+        # and can belong to a chronologically LATER as_of than this run's
+        # own `now` (a historical replay after a later decision already
+        # exists must never read the future as if it were the past).
+        tier_as_of_now_row = (
+            await session.execute(
+                select(WalletTierTransition)
+                .where(
+                    WalletTierTransition.wallet_id == wallet_id,
+                    WalletTierTransition.transitioned_at <= now,
+                )
+                .order_by(WalletTierTransition.transitioned_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        current_tier_as_of_now = (
+            tier_as_of_now_row.to_tier if tier_as_of_now_row is not None else None
+        )
+        latest_transitioned_at = (
+            await session.execute(
+                select(WalletTierTransition.transitioned_at)
+                .where(WalletTierTransition.wallet_id == wallet_id)
+                .order_by(WalletTierTransition.transitioned_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
         transition = determine_tier_transition(
-            current_tier=wallet.current_tier,
+            current_tier=current_tier_as_of_now,
             scoring=result,
             insider_risk=result.fingerprint.insider_risk,
             cluster_risk=cluster_assessment.cluster_risk,
         )
+        resolved_tier = current_tier_as_of_now or "DISCOVERED"
         if transition is not None:
             new_tier, reason = transition
-            session.add(
-                WalletTierTransition(
-                    transition_id=uuid.uuid4(),
-                    wallet_id=wallet_id,
-                    source_score_id=score_row.score_id,
-                    from_tier=wallet.current_tier,
-                    to_tier=new_tier,
-                    reason=reason,
-                    transitioned_at=now,
-                    created_at=now,
+            resolved_tier = new_tier
+            # Exact-replay guard: a transition already recorded for this
+            # exact score row means this exact decision was already made
+            # -- never append a second transition or re-touch the
+            # denormalized cache for an identical replay.
+            existing_transition_for_score = (
+                await session.execute(
+                    select(WalletTierTransition.transition_id)
+                    .where(WalletTierTransition.source_score_id == score_row.score_id)
+                    .limit(1)
                 )
-            )
-            wallet.current_tier = new_tier
+            ).scalar_one_or_none()
+            if existing_transition_for_score is not None:
+                transition = None
+            else:
+                session.add(
+                    WalletTierTransition(
+                        transition_id=uuid.uuid4(),
+                        wallet_id=wallet_id,
+                        source_score_id=score_row.score_id,
+                        from_tier=current_tier_as_of_now,
+                        to_tier=new_tier,
+                        reason=reason,
+                        transitioned_at=now,
+                        created_at=now,
+                    )
+                )
+                # Only advance the denormalized "current" cache when this
+                # decision is not chronologically superseded by an
+                # already-recorded later transition -- a historical
+                # analysis may append its own immutable transition row,
+                # but must never overwrite a later current-tier state.
+                if latest_transitioned_at is None or now >= latest_transitioned_at:
+                    wallet.current_tier = new_tier
 
         await session.flush()
 
@@ -630,5 +843,5 @@ async def reconstruct_and_score_wallet(
             descriptive_score=result.descriptive_score,
             eligible_for_qualification=result.eligible_for_qualification,
             tier_transition=transition,
-            current_tier=wallet.current_tier or "DISCOVERED",
+            current_tier=resolved_tier,
         )

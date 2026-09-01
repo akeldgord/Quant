@@ -1273,6 +1273,98 @@ def discover_acquire_and_run_archaeology(
     raise typer.Exit(code=asyncio.run(_run()))
 
 
+@wallets_app.command("acquire-history")
+def wallets_acquire_history(
+    wallet: str = typer.Option(
+        ..., "--wallet", help="Must already be a discovered wallet (Phase 2 'wallets' row)."
+    ),
+    max_pages: int = typer.Option(
+        50, "--max-pages", help="Safety ceiling per address walked (wallet + each token account)."
+    ),
+    page_size: int = typer.Option(1000, "--page-size", help="Signatures requested per page."),
+) -> None:
+    """P3-R1/P3-R2 remediation round 2: the real, live acquisition path
+    for a wallet -- opens a Helius RPC client (same credential/usage-
+    recorder wiring as 'argus ingest run'), walks the wallet address's
+    own signature history, enumerates its associated SPL token accounts,
+    walks each of those too, feeds every uniquely-signed transaction
+    through the real chain_events/swaps parser/persistence path, and
+    persists one immutable wallet_acquisition_runs manifest row. Prints
+    the resulting run_id -- pass it to 'wallets reconstruct-and-score
+    --acquisition-run-id' as LIVE_ACQUISITION_WALK evidence. There is no
+    remaining path from a caller-supplied file to a completeness claim."""
+    from datetime import UTC, datetime
+
+    import httpx
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.domain.wallets import Wallet
+    from argus.providers.credentials import MissingProviderCredentialError
+    from argus.providers.helius.client import HeliusRpcClient, resolve_helius_api_key
+    from argus.providers.retry import retry_policy_from_config
+    from argus.providers.usage import SqlUsageRecorder
+    from argus.wallets.acquisition import run_wallet_acquisition
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            try:
+                api_key = resolve_helius_api_key(config.env)
+            except MissingProviderCredentialError as exc:
+                console.print(str(exc))
+                return 1
+
+            resolve_production_git_commit(allow_unverified=True)
+            now = datetime.now(UTC)
+
+            async with sessionmaker() as session, session.begin():
+                wallet_row = (
+                    await session.execute(select(Wallet).where(Wallet.wallet_address == wallet))
+                ).scalar_one_or_none()
+                if wallet_row is None:
+                    console.print(
+                        f"[red]no wallets row for address {wallet!r} -- Phase 3 acquires "
+                        "history for already-discovered wallets only[/red]"
+                    )
+                    return 1
+                wallet_id = wallet_row.wallet_id
+
+                retry_policy = retry_policy_from_config(config)
+                async with httpx.AsyncClient(timeout=30.0) as http_client:
+                    usage_recorder = SqlUsageRecorder(sessionmaker)
+                    rpc_client = HeliusRpcClient(
+                        api_key,
+                        http_client=http_client,
+                        retry_policy=retry_policy,
+                        usage_recorder=usage_recorder,
+                    )
+                    outcome = await run_wallet_acquisition(
+                        rpc_client,
+                        session,
+                        wallet_id=wallet_id,
+                        wallet_address=wallet,
+                        provider_name="helius_live_acquisition",
+                        max_pages=max_pages,
+                        page_size=page_size,
+                        now=now,
+                    )
+        finally:
+            await engine.dispose()
+        console.print(
+            f"run_id={outcome.run_id} wallet_walk_status={outcome.manifest.wallet_walk_status} "
+            f"token_accounts_enumerated={outcome.manifest.token_accounts_enumerated} "
+            f"associated_token_accounts={len(outcome.manifest.associated_token_accounts)} "
+            f"transactions_persisted={outcome.transactions_persisted} "
+            f"transactions_already_known={outcome.transactions_already_known}"
+        )
+        if outcome.manifest.known_gaps:
+            console.print(f"known_gaps: {outcome.manifest.known_gaps}")
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
 @wallets_app.command("reconstruct-and-score")
 def wallets_reconstruct_and_score(
     wallet: str = typer.Option(
@@ -1281,20 +1373,20 @@ def wallets_reconstruct_and_score(
     evidence_source: str = typer.Option(
         "STREAM_FORWARD_ONLY",
         "--evidence-source",
-        help="'LIVE_ACQUISITION_WALK' (this wallet's own history was walked via "
-        "'argus discover acquire-and-run-archaeology'-style pagination -- requires "
-        "--acquisition-manifest-file) or 'STREAM_FORWARD_ONLY' (evidence is only from Phase 1 "
-        "live ingestion, forward-only from whenever tracking began).",
+        help="'LIVE_ACQUISITION_WALK' (this wallet's own history was actually walked via "
+        "'argus wallets acquire-history' -- requires --acquisition-run-id) or "
+        "'STREAM_FORWARD_ONLY' (evidence is only from Phase 1 live ingestion, forward-only "
+        "from whenever tracking began).",
     ),
-    acquisition_manifest_file: str = typer.Option(
+    acquisition_run_id: str = typer.Option(
         "",
-        "--acquisition-manifest-file",
-        help="Required when --evidence-source=LIVE_ACQUISITION_WALK: path to a JSON file "
-        "holding the real, structured AcquisitionManifest produced by actually executing the "
-        "typed acquisition path (wallet_walk_status, token_accounts_enumerated, "
-        "associated_token_accounts, provider_set, known_gaps, evidence_reference) -- never a "
-        "bare --acquisition-status flag (Phase 3 remediation P3-R2: a caller can no longer "
-        "manufacture HIGH completeness by typing a status with no manifest at all).",
+        "--acquisition-run-id",
+        help="Required when --evidence-source=LIVE_ACQUISITION_WALK: the run_id printed by "
+        "'argus wallets acquire-history' -- loaded and verified (wallet binding, observation "
+        "cutoff <= this score's as_of) from the persisted wallet_acquisition_runs row, never "
+        "accepted as an arbitrary caller-supplied file (Phase 3 remediation round 2, P3-R2: a "
+        "caller can no longer manufacture HIGH completeness with no real acquisition having "
+        "occurred).",
     ),
 ) -> None:
     """Phase 3 (MASTER_SPEC.md sections 34-43): reconstructs this
@@ -1306,16 +1398,13 @@ def wallets_reconstruct_and_score(
     executes anything -- research/scoring only (MASTER_SPEC.md section
     108). Idempotent: re-running against identical evidence writes no
     duplicate position/score/tier row."""
-    import json
+    import uuid
     from datetime import UTC, datetime
-    from pathlib import Path
 
     from argus.config import resolve_production_git_commit
     from argus.wallets.history_reconstruction import (
         EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
         EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-        AcquisitionManifest,
-        TokenAccountCoverage,
     )
     from argus.wallets.qualification_service import reconstruct_and_score_wallet
 
@@ -1328,29 +1417,18 @@ def wallets_reconstruct_and_score(
         )
         raise typer.Exit(code=1)
 
-    manifest: AcquisitionManifest | None = None
+    run_id: uuid.UUID | None = None
     if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK:
-        if not acquisition_manifest_file:
+        if not acquisition_run_id:
             console.print(
-                "[red]--acquisition-manifest-file is required when "
+                "[red]--acquisition-run-id is required when "
                 "--evidence-source=LIVE_ACQUISITION_WALK[/red]"
             )
             raise typer.Exit(code=1)
         try:
-            raw = json.loads(Path(acquisition_manifest_file).read_text())
-            manifest = AcquisitionManifest(
-                wallet_walk_status=raw["wallet_walk_status"],
-                token_accounts_enumerated=bool(raw["token_accounts_enumerated"]),
-                associated_token_accounts=tuple(
-                    TokenAccountCoverage(mint=tac["mint"], status=tac["status"])
-                    for tac in raw.get("associated_token_accounts", [])
-                ),
-                provider_set=raw["provider_set"],
-                known_gaps=raw.get("known_gaps"),
-                evidence_reference=raw["evidence_reference"],
-            )
-        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
-            console.print(f"[red]malformed --acquisition-manifest-file: {exc}[/red]")
+            run_id = uuid.UUID(acquisition_run_id)
+        except ValueError as exc:
+            console.print(f"[red]malformed --acquisition-run-id: {exc}[/red]")
             raise typer.Exit(code=1) from exc
 
     async def _run() -> int:
@@ -1362,7 +1440,7 @@ def wallets_reconstruct_and_score(
                     sessionmaker,
                     wallet_address=wallet,
                     evidence_source=evidence_source,  # type: ignore[arg-type]
-                    acquisition_manifest=manifest,
+                    acquisition_run_id=run_id,
                     config=config,
                     git_commit=git_commit,
                     now=datetime.now(UTC),

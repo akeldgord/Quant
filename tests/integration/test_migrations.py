@@ -28,6 +28,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -161,7 +162,7 @@ def _current_revision(database: str) -> str:
 def test_migration_from_zero_to_head_creates_identity_columns(scratch_database: str) -> None:
     command.upgrade(_alembic_config(), "head")
 
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -190,7 +191,7 @@ def test_upgrade_from_0003_through_head_creates_table_and_columns_together(
     assert "parse_attempts" not in existing_tables
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
 
@@ -293,7 +294,7 @@ def test_upgrade_head_is_idempotent_and_restart_safe(scratch_database: str) -> N
 
     command.upgrade(cfg, "head")  # simulated restart
 
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
     assert _column_names(scratch_database, "parse_attempts") == first_columns
 
 
@@ -307,7 +308,7 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -433,7 +434,7 @@ def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
 
     # Refused before touching anything: still at head, build_hash column
     # and both append-only rows still present and unmodified.
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
     assert "build_hash" in _column_names(scratch_database, "swaps")
     rows = _query(
         scratch_database,
@@ -589,7 +590,7 @@ def test_p2r7_downgrade_from_0009_fails_closed_when_value_exceeds_bigint_range(
         command.downgrade(cfg, "0008")
 
     # Refused before touching anything: still at head, value unchanged.
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
     stored = _query(
         scratch_database,
         "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t",
@@ -644,7 +645,7 @@ def test_p2r7_downgrade_from_0009_succeeds_when_values_fit_bigint_range(
     assert stored == 1_000_000
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0011"
+    assert _current_revision(scratch_database) == "0015"
 
 
 def test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening(scratch_database: str) -> None:
@@ -712,3 +713,322 @@ def test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening(scratch_datab
         {"t": token_id},
     )[0][0]
     assert int(stored) == _U64_MAX
+
+
+# --- Phase 3 remediation round 2 (argus-phase-3-remediation-002),
+# --- finding P3-R6a: migration 0011's original form deleted every
+# --- existing wallet_positions/wallet_score_snapshots/
+# --- wallet_metrics_snapshots/wallet_tier_history row and reset
+# --- wallets.current_tier so its three new columns could be NOT NULL.
+# --- It was amended (still UNAPPROVED, narrow change-control) to make
+# --- those columns nullable instead and never delete anything; migration
+# --- 0012 separately widens the same columns for a database that already
+# --- ran 0011's original (pre-amendment) NOT-NULL form.
+
+_P3_NOW = datetime(2026, 6, 1, tzinfo=UTC)
+
+
+def _insert_wallet(database: str, wallet_id: str, address: str) -> None:
+    _execute(
+        database,
+        """
+        INSERT INTO wallets (wallet_id, wallet_address, first_discovered_at, created_at)
+        VALUES (:wallet_id, :address, :now, :now)
+        """,
+        {"wallet_id": wallet_id, "address": address, "now": _P3_NOW},
+    )
+
+
+def _insert_history_quality(database: str, history_id: str, wallet_id: str) -> None:
+    _execute(
+        database,
+        """
+        INSERT INTO wallet_history_quality (
+            history_id, wallet_id, history_provider_set, history_completeness,
+            history_completeness_reason, algorithm_version, created_at
+        ) VALUES (
+            :history_id, :wallet_id, 'p3r6a-test', 'HIGH', 'legacy test row',
+            'history_reconstruction_v1', :now
+        )
+        """,
+        {"history_id": history_id, "wallet_id": wallet_id, "now": _P3_NOW},
+    )
+
+
+def _insert_legacy_wallet_position(
+    database: str, position_id: str, wallet_id: str, token_id: str, history_id: str
+) -> None:
+    """A position row shaped exactly as migration 0010 left it -- no
+    ``round_trip_index``/``input_manifest_digest`` column exists yet."""
+    _execute(
+        database,
+        """
+        INSERT INTO wallet_positions (
+            position_id, wallet_id, token_id, history_id, quote_asset_mint,
+            entry_quantity, realized_pnl_quote, partial_exit_count, confidence,
+            status, algorithm_version, git_commit, created_at
+        ) VALUES (
+            :position_id, :wallet_id, :token_id, :history_id, 'SOL',
+            100, 5, 0, 'HIGH', 'CLOSED', 'position_reconstruction_v1',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', :now
+        )
+        """,
+        {
+            "position_id": position_id,
+            "wallet_id": wallet_id,
+            "token_id": token_id,
+            "history_id": history_id,
+            "now": _P3_NOW,
+        },
+    )
+
+
+def _insert_legacy_score_snapshot(database: str, score_id: str, wallet_id: str) -> None:
+    """A score row shaped exactly as migration 0010 left it -- no
+    ``input_manifest_digest`` column exists yet."""
+    _execute(
+        database,
+        """
+        INSERT INTO wallet_score_snapshots (
+            score_id, wallet_id, as_of, score_version, qualification_score,
+            descriptive_score, component_values, penalties,
+            eligible_for_qualification, sample_gate_reason, build_hash,
+            config_hash, master_spec_hash, git_commit, created_at
+        ) VALUES (
+            :score_id, :wallet_id, :now, 'wallet_qualification_v1', 42.5, 50.0,
+            '{}'::jsonb, '{}'::jsonb, false, 'legacy test row',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', :now
+        )
+        """,
+        {"score_id": score_id, "wallet_id": wallet_id, "now": _P3_NOW},
+    )
+
+
+def _insert_legacy_metrics_snapshot(database: str, snapshot_id: str, wallet_id: str) -> None:
+    _execute(
+        database,
+        """
+        INSERT INTO wallet_metrics_snapshots (
+            snapshot_id, wallet_id, as_of, metrics_window, algorithm_version,
+            git_commit, created_at
+        ) VALUES (
+            :snapshot_id, :wallet_id, :now, 'LIFETIME', 'wallet_qualification_v1',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', :now
+        )
+        """,
+        {"snapshot_id": snapshot_id, "wallet_id": wallet_id, "now": _P3_NOW},
+    )
+
+
+def _insert_legacy_tier_transition(
+    database: str, transition_id: str, wallet_id: str, source_score_id: str, to_tier: str
+) -> None:
+    _execute(
+        database,
+        """
+        INSERT INTO wallet_tier_history (
+            transition_id, wallet_id, source_score_id, from_tier, to_tier,
+            reason, transitioned_at, created_at
+        ) VALUES (
+            :transition_id, :wallet_id, :source_score_id, NULL, :to_tier,
+            'legacy test transition', :now, :now
+        )
+        """,
+        {
+            "transition_id": transition_id,
+            "wallet_id": wallet_id,
+            "source_score_id": source_score_id,
+            "to_tier": to_tier,
+            "now": _P3_NOW,
+        },
+    )
+
+
+def test_p3r6a_populated_0010_database_preserves_all_rows_through_head(
+    scratch_database: str,
+) -> None:
+    """The primary required proof: a database with real, identifiable
+    legacy position/score/metric/tier-transition/current-tier rows,
+    computed entirely under migration 0010's schema (before P3-R1..R7
+    remediation existed), upgrades cleanly to head -- every original
+    value, FK, and row count is unchanged. This is what migration 0011's
+    original DELETE-based form made impossible."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0010")
+
+    wallet_id = str(uuid.uuid4())
+    token_id = str(uuid.uuid4())
+    history_id = str(uuid.uuid4())
+    position_id = str(uuid.uuid4())
+    score_id = str(uuid.uuid4())
+    metrics_id = str(uuid.uuid4())
+    transition_id = str(uuid.uuid4())
+
+    _insert_wallet(scratch_database, wallet_id, f"P3R6aWallet{uuid.uuid4().hex[:36]}")
+    _insert_token(scratch_database, token_id, f"P3R6aMint{uuid.uuid4().hex[:36]}")
+    _insert_history_quality(scratch_database, history_id, wallet_id)
+    _insert_legacy_wallet_position(scratch_database, position_id, wallet_id, token_id, history_id)
+    _insert_legacy_score_snapshot(scratch_database, score_id, wallet_id)
+    _insert_legacy_metrics_snapshot(scratch_database, metrics_id, wallet_id)
+    _insert_legacy_tier_transition(scratch_database, transition_id, wallet_id, score_id, "B")
+    _execute(
+        scratch_database,
+        "UPDATE wallets SET current_tier = 'B' WHERE wallet_id = :w",
+        {"w": wallet_id},
+    )
+
+    command.upgrade(cfg, "head")
+
+    assert _current_revision(scratch_database) == "0015"
+
+    position_row = _query(
+        scratch_database,
+        "SELECT realized_pnl_quote, round_trip_index, input_manifest_digest "
+        "FROM wallet_positions WHERE position_id = :p",
+        {"p": position_id},
+    )
+    assert len(position_row) == 1
+    assert position_row[0][0] == Decimal("5")
+    assert position_row[0][1] is None
+    assert position_row[0][2] is None
+
+    score_row = _query(
+        scratch_database,
+        "SELECT qualification_score, input_manifest_digest "
+        "FROM wallet_score_snapshots WHERE score_id = :s",
+        {"s": score_id},
+    )
+    assert len(score_row) == 1
+    assert score_row[0][0] == Decimal("42.500")
+    assert score_row[0][1] is None
+
+    metrics_row = _query(
+        scratch_database,
+        "SELECT metrics_window FROM wallet_metrics_snapshots WHERE snapshot_id = :m",
+        {"m": metrics_id},
+    )
+    assert len(metrics_row) == 1
+    assert metrics_row[0][0] == "LIFETIME"
+
+    transition_row = _query(
+        scratch_database,
+        "SELECT to_tier, source_score_id FROM wallet_tier_history WHERE transition_id = :t",
+        {"t": transition_id},
+    )
+    assert len(transition_row) == 1
+    assert transition_row[0][0] == "B"
+    assert str(transition_row[0][1]) == score_id
+
+    wallet_row = _query(
+        scratch_database, "SELECT current_tier FROM wallets WHERE wallet_id = :w", {"w": wallet_id}
+    )
+    assert wallet_row[0][0] == "B"
+
+
+def test_p3r6a_already_at_0011_upgrades_to_0012_safely_no_data_loss(
+    scratch_database: str,
+) -> None:
+    """A database already stamped 0011 (this repo's own amended,
+    non-destructive form) upgrading the remaining single step to 0012
+    never loses or alters an existing row -- 0012's own operations
+    (widen-nullable, replace check constraints) are idempotent-safe
+    against a database that already has the amended, nullable 0011
+    schema, which is exactly what a database landing on 0011 from this
+    repo's current migration file always has."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0011")
+
+    wallet_id = str(uuid.uuid4())
+    token_id = str(uuid.uuid4())
+    history_id = str(uuid.uuid4())
+    position_id = str(uuid.uuid4())
+
+    _insert_wallet(scratch_database, wallet_id, f"P3R6aWallet{uuid.uuid4().hex[:36]}")
+    _insert_token(scratch_database, token_id, f"P3R6aMint{uuid.uuid4().hex[:36]}")
+    _insert_history_quality(scratch_database, history_id, wallet_id)
+    _execute(
+        scratch_database,
+        """
+        INSERT INTO wallet_positions (
+            position_id, wallet_id, token_id, history_id, quote_asset_mint,
+            round_trip_index, input_manifest_digest, entry_quantity,
+            partial_exit_count, confidence, status, algorithm_version,
+            git_commit, created_at
+        ) VALUES (
+            :position_id, :wallet_id, :token_id, :history_id, 'SOL', 0,
+            '11112222333344445555666677778888999900001111222233334444555566',
+            100, 0, 'HIGH', 'CLOSED', 'position_reconstruction_v2',
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', :now
+        )
+        """,
+        {
+            "position_id": position_id,
+            "wallet_id": wallet_id,
+            "token_id": token_id,
+            "history_id": history_id,
+            "now": _P3_NOW,
+        },
+    )
+
+    command.upgrade(cfg, "0012")
+
+    assert _current_revision(scratch_database) == "0012"
+    row = _query(
+        scratch_database,
+        "SELECT round_trip_index, input_manifest_digest FROM wallet_positions WHERE position_id = :p",
+        {"p": position_id},
+    )
+    assert len(row) == 1
+    assert row[0][0] == 0
+    assert row[0][1] == "11112222333344445555666677778888999900001111222233334444555566"
+
+
+def test_p3r6a_downgrade_from_0012_fails_closed_with_legacy_null_rows(
+    scratch_database: str,
+) -> None:
+    """A legacy row with NULL round_trip_index/input_manifest_digest
+    cannot be represented under the narrower pre-0012 NOT NULL
+    constraint -- downgrading must refuse with a precise reason rather
+    than deleting the row or fabricating a value for it."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0010")
+    wallet_id = str(uuid.uuid4())
+    token_id = str(uuid.uuid4())
+    history_id = str(uuid.uuid4())
+    position_id = str(uuid.uuid4())
+    _insert_wallet(scratch_database, wallet_id, f"P3R6aWallet{uuid.uuid4().hex[:36]}")
+    _insert_token(scratch_database, token_id, f"P3R6aMint{uuid.uuid4().hex[:36]}")
+    _insert_history_quality(scratch_database, history_id, wallet_id)
+    _insert_legacy_wallet_position(scratch_database, position_id, wallet_id, token_id, history_id)
+    command.upgrade(cfg, "head")
+
+    with pytest.raises(Exception, match="cannot downgrade past revision 0012"):
+        command.downgrade(cfg, "0011")
+
+    # Refused before touching anything: still at head, legacy row intact.
+    assert _current_revision(scratch_database) == "0015"
+    row = _query(
+        scratch_database,
+        "SELECT round_trip_index FROM wallet_positions WHERE position_id = :p",
+        {"p": position_id},
+    )
+    assert len(row) == 1
+    assert row[0][0] is None
+
+
+def test_p3r6a_downgrade_from_0012_succeeds_with_no_legacy_null_rows(
+    scratch_database: str,
+) -> None:
+    """The ordinary case: no legacy NULL-provenance row exists, so
+    downgrading to 0011 (still nullable there) succeeds cleanly."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    command.downgrade(cfg, "0011")
+
+    assert _current_revision(scratch_database) == "0011"
+    constraints = _check_constraint_names(scratch_database, "wallet_positions")
+    assert "ck_wallet_positions_round_trip_index" in constraints

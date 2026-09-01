@@ -68,9 +68,18 @@ EvidenceSource = Literal["LIVE_ACQUISITION_WALK", "STREAM_FORWARD_ONLY"]
 @dataclasses.dataclass(frozen=True, slots=True)
 class TokenAccountCoverage:
     """One associated token account's own walk status -- part of a real
-    :class:`AcquisitionManifest`, never hand-typed by a caller."""
+    :class:`AcquisitionManifest`, never hand-typed by a caller.
 
+    ``pubkey``/``owner`` (P3-R2 remediation round 2,
+    `argus-phase-3-remediation-002`): the mint alone is not an account
+    identity -- a wallet can hold multiple distinct token accounts for
+    the same mint, and ``owner`` is the on-chain proof this account
+    genuinely belongs to the wallet being assessed, not merely
+    coincidentally sharing a mint."""
+
+    pubkey: str
     mint: str
+    owner: str
     status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED
 
 
@@ -130,12 +139,35 @@ def manifest_as_dict(manifest: AcquisitionManifest) -> dict:
         "wallet_walk_status": manifest.wallet_walk_status,
         "token_accounts_enumerated": manifest.token_accounts_enumerated,
         "associated_token_accounts": [
-            {"mint": tac.mint, "status": tac.status} for tac in manifest.associated_token_accounts
+            {"pubkey": tac.pubkey, "mint": tac.mint, "owner": tac.owner, "status": tac.status}
+            for tac in manifest.associated_token_accounts
         ],
         "provider_set": manifest.provider_set,
         "known_gaps": manifest.known_gaps,
         "evidence_reference": manifest.evidence_reference,
     }
+
+
+def manifest_from_dict(data: dict) -> AcquisitionManifest:
+    """Reconstructs an :class:`AcquisitionManifest` from its persisted
+    JSONB form (the exact inverse of :func:`manifest_as_dict`) -- used to
+    load a verified, immutable acquisition-run record back into the same
+    typed shape :func:`assess_wallet_history` requires, never to accept
+    an arbitrary caller-supplied shape (see
+    ``argus.wallets.acquisition.load_verified_acquisition_manifest``)."""
+    return AcquisitionManifest(
+        wallet_walk_status=data["wallet_walk_status"],
+        token_accounts_enumerated=bool(data["token_accounts_enumerated"]),
+        associated_token_accounts=tuple(
+            TokenAccountCoverage(
+                pubkey=tac["pubkey"], mint=tac["mint"], owner=tac["owner"], status=tac["status"]
+            )
+            for tac in data.get("associated_token_accounts", [])
+        ),
+        provider_set=data["provider_set"],
+        known_gaps=data.get("known_gaps"),
+        evidence_reference=data["evidence_reference"],
+    )
 
 
 def assess_wallet_history(

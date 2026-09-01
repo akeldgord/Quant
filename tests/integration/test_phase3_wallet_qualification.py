@@ -31,11 +31,13 @@ from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
 from argus.domain.swaps import Swap
+from argus.domain.wallet_acquisition_runs import WalletAcquisitionRun
 from argus.domain.wallet_cluster_links import EVIDENCE_SYNCHRONIZED_ACTIVITY, WalletClusterLink
 from argus.domain.wallet_discovery_events import (
     DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
     WalletDiscoveryEvent,
 )
+from argus.domain.wallet_history_quality import WalletHistoryQuality
 from argus.domain.wallet_metrics_snapshots import RECENCY_WINDOWS, WalletMetricsSnapshot
 from argus.domain.wallet_positions import WalletPosition
 from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
@@ -53,6 +55,7 @@ from argus.wallets.history_reconstruction import (
     EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
     EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
     AcquisitionManifest,
+    manifest_as_dict,
 )
 from argus.wallets.qualification_service import reconstruct_and_score_wallet
 
@@ -92,6 +95,7 @@ async def _cleanup_wallet(admin_engine: Any, wallet_address: str) -> None:
                 ("wallet_score_snapshots", "wallet_id"),
                 ("wallet_metrics_snapshots", "wallet_id"),
                 ("wallet_positions", "wallet_id"),
+                ("wallet_acquisition_runs", "wallet_id"),
                 ("wallet_history_quality", "wallet_id"),
                 ("wallet_discovery_events", "wallet_id"),
                 ("early_buyers", "wallet_id"),
@@ -128,6 +132,29 @@ async def _cleanup_token(admin_engine: Any, mint: str) -> None:
                 await conn.execute(text(f"DELETE FROM {table} WHERE {col} = :t"), {"t": token_id})
             await conn.execute(text("DELETE FROM tokens WHERE token_id = :t"), {"t": token_id})
         await conn.commit()
+
+
+async def _insert_acquisition_run(
+    session, *, wallet_id: uuid.UUID, manifest: AcquisitionManifest, observation_cutoff: datetime
+) -> uuid.UUID:
+    """Persists a real, verified ``WalletAcquisitionRun`` row directly
+    via the ORM (P3-R2 remediation round 2) -- the DB-level equivalent of
+    this project's other tests constructing a typed fixture directly
+    rather than driving a live provider; production code always produces
+    this row via ``argus.wallets.acquisition.run_wallet_acquisition``."""
+    run_id = uuid.uuid4()
+    session.add(
+        WalletAcquisitionRun(
+            run_id=run_id,
+            wallet_id=wallet_id,
+            observation_cutoff=observation_cutoff,
+            manifest=manifest_as_dict(manifest),
+            algorithm_version="wallet_acquisition_v1",
+            created_at=observation_cutoff,
+        )
+    )
+    await session.flush()
+    return run_id
 
 
 async def _make_token(sessionmaker, config, mint: str, now: datetime) -> None:
@@ -232,6 +259,103 @@ async def _add_closed_position_swaps(
     )
 
 
+async def _add_closed_position_swaps_with_sell_amount(
+    session,
+    *,
+    wallet_address: str,
+    mint: str,
+    slot_base: int,
+    at: datetime,
+    sell_amount_ui: Decimal,
+) -> None:
+    """Same as ``_add_closed_position_swaps`` but with a caller-chosen
+    sell amount, so a test can force a return that does not divide
+    evenly (a genuinely non-terminating decimal, e.g. a sell amount
+    involving thirds) rather than the fixed, suspiciously "nice" 50%
+    gain the base helper always produces."""
+    buy_event_id = uuid.uuid4()
+    sell_event_id = uuid.uuid4()
+    session.add(
+        ChainEvent(
+            event_id=buy_event_id,
+            chain="solana",
+            slot=slot_base,
+            first_seen_at=at,
+            provider="helius",
+            provider_received_at=at,
+            transaction_signature=f"p3-buy-{uuid.uuid4()}",
+            event_type="TRANSACTION_OBSERVED",
+            wallet_address=wallet_address,
+            raw_payload={},
+            payload_hash="h",
+            parser_version="v1",
+            created_at=at,
+        )
+    )
+    session.add(
+        Swap(
+            swap_id=uuid.uuid4(),
+            event_id=buy_event_id,
+            wallet_address=wallet_address,
+            classification="SWAP_SIMPLE",
+            input_mint=SOL,
+            input_amount_raw=10_000_000_000,
+            input_amount_ui=Decimal("10"),
+            output_mint=mint,
+            output_amount_raw=100,
+            output_amount_ui=Decimal("100"),
+            network_fee_raw=5000,
+            slot=slot_base,
+            block_time=at,
+            first_seen_at=at,
+            confidence=Decimal("1.000"),
+            parser_version="v1",
+            build_hash="test-build-hash",
+            created_at=at,
+        )
+    )
+    sell_at = at + timedelta(hours=1)
+    session.add(
+        ChainEvent(
+            event_id=sell_event_id,
+            chain="solana",
+            slot=slot_base + 1,
+            first_seen_at=sell_at,
+            provider="helius",
+            provider_received_at=sell_at,
+            transaction_signature=f"p3-sell-{uuid.uuid4()}",
+            event_type="TRANSACTION_OBSERVED",
+            wallet_address=wallet_address,
+            raw_payload={},
+            payload_hash="h",
+            parser_version="v1",
+            created_at=sell_at,
+        )
+    )
+    session.add(
+        Swap(
+            swap_id=uuid.uuid4(),
+            event_id=sell_event_id,
+            wallet_address=wallet_address,
+            classification="SWAP_SIMPLE",
+            input_mint=mint,
+            input_amount_raw=100,
+            input_amount_ui=Decimal("100"),
+            output_mint=SOL,
+            output_amount_raw=int(sell_amount_ui * 1_000_000_000),
+            output_amount_ui=sell_amount_ui,
+            network_fee_raw=5000,
+            slot=slot_base + 1,
+            block_time=sell_at,
+            first_seen_at=sell_at,
+            confidence=Decimal("1.000"),
+            parser_version="v1",
+            build_hash="test-build-hash",
+            created_at=sell_at,
+        )
+    )
+
+
 # ---------------------------------------------------------------------
 # Required test 8: tier lifecycle -- real DB transitions are immutable
 # and timestamped; a later score change never rewrites earlier rows.
@@ -263,7 +387,7 @@ async def test_p3_tier_lifecycle_transitions_are_immutable_and_timestamped(admin
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -336,7 +460,7 @@ async def test_p3_tier_lifecycle_transitions_are_immutable_and_timestamped(admin
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=later,
@@ -410,7 +534,7 @@ async def test_p3_restart_replay_identical_evidence_produces_no_duplicate_rows(
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -422,7 +546,7 @@ async def test_p3_restart_replay_identical_evidence_produces_no_duplicate_rows(
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -558,7 +682,7 @@ async def test_p3_discovery_contamination_excluded_at_the_service_level(admin_en
             sessionmaker,
             wallet_address=clean_wallet,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -567,7 +691,7 @@ async def test_p3_discovery_contamination_excluded_at_the_service_level(admin_en
             sessionmaker,
             wallet_address=contaminated_wallet,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -650,7 +774,7 @@ async def test_p3_service_level_as_of_boundary_excludes_future_cluster_link(admi
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=t0,
@@ -663,7 +787,7 @@ async def test_p3_service_level_as_of_boundary_excludes_future_cluster_link(admi
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=later,
@@ -678,7 +802,7 @@ async def test_p3_service_level_as_of_boundary_excludes_future_cluster_link(admi
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=t0,
@@ -740,7 +864,7 @@ async def test_p3_all_five_metric_windows_persisted_with_correct_membership(admi
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
-            acquisition_manifest=None,
+            acquisition_run_id=None,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=as_of,
@@ -792,10 +916,11 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
     config, engine, sessionmaker = _sessionmaker()
     now = datetime(2026, 6, 1, tzinfo=UTC)
     try:
+        wallet_id = uuid.uuid4()
         async with sessionmaker() as session, session.begin():
             session.add(
                 Wallet(
-                    wallet_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
                     wallet_address=wallet_address,
                     first_discovered_at=now - timedelta(days=1),
                     created_at=now - timedelta(days=1),
@@ -813,7 +938,8 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
             await _make_token(sessionmaker, config, mint, now)
 
         # A real, structured, HIGH-completeness acquisition manifest --
-        # never a bare caller-typed status string (P3-R2).
+        # never a bare caller-typed status string (P3-R2) -- persisted as
+        # a real, verified WalletAcquisitionRun row, loaded by run_id.
         manifest = AcquisitionManifest(
             wallet_walk_status=STATUS_COMPLETE,
             token_accounts_enumerated=True,
@@ -822,12 +948,19 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
             known_gaps=None,
             evidence_reference="test",
         )
+        async with sessionmaker() as session, session.begin():
+            run_id = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest,
+                observation_cutoff=now - timedelta(seconds=1),
+            )
 
         first_result = await reconstruct_and_score_wallet(
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
-            acquisition_manifest=manifest,
+            acquisition_run_id=run_id,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -860,7 +993,7 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
-            acquisition_manifest=manifest,
+            acquisition_run_id=run_id,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -944,6 +1077,13 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
             known_gaps=None,
             evidence_reference="test",
         )
+        async with sessionmaker() as session, session.begin():
+            run_id = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest,
+                observation_cutoff=now - timedelta(seconds=1),
+            )
 
         # Baseline (no cluster evidence): 20 identical clean +50% round
         # trips independently land this wallet's raw qualification_score
@@ -958,7 +1098,7 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
-            acquisition_manifest=manifest,
+            acquisition_run_id=run_id,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now,
@@ -989,7 +1129,7 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
             sessionmaker,
             wallet_address=wallet_address,
             evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
-            acquisition_manifest=manifest,
+            acquisition_run_id=run_id,
             config=config,
             git_commit=_TEST_GIT_COMMIT,
             now=now_penalized,
@@ -1036,3 +1176,944 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
         for mint in mints:
             await _cleanup_token(admin_engine, mint)
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R1 remediation round 2: the ONE shared future-economic-time filter
+# excludes a swap from history assessment AND position reconstruction
+# alike, with a persisted, specific exclusion reason -- the raw swap row
+# itself is never touched, and the exclusion is visible in the persisted
+# WalletHistoryQuality row, not silently dropped inside the ledger alone.
+# ---------------------------------------------------------------------
+
+
+async def test_p3_future_economic_timestamp_swap_excluded_with_persisted_reason(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    future_block_time = now + timedelta(days=30)
+    try:
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=uuid.uuid4(),
+                    wallet_address=wallet_address,
+                    first_discovered_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=1),
+                )
+            )
+            await _add_closed_position_swaps(
+                session,
+                wallet_address=wallet_address,
+                mint=mint,
+                slot_base=1,
+                at=now - timedelta(days=1),
+            )
+        await _make_token(sessionmaker, config, mint, now)
+
+        # A swap whose own chain timestamp is in the future relative to
+        # this score's as_of -- first_seen_at is <= now (it was already
+        # observed/recorded), but its economic block_time is not yet
+        # knowable at this snapshot.
+        future_swap_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            event_id = uuid.uuid4()
+            session.add(
+                ChainEvent(
+                    event_id=event_id,
+                    chain="solana",
+                    slot=999,
+                    first_seen_at=now,
+                    provider="helius",
+                    provider_received_at=now,
+                    transaction_signature=f"p3-future-{uuid.uuid4()}",
+                    event_type="TRANSACTION_OBSERVED",
+                    wallet_address=wallet_address,
+                    raw_payload={},
+                    payload_hash="h",
+                    parser_version="v1",
+                    created_at=now,
+                )
+            )
+            session.add(
+                Swap(
+                    swap_id=future_swap_id,
+                    event_id=event_id,
+                    wallet_address=wallet_address,
+                    classification="SWAP_SIMPLE",
+                    input_mint=SOL,
+                    input_amount_raw=5_000_000_000,
+                    input_amount_ui=Decimal("5"),
+                    output_mint=mint,
+                    output_amount_raw=50,
+                    output_amount_ui=Decimal("50"),
+                    network_fee_raw=5000,
+                    slot=999,
+                    block_time=future_block_time,
+                    first_seen_at=now,
+                    confidence=Decimal("1.000"),
+                    parser_version="v1",
+                    build_hash="test-build-hash",
+                    created_at=now,
+                )
+            )
+
+        result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        # Only the ordinary past closed position is usable -- the future
+        # swap contributes no position at all at this as_of.
+        assert result.positions_reconstructed == 1
+
+        async with sessionmaker() as session:
+            history_row = (
+                await session.execute(
+                    select(WalletHistoryQuality)
+                    .where(WalletHistoryQuality.wallet_id == result.wallet_id)
+                    .order_by(WalletHistoryQuality.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            assert history_row.excluded_evidence == [
+                {"swap_id": str(future_swap_id), "reason": "FUTURE_ECONOMIC_TIMESTAMP"}
+            ]
+
+            # The raw swap row itself was never touched -- only excluded
+            # from the usable-evidence set at this as_of.
+            raw_row = (
+                await session.execute(select(Swap).where(Swap.swap_id == future_swap_id))
+            ).scalar_one()
+            assert raw_row.block_time == future_block_time
+
+        # Once as_of actually reaches the swap's own economic time, it
+        # becomes real, usable evidence -- the exclusion was point-in-time,
+        # never a permanent loss of the row.
+        later_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=future_block_time + timedelta(hours=1),
+        )
+        assert later_result.positions_reconstructed == 2
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R6b remediation round 2: the wallet_positions write path searches
+# ALL rows sharing a (wallet_id, token_id, round_trip_index) key for a
+# full content match, never just "the latest row" -- an out-of-order
+# replay (a later, complete `now` persisted before an earlier, partial
+# `now` is replayed) must never spuriously insert a THIRD, duplicate row
+# on a subsequent exact re-replay of either `now`.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r6b_position_full_match_search_prevents_duplicate_on_out_of_order_replay(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    buy_at = datetime(2026, 6, 1, tzinfo=UTC)
+    sell_at = buy_at + timedelta(days=400)
+    partial_now = buy_at + timedelta(hours=12)  # after the buy, before the sell is knowable
+    complete_now = sell_at + timedelta(hours=1)  # after both legs are knowable
+    try:
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=uuid.uuid4(),
+                    wallet_address=wallet_address,
+                    first_discovered_at=buy_at,
+                    created_at=buy_at,
+                )
+            )
+            buy_event_id = uuid.uuid4()
+            session.add(
+                ChainEvent(
+                    event_id=buy_event_id,
+                    chain="solana",
+                    slot=1,
+                    first_seen_at=buy_at,
+                    provider="helius",
+                    provider_received_at=buy_at,
+                    transaction_signature=f"p3r6b-buy-{uuid.uuid4()}",
+                    event_type="TRANSACTION_OBSERVED",
+                    wallet_address=wallet_address,
+                    raw_payload={},
+                    payload_hash="h",
+                    parser_version="v1",
+                    created_at=buy_at,
+                )
+            )
+            session.add(
+                Swap(
+                    swap_id=uuid.uuid4(),
+                    event_id=buy_event_id,
+                    wallet_address=wallet_address,
+                    classification="SWAP_SIMPLE",
+                    input_mint=SOL,
+                    input_amount_raw=10_000_000_000,
+                    input_amount_ui=Decimal("10"),
+                    output_mint=mint,
+                    output_amount_raw=100,
+                    output_amount_ui=Decimal("100"),
+                    network_fee_raw=5000,
+                    slot=1,
+                    block_time=buy_at,
+                    first_seen_at=buy_at,
+                    confidence=Decimal("1.000"),
+                    parser_version="v1",
+                    build_hash="test-build-hash",
+                    created_at=buy_at,
+                )
+            )
+            sell_event_id = uuid.uuid4()
+            session.add(
+                ChainEvent(
+                    event_id=sell_event_id,
+                    chain="solana",
+                    slot=2,
+                    first_seen_at=sell_at,
+                    provider="helius",
+                    provider_received_at=sell_at,
+                    transaction_signature=f"p3r6b-sell-{uuid.uuid4()}",
+                    event_type="TRANSACTION_OBSERVED",
+                    wallet_address=wallet_address,
+                    raw_payload={},
+                    payload_hash="h",
+                    parser_version="v1",
+                    created_at=sell_at,
+                )
+            )
+            session.add(
+                Swap(
+                    swap_id=uuid.uuid4(),
+                    event_id=sell_event_id,
+                    wallet_address=wallet_address,
+                    classification="SWAP_SIMPLE",
+                    input_mint=mint,
+                    input_amount_raw=100,
+                    input_amount_ui=Decimal("100"),
+                    output_mint=SOL,
+                    output_amount_raw=15_000_000_000,
+                    output_amount_ui=Decimal("15"),
+                    network_fee_raw=5000,
+                    slot=2,
+                    block_time=sell_at,
+                    first_seen_at=sell_at,
+                    confidence=Decimal("1.000"),
+                    parser_version="v1",
+                    build_hash="test-build-hash",
+                    created_at=sell_at,
+                )
+            )
+        await _make_token(sessionmaker, config, mint, buy_at)
+
+        # 1. Run at the LATER, complete `now` first -- a CLOSED round
+        # trip is persisted as row A.
+        complete_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=complete_now,
+        )
+        assert complete_result.positions_written == 1
+
+        # 2. Replay an EARLIER `now` where the sell is not yet knowable
+        # -- an OPEN round trip for the SAME (wallet, token,
+        # round_trip_index=0) key is genuinely different content, so a
+        # second row B is correctly written.
+        partial_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=partial_now,
+        )
+        assert partial_result.positions_written == 1
+
+        async with sessionmaker() as session:
+            rows_after_two_runs = (
+                (
+                    await session.execute(
+                        select(WalletPosition).where(
+                            WalletPosition.wallet_id == complete_result.wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(rows_after_two_runs) == 2
+
+        # 3. Re-run the COMPLETE `now` again, exactly. The most recently
+        # CREATED row is now B (the OPEN one from step 2), not A -- a
+        # "latest row only" search would wrongly compare against B,
+        # find a mismatch, and insert a spurious THIRD row even though
+        # A already holds this exact content. The full-match search
+        # must find A and treat this as unchanged.
+        replay_complete_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=complete_now,
+        )
+        assert replay_complete_result.positions_written == 0
+        assert replay_complete_result.positions_unchanged == 1
+
+        async with sessionmaker() as session:
+            rows_after_replay = (
+                (
+                    await session.execute(
+                        select(WalletPosition).where(
+                            WalletPosition.wallet_id == complete_result.wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(rows_after_replay) == 2
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R6b: a score with more than 3 fractional decimal places is stored,
+# returned, and tier-used exactly (Numeric(20, 15), not the original
+# truncating Numeric(6, 3)) -- and an identical replay of that exact
+# deep-precision score writes no duplicate row.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r6b_deep_fractional_score_precision_stored_exactly_and_replay_idempotent(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    # Sell amounts involving sevenths (10 + i/7 SOL, for a 10-SOL entry)
+    # reliably produce a component/weighted score with genuinely
+    # non-terminating decimal expansions (7 is not a factor of 10) --
+    # never hand-rounded to land on a "nice" number the way a fixed,
+    # uniform return (or one involving only factors of 2 and 5) would.
+    mints = [_unique_mint() for _ in range(23)]
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=1),
+                )
+            )
+            for i, mint in enumerate(mints):
+                await _add_closed_position_swaps_with_sell_amount(
+                    session,
+                    wallet_address=wallet_address,
+                    mint=mint,
+                    slot_base=i * 10,
+                    at=now - timedelta(days=1) + timedelta(minutes=i),
+                    sell_amount_ui=Decimal(10) + Decimal(1 + i) / Decimal(7),
+                )
+        for mint in mints:
+            await _make_token(sessionmaker, config, mint, now)
+
+        first_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert first_result.score_written is True
+
+        async with sessionmaker() as session:
+            score_row = (
+                await session.execute(
+                    select(WalletScoreSnapshot)
+                    .where(WalletScoreSnapshot.wallet_id == wallet_id)
+                    .order_by(WalletScoreSnapshot.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            assert score_row.qualification_score is not None
+            # More than 3 fractional digits survived the round trip
+            # through Numeric(20, 15) -- the original Numeric(6, 3)
+            # would have silently truncated this to 3 places.
+            exponent = score_row.qualification_score.normalize().as_tuple().exponent
+            assert isinstance(exponent, int)
+            assert exponent < -3
+            # The persisted value is byte-identical to the value this
+            # exact run returned and the tier decision used -- never a
+            # separately-rounded copy.
+            assert score_row.qualification_score == first_result.qualification_score
+
+        # Exact replay of the identical deep-precision score writes no
+        # duplicate row.
+        second_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert second_result.score_written is False
+        assert second_result.qualification_score == first_result.qualification_score
+
+        async with sessionmaker() as session:
+            score_rows = (
+                (
+                    await session.execute(
+                        select(WalletScoreSnapshot).where(
+                            WalletScoreSnapshot.wallet_id == wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(score_rows) == 1
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        for mint in mints:
+            await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R6b: exact T, then T+delta (a genuinely different tier), then a
+# replay of T -- the replay must reuse T's own original score/tier
+# decision (never mistaken for or overwriting T+delta's), and the
+# wallet's current-tier cache must remain at the LATER (T+delta) tier,
+# never regressed backward by the historical replay.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r6b_exact_t_then_t_plus_delta_then_replay_t_preserves_prior_decisions(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    other_wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    t0 = datetime(2026, 6, 1, tzinfo=UTC)
+    t1 = t0 + timedelta(days=1)
+    try:
+        wallet_id = uuid.uuid4()
+        other_wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=t0,
+                    created_at=t0,
+                )
+            )
+            session.add(
+                Wallet(
+                    wallet_id=other_wallet_id,
+                    wallet_address=other_wallet_address,
+                    first_discovered_at=t0,
+                    created_at=t0,
+                )
+            )
+            await session.flush()
+            await _add_closed_position_swaps(
+                session, wallet_address=wallet_address, mint=mint, slot_base=1, at=t0
+            )
+        await _make_token(sessionmaker, config, mint, t0)
+
+        # T: baseline run -> DISCOVERED (small sample, below eligibility).
+        result_t0 = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=t0,
+        )
+        assert result_t0.current_tier == TIER_DISCOVERED
+
+        async with sessionmaker() as session:
+            transitions_after_t0 = (
+                (
+                    await session.execute(
+                        select(WalletTierTransition)
+                        .where(WalletTierTransition.wallet_id == wallet_id)
+                        .order_by(WalletTierTransition.transitioned_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(transitions_after_t0) == 1
+            t0_transition_id = transitions_after_t0[0].transition_id
+            t0_transitioned_at = transitions_after_t0[0].transitioned_at
+            score_rows_after_t0 = (
+                (
+                    await session.execute(
+                        select(WalletScoreSnapshot).where(
+                            WalletScoreSnapshot.wallet_id == wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(score_rows_after_t0) == 1
+            t0_score_id = score_rows_after_t0[0].score_id
+
+        # T+delta: a high-probability cluster link makes this a
+        # genuinely different (QUARANTINE) decision.
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                WalletClusterLink(
+                    link_id=uuid.uuid4(),
+                    wallet_a_id=wallet_id,
+                    wallet_b_id=other_wallet_id,
+                    evidence_type=EVIDENCE_SYNCHRONIZED_ACTIVITY,
+                    evidence_reference="test: T+delta quarantine link",
+                    probability=Decimal("0.95"),
+                    algorithm_version="test",
+                    as_of=t1,
+                    created_at=t1,
+                )
+            )
+        result_t1 = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=t1,
+        )
+        assert result_t1.current_tier == TIER_QUARANTINE
+
+        async with sessionmaker() as session:
+            wallet_row = (
+                await session.execute(select(Wallet).where(Wallet.wallet_id == wallet_id))
+            ).scalar_one()
+            assert wallet_row.current_tier == TIER_QUARANTINE
+            transitions_after_t1 = (
+                (
+                    await session.execute(
+                        select(WalletTierTransition)
+                        .where(WalletTierTransition.wallet_id == wallet_id)
+                        .order_by(WalletTierTransition.transitioned_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(transitions_after_t1) == 2
+
+        # Replay T exactly. This must reuse T's own original score row
+        # and NOT append a third transition or a duplicate score row --
+        # and, critically, must NOT regress the wallet's current-tier
+        # cache back to T's own (DISCOVERED) tier.
+        replay_t0 = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=t0,
+        )
+        assert replay_t0.score_written is False
+        assert replay_t0.tier_transition is None
+        # The RETURNED current_tier for this historical replay reflects
+        # what was in effect as of T -- but the wallet's own persisted
+        # cache (checked below) must remain at the later T+delta tier.
+        assert replay_t0.current_tier == TIER_DISCOVERED
+
+        async with sessionmaker() as session:
+            wallet_row = (
+                await session.execute(select(Wallet).where(Wallet.wallet_id == wallet_id))
+            ).scalar_one()
+            # Never regressed backward by the historical replay.
+            assert wallet_row.current_tier == TIER_QUARANTINE
+
+            score_rows = (
+                (
+                    await session.execute(
+                        select(WalletScoreSnapshot).where(
+                            WalletScoreSnapshot.wallet_id == wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Still exactly 2 score rows (T and T+delta) -- the replay
+            # reused T's own row (byte-identical id), never created a
+            # third.
+            assert len(score_rows) == 2
+            assert t0_score_id in {row.score_id for row in score_rows}
+
+            transitions = (
+                (
+                    await session.execute(
+                        select(WalletTierTransition)
+                        .where(WalletTierTransition.wallet_id == wallet_id)
+                        .order_by(WalletTierTransition.transitioned_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Still exactly 2 -- original T and T+delta transitions,
+            # byte-identical to what they were before the replay.
+            assert len(transitions) == 2
+            assert transitions[0].transition_id == t0_transition_id
+            assert transitions[0].transitioned_at == t0_transitioned_at
+            assert transitions[0].to_tier == TIER_DISCOVERED
+            assert transitions[1].to_tier == TIER_QUARANTINE
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_wallet(admin_engine, other_wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R6b: a changed acquisition/history manifest -- even one that leaves
+# every downstream score number byte-identical -- is a genuinely
+# different decision (a different history_id), never deduplicated
+# against a prior score sharing the same as_of and final numbers.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r6b_changed_acquisition_manifest_forces_new_score_row_despite_equal_numbers(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mints = [_unique_mint() for _ in range(20)]
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=1),
+                )
+            )
+            for i, mint in enumerate(mints):
+                await _add_closed_position_swaps(
+                    session,
+                    wallet_address=wallet_address,
+                    mint=mint,
+                    slot_base=i * 10,
+                    at=now - timedelta(days=1) + timedelta(minutes=i),
+                )
+        for mint in mints:
+            await _make_token(sessionmaker, config, mint, now)
+
+        manifest_a = AcquisitionManifest(
+            wallet_walk_status=STATUS_COMPLETE,
+            token_accounts_enumerated=True,
+            associated_token_accounts=(),
+            provider_set="test-fake-acquisition-A",
+            known_gaps=None,
+            evidence_reference="test: manifest A",
+        )
+        manifest_b = AcquisitionManifest(
+            wallet_walk_status=STATUS_COMPLETE,
+            token_accounts_enumerated=True,
+            associated_token_accounts=(),
+            provider_set="test-fake-acquisition-B",
+            known_gaps=None,
+            evidence_reference="test: manifest B, otherwise equivalent",
+        )
+        async with sessionmaker() as session, session.begin():
+            run_id_a = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest_a,
+                observation_cutoff=now - timedelta(seconds=2),
+            )
+        async with sessionmaker() as session, session.begin():
+            run_id_b = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest_b,
+                observation_cutoff=now - timedelta(seconds=1),
+            )
+
+        result_a = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+            acquisition_run_id=run_id_a,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        result_b = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+            acquisition_run_id=run_id_b,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        # The manifest change (provider_set/evidence_reference only)
+        # never touches the underlying swap evidence, so the final score
+        # numbers are genuinely equal...
+        assert result_b.qualification_score == result_a.qualification_score
+        # ...but this is still a new, independently-recorded decision,
+        # since it is justified by a different history_id.
+        assert result_b.score_written is True
+
+        async with sessionmaker() as session:
+            history_rows = (
+                (
+                    await session.execute(
+                        select(WalletHistoryQuality).where(
+                            WalletHistoryQuality.wallet_id == wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(history_rows) == 2
+            assert history_rows[0].history_id != history_rows[1].history_id
+
+            score_rows = (
+                (
+                    await session.execute(
+                        select(WalletScoreSnapshot).where(
+                            WalletScoreSnapshot.wallet_id == wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(score_rows) == 2
+            assert score_rows[0].history_id != score_rows[1].history_id
+            assert score_rows[0].qualification_score == score_rows[1].qualification_score
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        for mint in mints:
+            await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R6b: a changed build/git identity -- even with every other input
+# and the final score numbers unchanged -- is still a distinct,
+# separately-recorded decision, since two builds/commits are never
+# assumed to compute a score the same way merely because this run's
+# numbers happen to match.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r6b_changed_git_commit_forces_new_score_row_despite_equal_numbers(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    other_commit = "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFCD"
+    try:
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=uuid.uuid4(),
+                    wallet_address=wallet_address,
+                    first_discovered_at=now,
+                    created_at=now,
+                )
+            )
+            await _add_closed_position_swaps(
+                session, wallet_address=wallet_address, mint=mint, slot_base=1, at=now
+            )
+        await _make_token(sessionmaker, config, mint, now)
+
+        result_a = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        result_b = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=other_commit,
+            now=now,
+        )
+        assert result_b.qualification_score == result_a.qualification_score
+        assert result_b.score_written is True
+
+        async with sessionmaker() as session:
+            score_rows = (
+                (
+                    await session.execute(
+                        select(WalletScoreSnapshot).where(
+                            WalletScoreSnapshot.wallet_id == result_a.wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(score_rows) == 2
+            assert {row.git_commit for row in score_rows} == {_TEST_GIT_COMMIT, other_commit}
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R6b: exact full-semantic replay is idempotent even across an
+# entirely fresh DB engine/session factory (a real process restart),
+# never relying on any in-memory state from the first run.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r6b_exact_replay_idempotent_after_session_restart(admin_engine) -> None:
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    second_engine = None
+    try:
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=uuid.uuid4(),
+                    wallet_address=wallet_address,
+                    first_discovered_at=now,
+                    created_at=now,
+                )
+            )
+            await _add_closed_position_swaps(
+                session, wallet_address=wallet_address, mint=mint, slot_base=1, at=now
+            )
+        await _make_token(sessionmaker, config, mint, now)
+
+        first_result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert first_result.score_written is True
+        await engine.dispose()
+
+        # A genuinely new engine/session factory -- simulating a real
+        # process restart, never reusing any in-memory ORM identity map
+        # or connection-pool state from the first run.
+        _, second_engine, second_sessionmaker = _sessionmaker()
+        second_result = await reconstruct_and_score_wallet(
+            second_sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+            acquisition_run_id=None,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert second_result.score_written is False
+        assert second_result.positions_written == 0
+        assert second_result.positions_unchanged == 1
+        assert second_result.tier_transition is None
+        assert second_result.qualification_score == first_result.qualification_score
+
+        async with second_sessionmaker() as session:
+            score_rows = (
+                (
+                    await session.execute(
+                        select(WalletScoreSnapshot).where(
+                            WalletScoreSnapshot.wallet_id == first_result.wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(score_rows) == 1
+            position_rows = (
+                (
+                    await session.execute(
+                        select(WalletPosition).where(
+                            WalletPosition.wallet_id == first_result.wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(position_rows) == 1
+            transition_rows = (
+                (
+                    await session.execute(
+                        select(WalletTierTransition).where(
+                            WalletTierTransition.wallet_id == first_result.wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(transition_rows) == 1
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+        if second_engine is not None:
+            await second_engine.dispose()

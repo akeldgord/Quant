@@ -1948,3 +1948,112 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/bundles/phase_3.txt` are left byte-for-byte unmodified,
   preserved as evidence of the P3-R7 defect.
 - git_commit: 5713e9bd86011ae1033507fbdab349cc3dc5fdbd
+
+### 2026-09-01 — Phase 3 second consolidated remediation (P3-R6a, P3-R1/
+### P3-R2 continued, P3-R3/P3-R5 continued, P3-R6b continued, E1)
+
+- requirement_id: MASTER_SPEC.md v2.0 Phase 3, sections 34-43, CORE-001,
+  CORE-004, section 36 (append-only history), sections 104-109.
+- decision: implemented every finding named by independent re-audit
+  `argus-phase-3-remediation-audit-001` (`FAIL_REMEDIATION_REQUIRED` on
+  round 1's remediation at `3fb7d5675bf4b6c1c497dad08eb319a0e349d188`,
+  finding round 1 only PARTIALLY closed the frozen defects plus one new
+  critical regression), per orchestrator instruction
+  `argus-phase-3-remediation-002`
+  (`AUTHORIZED_ACTION: CLOSE_REMAINING_FROZEN_PHASE_3_DEFECTS_AND_
+  MIGRATION_REGRESSION`, `APPROVES_PHASE: NONE`). No `HARDENING_BACKLOG`
+  item from either round was pulled into scope.
+- reason: the re-audit found (a) migration 0011's original committed
+  `upgrade()` destructively `DELETE`d all 4 derived Phase 3 decision
+  tables and reset `wallets.current_tier = NULL` on every run --
+  explicitly prohibited by MASTER_SPEC's append-only-history rule (P3-R6a,
+  new, most severe); (b) the future-economic-timestamp filter existed
+  only inside `reconstruct_positions_for_wallet`, invisible to
+  `assess_wallet_history`, with no persisted rejection reason, and the
+  CLI still accepted an arbitrary JSON file as acquisition-evidence
+  authority (P3-R1/P3-R2 continued); (c) exact same-slot ties were
+  input-order-dependent and cross-quote-asset round trips were silently
+  summed as if the same currency (P3-R3 continued); (d) a `None`/aware
+  `final_exit_at` mix crashed drawdown computation and same-token-tied
+  exits were input-order-dependent (P3-R5 continued); (e) scores were
+  stored in a `Numeric(6,3)` column that silently truncated a genuinely
+  non-terminating computed Decimal, defeating exact-replay equality; score
+  identity omitted the acquisition/history manifest that justified it; and
+  the idempotency search for score/history/position rows compared only
+  "the wallet's latest row by `created_at`," which can belong to a
+  chronologically LATER `as_of` than the one being replayed, corrupting
+  both duplicate-row prevention and the wallet's `current_tier` cache on
+  historical replay (P3-R6b continued); and (f) the round-1 bundle
+  contained narrative PASS-count claims rather than the required raw
+  command output for test/lint/type/fixture results (E1).
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-3-remediation-002` (`STATUS: ACTIVE`, `TARGET_COMMIT:
+  3fb7d5675bf4b6c1c497dad08eb319a0e349d188`, `AUTHORIZED_PHASE: 3`,
+  `APPROVES_PHASE: NONE`; all mandatory session-start preconditions --
+  single instruction-only commit whose parent exactly matches
+  `TARGET_COMMIT`, changing only
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`, Phase 3 awaiting review
+  and not yet orchestrator-approved, clean/synced worktree, local HEAD
+  equal to freshly-fetched remote HEAD -- independently verified before
+  this task began).
+- impact: `migrations/versions/0011_phase3_remediation_point_in_time_and_
+  ledger_integrity.py` amended in place (still UNAPPROVED, explicit narrow
+  change-control authorization) to remove every `DELETE`/`UPDATE`
+  statement and make `wallet_positions.round_trip_index`/
+  `input_manifest_digest` and `wallet_score_snapshots.
+  input_manifest_digest` nullable. Four new migrations: `0012` (widens the
+  same 3 columns for a database already stamped 0011 under its original
+  destructive form -- this sandbox's own dev database, which genuinely
+  lost its prior Phase 3 decision rows earlier in this session before this
+  fix landed, disclosed explicitly, no other environment affected, no
+  recomputation claimed to restore original beliefs), `0013` (new
+  `wallet_acquisition_runs` table plus
+  `wallet_history_quality.excluded_evidence`), `0014` (widens
+  `descriptive_score`/`qualification_score` to `Numeric(20,15)`), `0015`
+  (adds nullable `wallet_score_snapshots.history_id` FK). New
+  `src/argus/wallets/acquisition.py` (real acquisition-walk execution and
+  persistence, composing existing `acquire_historical_transactions` +
+  `ChainProvider.get_token_accounts` + the existing parser/recorder) and
+  new `src/argus/domain/wallet_acquisition_runs.py`. `qualification_
+  service.py` rewritten: one shared `_filter_swaps_by_as_of()` step;
+  score/history/position idempotency searches changed from "latest row"
+  to "full scoped-content match across all candidate rows" (the
+  `wallet_positions` case was found during this round's own adversarial
+  test-writing, not separately named by the instruction, but the same bug
+  class covered by its own acceptance text); tier lifecycle now computes
+  the FROM-state as "the tier as of `now`," not the wallet's global-latest
+  tier, and only advances the denormalized `current_tier` cache when `now`
+  is at or after the wallet's own global-latest transition, with an
+  exact-replay guard against a duplicate transition; computed scores are
+  quantized to `Numeric(20,15)`'s own 15-fractional-digit precision
+  immediately after computation, before any consumer (persistence,
+  returned result, tier decision) sees the value. `position_
+  reconstruction.py` gained an immutable `swap_id` final sort tie-break.
+  `scoring.py`'s `compute_position_stats()` gates all currency-valued
+  aggregates to `None` on mixed-quote-asset closed positions and gates
+  `max_drawdown` to `None` on any unknown `final_exit_at`, with
+  `round_trip_index` added as a same-token/same-instant drawdown
+  tie-break. `src/argus/cli.py`'s `--acquisition-manifest-file` removed
+  entirely, replaced by `--acquisition-run-id` and a new `argus wallets
+  acquire-history` command. 6 new tests in new
+  `tests/integration/test_wallet_acquisition.py`, 4 new unit tests
+  (P3-R3/P3-R5), 4 new migration tests (P3-R6a), 7 new integration tests
+  (1 P3-R1/P3-R2, 6 P3-R6b). `docs/BUILD_STATE.md` gained a new
+  "3 (remediation round 2)" phase-history row;
+  `last_orchestrator_approved_phase`/`approved_commit` remain
+  `2`/`a13ba2ab8729a08de3c571b7b12c32cc3f14c56b` -- this instruction
+  approves no phase. 759 tests passing (up from 738), ruff+mypy+format
+  clean, migration-from-zero/upgrade-from-already-0011/downgrade-then-
+  reupgrade clean through 0015, 12/12 real-chain fixtures ok, secret scan
+  clean on this round's 20 changed files. The accepted
+  `PHASE_3_CANDIDATE_SAMPLE_BLOCKED` result is unchanged, per this
+  instruction's own explicit non-blocking disposition of that item. See
+  `orchestration/checkpoints/phase_3_remediation_2.md` for the full
+  disposition; the paired bundle
+  (`orchestration/bundles/phase_3_remediation_2.txt`) embeds the raw
+  stdout and exit status of every required command verbatim, per this
+  instruction's own E1 requirement; historical
+  `orchestration/checkpoints/phase_3.md`/`phase_3_remediation.md` and
+  their bundles are left byte-for-byte unmodified, preserved as evidence.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT

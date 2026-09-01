@@ -99,6 +99,16 @@ class WalletHistoryQuality(Base):
     # LIVE_ACQUISITION_WALK with a real, structured AcquisitionManifest.
     acquisition_manifest: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # P3-R1 remediation round 2 (`argus-phase-3-remediation-002`): every
+    # swap excluded from this assessment's own usable-evidence set because
+    # its economic timestamp (block_time) is later than the score's as_of
+    # -- a list of {"swap_id": ..., "reason": "FUTURE_ECONOMIC_TIMESTAMP"}
+    # entries. Never empty-vs-populated by omission: always `[]` when
+    # nothing was excluded, never NULL. The raw swap row itself is never
+    # deleted or mutated -- this is a record of what was excluded and why,
+    # not a deletion log.
+    excluded_evidence: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

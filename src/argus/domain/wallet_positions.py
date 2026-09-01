@@ -104,9 +104,12 @@ class WalletPosition(Base):
             "length(quote_asset_mint) > 0", name="ck_wallet_positions_quote_asset_nonempty"
         ),
         CheckConstraint("partial_exit_count >= 0", name="ck_wallet_positions_partial_exit_count"),
-        CheckConstraint("round_trip_index >= 0", name="ck_wallet_positions_round_trip_index"),
         CheckConstraint(
-            "length(input_manifest_digest) > 0",
+            "round_trip_index IS NULL OR round_trip_index >= 0",
+            name="ck_wallet_positions_round_trip_index",
+        ),
+        CheckConstraint(
+            "input_manifest_digest IS NULL OR length(input_manifest_digest) > 0",
             name="ck_wallet_positions_input_manifest_digest_nonempty",
         ),
     )
@@ -125,8 +128,15 @@ class WalletPosition(Base):
     )
 
     quote_asset_mint: Mapped[str] = mapped_column(String(64), nullable=False)
-    round_trip_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    input_manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Nullable (P3-R6a, `argus-phase-3-remediation-002`): a legacy row
+    # computed before this provenance tracking existed has no honest value
+    # to backfill here and is preserved as-is, never deleted or given a
+    # fabricated digest/index. Every row written by the current production
+    # path (`qualification_service.py`) always populates both fields for
+    # real -- this is a schema-level allowance for un-recomputable
+    # history, never a relaxation of what new writes must provide.
+    round_trip_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_manifest_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     first_entry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_entry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

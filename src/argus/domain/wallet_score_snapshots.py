@@ -69,7 +69,7 @@ class WalletScoreSnapshot(FullIdentityMixin, Base):
             "length(sample_gate_reason) > 0", name="ck_wallet_score_sample_gate_reason_nonempty"
         ),
         CheckConstraint(
-            "length(input_manifest_digest) > 0",
+            "input_manifest_digest IS NULL OR length(input_manifest_digest) > 0",
             name="ck_wallet_score_input_manifest_digest_nonempty",
         ),
         *full_identity_check_constraints("wallet_score_snapshots"),
@@ -85,8 +85,32 @@ class WalletScoreSnapshot(FullIdentityMixin, Base):
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     score_version: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
-    descriptive_score: Mapped[Decimal | None] = mapped_column(Numeric(6, 3), nullable=True)
-    qualification_score: Mapped[Decimal | None] = mapped_column(Numeric(6, 3), nullable=True)
+    # P3-R6b (`argus-phase-3-remediation-002`): binds this score's own
+    # identity to the exact wallet_history_quality row (and therefore its
+    # acquisition manifest, reason, provider set, and boundary) that
+    # justified it -- since wallet_history_quality is itself append-only,
+    # a changed history reason/manifest/provider/coverage always produces
+    # a different history_id, so two scores computed from genuinely
+    # different history evidence can never be mistaken for the same
+    # decision even when their final numbers happen to match. Nullable
+    # for the same reason wallet_positions' new provenance columns are
+    # (P3-R6a): a legacy row computed before this binding existed has no
+    # honest value to backfill.
+    history_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("wallet_history_quality.history_id"), nullable=True
+    )
+
+    # Numeric(20, 15) (P3-R6b, `argus-phase-3-remediation-002`): the
+    # original Numeric(6, 3) silently truncated a real, unrounded Decimal
+    # computation (weighted sums/divisions genuinely produce more than 3
+    # fractional digits) to 3 decimal places -- comparing that truncated
+    # persisted value against the fresh, unrounded in-memory score on an
+    # exact replay was spuriously unequal, defeating idempotency. This
+    # width comfortably holds the [0, 100]-clamped score with deep
+    # fractional precision intact -- the value stored, returned, and used
+    # for the tier decision are now always byte-identical.
+    descriptive_score: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
+    qualification_score: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
 
     # {"selection_alpha": ..., "consistency": ..., "entry_timing": ...,
     #  "forward_information": ..., "risk_adjusted_return": ...,
@@ -116,7 +140,11 @@ class WalletScoreSnapshot(FullIdentityMixin, Base):
     eligible_for_qualification: Mapped[bool] = mapped_column(Boolean, nullable=False)
     sample_gate_reason: Mapped[str] = mapped_column(Text, nullable=False)
 
-    input_manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Nullable (P3-R6a, `argus-phase-3-remediation-002`): a legacy row
+    # written before this provenance tracking existed is preserved as-is
+    # rather than deleted or given a fabricated digest. Every row written
+    # by the current production path always populates a real digest.
+    input_manifest_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

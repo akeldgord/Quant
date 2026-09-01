@@ -62,6 +62,9 @@ from . import (
     tokens as tokens,
 )
 from . import (
+    wallet_acquisition_runs as wallet_acquisition_runs,
+)
+from . import (
     wallet_cluster_links as wallet_cluster_links,
 )
 from . import (

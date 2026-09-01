@@ -10,15 +10,16 @@ findings P3-R1, P3-R2, and P3-R3. Migration 0010 itself is never rewritten
 (the instruction's own explicit "do not rewrite migration 0010" -- this
 adds the minimal additional columns those three findings require:
 
-- ``wallet_positions.round_trip_index`` (int, >= 0) and
-  ``input_manifest_digest`` (SHA-256 hex, non-empty): P3-R3's stable
-  round-trip identity and raw-evidence-reference digest, so a full close
-  then reopen of the same token is two separately identified rows, not
-  one merged lifetime aggregate.
+- ``wallet_positions.round_trip_index`` (int, >= 0, nullable) and
+  ``input_manifest_digest`` (SHA-256 hex, non-empty when present,
+  nullable): P3-R3's stable round-trip identity and raw-evidence-reference
+  digest, so a full close then reopen of the same token is two separately
+  identified rows, not one merged lifetime aggregate.
 - ``wallet_score_snapshots.input_manifest_digest`` (SHA-256 hex,
-  non-empty): P3-R1/P3-R6's stable input-manifest digest binding a score
-  to the exact, sorted, point-in-time-bounded evidence set that produced
-  it -- part of the replay-idempotency identity, not just metadata.
+  non-empty when present, nullable): P3-R1/P3-R6's stable input-manifest
+  digest binding a score to the exact, sorted, point-in-time-bounded
+  evidence set that produced it -- part of the replay-idempotency
+  identity, not just metadata.
 - ``wallet_history_quality.acquisition_manifest`` (JSONB, nullable):
   P3-R2's verified, structured acquisition-run manifest a HIGH/MEDIUM
   completeness judgment must now be traceable to, never a bare caller-
@@ -29,22 +30,35 @@ adds the minimal additional columns those three findings require:
   round-trip PnL over estimated NET lifetime P&L, not gross positive
   gains) is no longer bounded to ``[0, 1]``.
 
-The three new NOT NULL columns cannot be backfilled honestly (no
-retroactive round_trip_index/input_manifest_digest can be derived for a
-position/score row computed under the pre-remediation code, since that
-code did not track per-round-trip evidence at all). Per this
-instruction's own explicit "do not rewrite migration 0010" combined with
-"correct ... quote-safe weighted-average inventory," the only honest
-choice is to clear the derived, always-recomputable Phase 3 decision
-tables this remediation directly changes the shape of
-(``wallet_positions``, ``wallet_score_snapshots``, ``wallet_metrics_
-snapshots``, ``wallet_tier_history``) and their denormalized
-``wallets.current_tier`` cache -- every one of these is a derived
-artifact `argus wallets reconstruct-and-score` fully regenerates from the
-still-untouched raw evidence (``swaps``, ``wallets`` identity rows,
-``wallet_discovery_events``, ``early_buyers``, ``wallet_cluster_links``),
-never itself raw evidence. This is disclosed explicitly in the
-remediation checkpoint, not silently done.
+REMEDIATION-002 AMENDMENT (P3-R6a): the original version of this
+UNAPPROVED migration made ``round_trip_index``/``input_manifest_digest``
+``NOT NULL`` and paired that with ``DELETE FROM wallet_tier_history``,
+``DELETE FROM wallet_score_snapshots``, ``DELETE FROM
+wallet_metrics_snapshots``, ``DELETE FROM wallet_positions``, and
+``UPDATE wallets SET current_tier = NULL`` in ``upgrade()`` -- an
+independent audit (``argus-phase-3-remediation-audit-001``) correctly
+found this an irreversible loss of historical decision rows, a direct
+integrity regression against MASTER_SPEC's own append-only-history
+requirement (never merely an environmental/disclosed-but-acceptable
+tradeoff). Per orchestrator instruction ``argus-phase-3-remediation-002``
+(``AUTHORIZED_ACTION:
+CLOSE_REMAINING_FROZEN_PHASE_3_DEFECTS_AND_MIGRATION_REGRESSION``,
+explicit narrow change-control authorization to amend this still-
+UNAPPROVED migration in place -- never migration 0010, never any
+orchestrator-approved migration), the DELETE/UPDATE statements are
+removed and the three new columns are now nullable: a legacy row
+computed under pre-remediation code simply carries ``NULL`` for these
+new provenance fields rather than being destroyed or having a fabricated
+value invented for it. The production write path (``qualification_
+service.py``) still always populates real values for every newly
+computed row -- nullability is a schema-level allowance for honestly
+un-recomputable legacy history, never a relaxation of what new writes
+must provide. See migration 0012 for the companion fix required for a
+database that already applied this migration's original (destructive,
+NOT-NULL) form before this amendment landed -- such a database's
+``alembic_version`` is already stamped ``0011`` and will never re-run
+this file's ``upgrade()``, so its columns are still physically
+``NOT NULL`` at the DB level and must be separately widened.
 """
 
 from __future__ import annotations
@@ -62,41 +76,38 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Derived-artifact tables this remediation reshapes -- cleared, never
-    # raw evidence. FK-safe order: tier history references score
-    # snapshots via a nullable source_score_id.
-    op.execute("DELETE FROM wallet_tier_history")
-    op.execute("DELETE FROM wallet_score_snapshots")
-    op.execute("DELETE FROM wallet_metrics_snapshots")
-    op.execute("DELETE FROM wallet_positions")
-    op.execute("UPDATE wallets SET current_tier = NULL")
-
+    # P3-R6a: no data is deleted or reset here. Every existing
+    # wallet_positions/wallet_score_snapshots/wallet_metrics_snapshots/
+    # wallet_tier_history row and wallets.current_tier value is preserved
+    # byte-for-byte; the new columns below are added nullable so a legacy
+    # row simply has no value for them.
     op.add_column(
         "wallet_positions",
-        sa.Column("round_trip_index", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("round_trip_index", sa.Integer(), nullable=True),
     )
-    op.alter_column("wallet_positions", "round_trip_index", server_default=None)
     op.add_column(
         "wallet_positions",
-        sa.Column("input_manifest_digest", sa.String(length=64), nullable=False),
+        sa.Column("input_manifest_digest", sa.String(length=64), nullable=True),
     )
     op.create_check_constraint(
-        "ck_wallet_positions_round_trip_index", "wallet_positions", "round_trip_index >= 0"
+        "ck_wallet_positions_round_trip_index",
+        "wallet_positions",
+        "round_trip_index IS NULL OR round_trip_index >= 0",
     )
     op.create_check_constraint(
         "ck_wallet_positions_input_manifest_digest_nonempty",
         "wallet_positions",
-        "length(input_manifest_digest) > 0",
+        "input_manifest_digest IS NULL OR length(input_manifest_digest) > 0",
     )
 
     op.add_column(
         "wallet_score_snapshots",
-        sa.Column("input_manifest_digest", sa.String(length=64), nullable=False),
+        sa.Column("input_manifest_digest", sa.String(length=64), nullable=True),
     )
     op.create_check_constraint(
         "ck_wallet_score_input_manifest_digest_nonempty",
         "wallet_score_snapshots",
-        "length(input_manifest_digest) > 0",
+        "input_manifest_digest IS NULL OR length(input_manifest_digest) > 0",
     )
 
     op.add_column(
@@ -148,5 +159,6 @@ def downgrade() -> None:
     op.drop_column("wallet_positions", "input_manifest_digest")
     op.drop_column("wallet_positions", "round_trip_index")
 
-    # The DELETE/UPDATE data changes made in upgrade() are not reversible
-    # (derived data, not schema) -- downgrade only reverses the schema.
+    # No data was deleted in upgrade() (P3-R6a) -- this downgrade only
+    # reverses the schema (drops the new nullable columns/constraints and
+    # narrows the two Numeric columns back), never touches row data.

@@ -113,6 +113,21 @@ class PositionForScoring:
     # filtering -- a closed round trip's own exit time, never approximated
     # by last_entry_at (an entry-side timestamp).
     final_exit_at: datetime | None = None
+    # P3-R3/P3-R5 remediation round 2: the currency this round trip's own
+    # realized_pnl_quote/entry_value_quote are actually denominated in
+    # (e.g. "SOL" vs a USDC mint) -- required so currency-valued
+    # aggregates (net PnL, profit factor, drawdown, lottery contribution)
+    # are never silently summed across incompatible units. Defaults to
+    # "" (never None, so an omitted value groups as its own distinct
+    # "unknown unit" bucket rather than silently matching a real currency).
+    quote_asset_mint: str = ""
+    # A stable identity distinguishing multiple independently-closed round
+    # trips of the SAME token_id (P3-R3) -- token_id alone is not a stable
+    # per-position identity once a token can have more than one round
+    # trip; used only as a deterministic ordering tie-break, never as a
+    # dedup/grouping key (token_id itself remains the grouping key for
+    # distinct-token counts, which count TOKENS, not round trips).
+    round_trip_index: int = 0
     # From argus.domain.early_buyers, when this wallet has a recorded
     # early-buyer row for this token -- None when no such evidence
     # exists (never guessed).
@@ -137,7 +152,10 @@ class PositionStats:
     max_drawdown: Decimal | None
     distinct_profitable_token_count: int
     lottery_dominated: bool
-    total_realized_pnl: Decimal
+    # None when closed positions span more than one distinct quote asset
+    # (P3-R3/P3-R5 remediation round 2) -- never a silently-summed total
+    # across incompatible currencies.
+    total_realized_pnl: Decimal | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -171,7 +189,18 @@ class ScoringResult:
 def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats:
     """Section 40's lottery-dominance/return-distribution metrics, from
     only genuinely CLOSED positions -- an OPEN position has no realized
-    return to include, never estimated from an unknowable current mark."""
+    return to include, never estimated from an unknowable current mark.
+
+    P3-R3/P3-R5 remediation round 2: per-position RETURNS (realized_pnl_
+    quote / entry_value_quote, a dimensionless ratio -- both sides always
+    share the same round trip's own quote asset) remain computable
+    regardless of how many distinct quote assets are present across
+    positions. Currency-VALUED aggregates (net PnL, profit factor,
+    lottery contribution, drawdown) are computable only when every closed
+    position shares exactly one common quote asset -- when two or more
+    distinct quote assets are present, those aggregates are explicitly
+    unavailable (None) rather than silently summed as if numerically
+    comparable (e.g. 1 SOL + 1000 USDC is never computed as 1001)."""
     closed = [
         p
         for p in positions
@@ -188,7 +217,14 @@ def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats
     # one usable CLOSED outcome -- an open position (however many exist)
     # contributes no usable outcome and must never inflate this count.
     distinct_tokens = len({p.token_id for p in closed})
-    total_pnl = sum((p.realized_pnl_quote or Decimal(0) for p in closed), Decimal(0))
+
+    distinct_quote_assets = {p.quote_asset_mint for p in closed}
+    single_currency = len(distinct_quote_assets) <= 1
+    total_pnl: Decimal | None = (
+        sum((p.realized_pnl_quote or Decimal(0) for p in closed), Decimal(0))
+        if single_currency
+        else None
+    )
 
     if not returns:
         return PositionStats(
@@ -230,56 +266,81 @@ def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats
     trimmed_mean = Decimal(sum(trimmed)) / Decimal(len(trimmed)) if trimmed else None
     winsorized_mean = Decimal(sum(winsorized)) / Decimal(len(winsorized)) if winsorized else None
 
-    gains = [
-        p.realized_pnl_quote
-        for p in closed
-        if p.realized_pnl_quote is not None and p.realized_pnl_quote > 0
-    ]
-    losses = [
-        -p.realized_pnl_quote
-        for p in closed
-        if p.realized_pnl_quote is not None and p.realized_pnl_quote < 0
-    ]
-    gross_gain = sum(gains, Decimal(0))
-    gross_loss = sum(losses, Decimal(0))
-    profit_factor = (gross_gain / gross_loss) if gross_loss > 0 else None
+    # Currency-valued aggregates below are computable only when every
+    # closed position shares one common quote asset (single_currency);
+    # otherwise they are explicitly None/False -- unavailable, never a
+    # silently-summed sum-of-incompatible-units.
+    if single_currency:
+        gains = [
+            p.realized_pnl_quote
+            for p in closed
+            if p.realized_pnl_quote is not None and p.realized_pnl_quote > 0
+        ]
+        losses = [
+            -p.realized_pnl_quote
+            for p in closed
+            if p.realized_pnl_quote is not None and p.realized_pnl_quote < 0
+        ]
+        gross_gain = sum(gains, Decimal(0))
+        gross_loss = sum(losses, Decimal(0))
+        profit_factor = (gross_gain / gross_loss) if gross_loss > 0 else None
 
-    # P3-R5: the frozen lottery-dominance ratio is largest-single-
-    # position-PnL divided by estimated NET lifetime P&L (total_pnl,
-    # gains and losses both included) -- never divided by gross positive
-    # gains alone, which understates the ratio whenever real losses
-    # exist elsewhere (a wallet with +100/-90 nets only +10, so its
-    # single +100 winner is actually 10x its whole net result, not 100%
-    # of gross gains). Undefined (None, not zero) when net lifetime P&L
-    # is not positive -- "not a positive lifetime-profit contribution"
-    # cannot be described as a fraction of a non-positive total.
-    pnls_sorted_desc = sorted((p.realized_pnl_quote or Decimal(0) for p in closed), reverse=True)
-    if total_pnl > 0 and pnls_sorted_desc and pnls_sorted_desc[0] > 0:
-        largest_trade_contribution: Decimal | None = pnls_sorted_desc[0] / total_pnl
-        top_three_contribution: Decimal | None = (
-            sum(p for p in pnls_sorted_desc[:3] if p > 0) / total_pnl
+        # P3-R5: the frozen lottery-dominance ratio is largest-single-
+        # position-PnL divided by estimated NET lifetime P&L (total_pnl,
+        # gains and losses both included) -- never divided by gross
+        # positive gains alone, which understates the ratio whenever real
+        # losses exist elsewhere (a wallet with +100/-90 nets only +10,
+        # so its single +100 winner is actually 10x its whole net result,
+        # not 100% of gross gains). Undefined (None, not zero) when net
+        # lifetime P&L is not positive -- "not a positive lifetime-profit
+        # contribution" cannot be described as a fraction of a
+        # non-positive total.
+        pnls_sorted_desc = sorted(
+            (p.realized_pnl_quote or Decimal(0) for p in closed), reverse=True
         )
+        if total_pnl is not None and total_pnl > 0 and pnls_sorted_desc and pnls_sorted_desc[0] > 0:
+            largest_trade_contribution: Decimal | None = pnls_sorted_desc[0] / total_pnl
+            top_three_contribution: Decimal | None = (
+                sum(p for p in pnls_sorted_desc[:3] if p > 0) / total_pnl
+            )
+        else:
+            largest_trade_contribution = None
+            top_three_contribution = None
+
+        # Max drawdown across the closed-trade equity curve in
+        # realization (exit) order -- final_exit_at, never last_entry_at
+        # (an entry-side timestamp that does not reflect when a round
+        # trip's outcome was actually realized). P3-R5 remediation round
+        # 2: a position with an unknown final_exit_at has no honest place
+        # in this order -- rather than substituting a naive datetime.min
+        # sentinel (which crashes comparing against real timezone-aware
+        # exit times) or silently dropping it, the WHOLE drawdown metric
+        # is reported unavailable (None) whenever any closed position's
+        # chronology cannot be established; the order-independent metrics
+        # above are entirely unaffected.
+        if any(p.final_exit_at is None for p in closed):
+            max_dd: Decimal | None = None
+        else:
+            ordered_by_exit = [
+                p.realized_pnl_quote or Decimal(0)
+                for p in sorted(
+                    closed, key=lambda p: (p.final_exit_at, p.token_id, p.round_trip_index)
+                )
+            ]
+            running = Decimal(0)
+            peak = Decimal(0)
+            max_dd = Decimal(0)
+            for pnl in ordered_by_exit:
+                running += pnl
+                peak = max(peak, running)
+                if peak > 0:
+                    drawdown = (peak - running) / peak
+                    max_dd = max(max_dd, drawdown)
     else:
+        profit_factor = None
         largest_trade_contribution = None
         top_three_contribution = None
-
-    # Max drawdown across the closed-trade equity curve in realization
-    # (exit) order -- final_exit_at, never last_entry_at (an entry-side
-    # timestamp that does not reflect when a round trip's outcome was
-    # actually realized).
-    ordered_by_exit = [
-        p.realized_pnl_quote or Decimal(0)
-        for p in sorted(closed, key=lambda p: (p.final_exit_at or datetime.min, p.token_id))
-    ]
-    running = Decimal(0)
-    peak = Decimal(0)
-    max_dd = Decimal(0)
-    for pnl in ordered_by_exit:
-        running += pnl
-        peak = max(peak, running)
-        if peak > 0:
-            drawdown = (peak - running) / peak
-            max_dd = max(max_dd, drawdown)
+        max_dd = None
 
     distinct_profitable_tokens = len(
         {p.token_id for p in closed if (p.realized_pnl_quote or 0) > 0}

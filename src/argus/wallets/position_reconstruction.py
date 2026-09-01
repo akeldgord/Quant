@@ -241,6 +241,15 @@ def reconstruct_positions_for_wallet(
     # which are randomly-assigned/ingestion-time values that would make
     # same-slot tie order non-reproducible across an independent re-parse
     # of the same raw evidence -- restart/replay determinism, section 35).
+    # P3-R3 remediation round 2: swap_id (immutable once assigned, unlike
+    # first_seen_at/event_id which are ingestion-time-derived) is the
+    # final tie-break -- two swaps sharing the exact same (slot,
+    # classification, mints, raw amounts) tuple (a real possibility, e.g.
+    # two identical-sized fills in the same slot) previously left the
+    # original input list's own order as the deciding factor, so a caller
+    # supplying the identical evidence set in a different order (or a
+    # different query plan) could silently produce different first/last
+    # entry times and a different contributing_swap_ids order.
     ordered = sorted(
         known_swaps,
         key=lambda s: (
@@ -250,6 +259,7 @@ def reconstruct_positions_for_wallet(
             s.output_mint or "",
             s.input_amount_raw or 0,
             s.output_amount_raw or 0,
+            str(s.swap_id),
         ),
     )
     for swap in ordered:
