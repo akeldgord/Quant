@@ -28,6 +28,19 @@ Never updated in place: a new score for the same wallet is a new row
 ``created_at``/``as_of`` distinguish point-in-time snapshots under the
 same version). Downstream tier-lifecycle logic always reads the latest
 row per wallet.
+
+``input_manifest_digest`` (Phase 3 remediation, `argus-phase-3-remediation-001`,
+finding P3-R1/P3-R6): a stable SHA-256 hex digest binding this exact
+score to ``as_of`` plus the precise, sorted set of raw evidence row
+identities (swaps, discovery events, early-buyer rows, cluster links)
+that were actually visible at that knowledge-time cutoff and fed this
+computation -- "persist an input-manifest digest and enough stable input
+references/counts to reproduce the score" (this instruction's own
+requirement). Two runs that land on the same final numbers from a
+genuinely different evidence set must never be treated as the same
+snapshot; this digest is part of the replay-idempotency identity
+comparison (``argus.wallets.qualification_service._score_equal``), not
+merely descriptive metadata.
 """
 
 from __future__ import annotations
@@ -54,6 +67,10 @@ class WalletScoreSnapshot(FullIdentityMixin, Base):
         CheckConstraint("length(score_version) > 0", name="ck_wallet_score_version_nonempty"),
         CheckConstraint(
             "length(sample_gate_reason) > 0", name="ck_wallet_score_sample_gate_reason_nonempty"
+        ),
+        CheckConstraint(
+            "length(input_manifest_digest) > 0",
+            name="ck_wallet_score_input_manifest_digest_nonempty",
         ),
         *full_identity_check_constraints("wallet_score_snapshots"),
     )
@@ -98,6 +115,8 @@ class WalletScoreSnapshot(FullIdentityMixin, Base):
     # wallet not A/S" question never requires re-deriving the gate.
     eligible_for_qualification: Mapped[bool] = mapped_column(Boolean, nullable=False)
     sample_gate_reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    input_manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

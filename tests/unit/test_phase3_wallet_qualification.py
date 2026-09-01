@@ -1,10 +1,11 @@
 """Phase 3 (WALLET RECONSTRUCTION + UNBIASED QUALIFICATION) pure-function
 tests -- the DB-persistence halves of the same required scenarios live in
-``tests/integration/test_phase3_wallet_qualification.py``. Per
-`argus-phase-3-001`'s own "cover the financial/data invariants deeply,
-not dozens of superficial tests" instruction, this file implements
-exactly the 10 required test categories (regression is covered by the
-full repository suite, not a dedicated function here), nothing more.
+``tests/integration/test_phase3_wallet_qualification.py``. Covers the
+original `argus-phase-3-001` required categories (updated for the
+`argus-phase-3-remediation-001` API changes) plus the new P3-R1/P3-R2/
+P3-R3/P3-R5/P3-R6 pure-function prospective acceptance tests. Per both
+instructions' own "cover the financial/data invariants deeply, not dozens
+of superficial tests" guidance.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from argus.tokens.historical_acquisition import STATUS_COMPLETE, STATUS_PARTIAL
 from argus.wallets.history_reconstruction import (
     EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
     EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+    AcquisitionManifest,
+    TokenAccountCoverage,
     assess_wallet_history,
 )
 from argus.wallets.position_reconstruction import (
@@ -42,6 +45,7 @@ from argus.wallets.scoring import (
 WALLET = "TestWallet1111111111111111111111111111111"
 SOL = "SOL"
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+TOKEN_MINT = "TOKENmint1111111111111111111111111111111"
 
 
 @dataclasses.dataclass
@@ -60,29 +64,47 @@ class _FakeSwap:
     wallet_address: str = WALLET
     input_amount_raw: int | None = None
     output_amount_raw: int | None = None
+    swap_id: str = "swap-0"
 
 
-def _buy(slot: int, *, token_qty: str, sol_qty: str, at: datetime) -> _FakeSwap:
+def _buy(slot: int, *, token_qty: str, sol_qty: str, at: datetime, swap_id: str = "") -> _FakeSwap:
     return _FakeSwap(
         classification="SWAP_SIMPLE",
         input_mint=SOL,
         input_amount_ui=Decimal(sol_qty),
-        output_mint="TOKENmint1111111111111111111111111111111",
+        output_mint=TOKEN_MINT,
         output_amount_ui=Decimal(token_qty),
         slot=slot,
         block_time=at,
+        swap_id=swap_id or f"buy-{slot}",
     )
 
 
-def _sell(slot: int, *, token_qty: str, sol_qty: str, at: datetime) -> _FakeSwap:
+def _sell(slot: int, *, token_qty: str, sol_qty: str, at: datetime, swap_id: str = "") -> _FakeSwap:
     return _FakeSwap(
         classification="SWAP_SIMPLE",
-        input_mint="TOKENmint1111111111111111111111111111111",
+        input_mint=TOKEN_MINT,
         input_amount_ui=Decimal(token_qty),
         output_mint=SOL,
         output_amount_ui=Decimal(sol_qty),
         slot=slot,
         block_time=at,
+        swap_id=swap_id or f"sell-{slot}",
+    )
+
+
+def _buy_usdc(
+    slot: int, *, token_qty: str, usdc_qty: str, at: datetime, swap_id: str = ""
+) -> _FakeSwap:
+    return _FakeSwap(
+        classification="SWAP_SIMPLE",
+        input_mint=USDC,
+        input_amount_ui=Decimal(usdc_qty),
+        output_mint=TOKEN_MINT,
+        output_amount_ui=Decimal(token_qty),
+        slot=slot,
+        block_time=at,
+        swap_id=swap_id or f"buy-usdc-{slot}",
     )
 
 
@@ -91,11 +113,15 @@ def _transfer_in(slot: int, *, token_qty: str, at: datetime) -> _FakeSwap:
         classification="TRANSFER_IN",
         input_mint=None,
         input_amount_ui=None,
-        output_mint="TOKENmint1111111111111111111111111111111",
+        output_mint=TOKEN_MINT,
         output_amount_ui=Decimal(token_qty),
         slot=slot,
         block_time=at,
+        swap_id=f"transfer-{slot}",
     )
+
+
+_FAR_FUTURE_AS_OF = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=3650)
 
 
 # ---------------------------------------------------------------------
@@ -116,7 +142,7 @@ def test_p3_weighted_average_ledger_buys_partial_sell_buy_sell() -> None:
         _sell(4, token_qty="110", sol_qty="330", at=t0 + timedelta(hours=3)),
     ]
 
-    positions = reconstruct_positions_for_wallet(swaps)  # type: ignore[arg-type]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
     assert len(positions) == 1
     pos = positions[0]
 
@@ -129,6 +155,7 @@ def test_p3_weighted_average_ledger_buys_partial_sell_buy_sell() -> None:
     assert pos.final_exit_at == t0 + timedelta(hours=3)
     assert pos.confidence == CONFIDENCE_HIGH
     assert pos.unrealized_pnl_quote == Decimal(0)  # fully closed, no open exposure
+    assert pos.round_trip_index == 0
 
 
 # ---------------------------------------------------------------------
@@ -143,7 +170,7 @@ def test_p3_unresolved_transfer_never_becomes_a_fabricated_buy() -> None:
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     swaps = [_transfer_in(1, token_qty="500", at=t0)]
 
-    positions = reconstruct_positions_for_wallet(swaps)  # type: ignore[arg-type]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
     assert len(positions) == 1
     pos = positions[0]
     assert pos.confidence == CONFIDENCE_UNRESOLVED
@@ -164,7 +191,7 @@ def test_p3_transfer_alongside_genuine_swaps_downgrades_confidence_not_quantity(
         _transfer_in(2, token_qty="5", at=t0 + timedelta(hours=1)),
         _sell(3, token_qty="10", sol_qty="20", at=t0 + timedelta(hours=2)),
     ]
-    positions = reconstruct_positions_for_wallet(swaps)  # type: ignore[arg-type]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
     assert len(positions) == 1
     pos = positions[0]
     assert pos.confidence == CONFIDENCE_MEDIUM
@@ -183,7 +210,7 @@ def test_p3_oversell_beyond_reconstructed_holdings_downgrades_to_low_confidence(
         _buy(1, token_qty="10", sol_qty="10", at=t0),
         _sell(2, token_qty="30", sol_qty="60", at=t0 + timedelta(hours=1)),
     ]
-    positions = reconstruct_positions_for_wallet(swaps)  # type: ignore[arg-type]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
     pos = positions[0]
     assert pos.confidence == CONFIDENCE_LOW
 
@@ -193,8 +220,11 @@ def test_p3_oversell_beyond_reconstructed_holdings_downgrades_to_low_confidence(
 # ---------------------------------------------------------------------
 
 
-def _closed_position(token_id: str, *, pnl: str, value: str = "10") -> PositionForScoring:
+def _closed_position(
+    token_id: str, *, pnl: str, value: str = "10", final_exit_at: datetime | None = None
+) -> PositionForScoring:
     now = datetime(2026, 6, 1, tzinfo=UTC)
+    exit_at = final_exit_at if final_exit_at is not None else now - timedelta(days=10)
     return PositionForScoring(
         token_id=token_id,
         confidence=CONFIDENCE_HIGH,
@@ -204,6 +234,7 @@ def _closed_position(token_id: str, *, pnl: str, value: str = "10") -> PositionF
         peak_profit_capture=Decimal("0.5"),
         first_entry_at=now - timedelta(days=20),
         last_entry_at=now - timedelta(days=10),
+        final_exit_at=exit_at,
     )
 
 
@@ -265,6 +296,7 @@ def test_p3_discovery_contamination_never_leaks_through_recency_or_tier_gate() -
         peak_profit_capture=Decimal("1.0"),
         first_entry_at=now - timedelta(hours=1),
         last_entry_at=now,  # maximally recent -- would inflate recency if it leaked
+        final_exit_at=now,
     )
 
     result = score_wallet(
@@ -321,26 +353,90 @@ def test_p3_low_unknown_history_completeness_blocks_eligibility_identical_positi
     assert low.qualification_score != high.qualification_score
 
 
-def test_p3_history_assessment_derives_from_real_acquisition_status_not_a_claim() -> None:
-    """The completeness tier is derived from the REAL evidence-acquisition
-    method, never a bare caller assertion."""
+# ---------------------------------------------------------------------
+# P3-R2: history completeness is evidence-bound, never caller-asserted.
+# ---------------------------------------------------------------------
+
+
+def _manifest(
+    *,
+    wallet_walk_status: str,
+    token_accounts_enumerated: bool = False,
+    associated_token_accounts: tuple[TokenAccountCoverage, ...] = (),
+    known_gaps: str | None = None,
+) -> AcquisitionManifest:
+    return AcquisitionManifest(
+        wallet_walk_status=wallet_walk_status,
+        token_accounts_enumerated=token_accounts_enumerated,
+        associated_token_accounts=associated_token_accounts,
+        provider_set="test-fake-provider",
+        known_gaps=known_gaps,
+        evidence_reference="test-evidence",
+    )
+
+
+def test_p3_history_assessment_derives_from_real_acquisition_manifest_not_a_claim() -> None:
+    """The completeness tier is derived from a REAL, structured
+    AcquisitionManifest, never a bare caller-typed status string (P3-R2:
+    the ``--acquisition-status COMPLETE`` free-text path no longer
+    exists in this function's signature at all)."""
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     swaps = [_buy(1, token_qty="10", sol_qty="10", at=t0)]
 
-    complete_walk = assess_wallet_history(
+    # A complete wallet-address walk with NO token-account enumeration
+    # at all: required test 3, "a complete wallet-address walk with
+    # missing token-account enumeration is not HIGH."
+    wallet_only_complete = assess_wallet_history(
         swaps,  # type: ignore[arg-type]
         wallet_address=WALLET,
         evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
-        acquisition_status=STATUS_COMPLETE,
+        acquisition_manifest=_manifest(wallet_walk_status=STATUS_COMPLETE),
     )
-    assert complete_walk.history_completeness == "HIGH"
+    assert wallet_only_complete.history_completeness == "MEDIUM"
+
+    # A complete wallet walk PLUS complete enumeration and complete
+    # histories for every known associated token account: required test
+    # 3's HIGH case.
+    fully_covered = assess_wallet_history(
+        swaps,  # type: ignore[arg-type]
+        wallet_address=WALLET,
+        evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+        acquisition_manifest=_manifest(
+            wallet_walk_status=STATUS_COMPLETE,
+            token_accounts_enumerated=True,
+            associated_token_accounts=(
+                TokenAccountCoverage(mint="acct-1", status=STATUS_COMPLETE),
+                TokenAccountCoverage(mint="acct-2", status=STATUS_COMPLETE),
+            ),
+        ),
+    )
+    assert fully_covered.history_completeness == "HIGH"
+
+    # One partial/failed account walk lowers completeness with the exact
+    # gap recorded: required test 3's 4th assertion.
+    one_incomplete_account = assess_wallet_history(
+        swaps,  # type: ignore[arg-type]
+        wallet_address=WALLET,
+        evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+        acquisition_manifest=_manifest(
+            wallet_walk_status=STATUS_COMPLETE,
+            token_accounts_enumerated=True,
+            associated_token_accounts=(
+                TokenAccountCoverage(mint="acct-1", status=STATUS_COMPLETE),
+                TokenAccountCoverage(mint="acct-2", status=STATUS_PARTIAL),
+            ),
+        ),
+    )
+    assert one_incomplete_account.history_completeness == "MEDIUM"
+    assert "acct-2" in one_incomplete_account.history_completeness_reason
 
     partial_walk = assess_wallet_history(
         swaps,  # type: ignore[arg-type]
         wallet_address=WALLET,
         evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
-        acquisition_status=STATUS_PARTIAL,
-        acquisition_known_gaps="safety ceiling reached",
+        acquisition_manifest=_manifest(
+            wallet_walk_status=STATUS_PARTIAL, known_gaps="safety ceiling reached"
+        ),
     )
     assert partial_walk.history_completeness == "MEDIUM"
     assert "safety ceiling reached" in partial_walk.history_completeness_reason
@@ -357,7 +453,10 @@ def test_p3_history_assessment_derives_from_real_acquisition_status_not_a_claim(
     )
     assert no_evidence.history_completeness == "UNKNOWN"
 
-    with pytest.raises(ValueError, match="acquisition_status is required"):
+    # The exact P3-R2 defect: no manifest at all under LIVE_ACQUISITION_
+    # WALK must fail closed -- there is no way to pass a bare status
+    # string to manufacture completeness any more.
+    with pytest.raises(ValueError, match="acquisition_manifest is required"):
         assess_wallet_history(
             swaps,  # type: ignore[arg-type]
             wallet_address=WALLET,
@@ -398,17 +497,17 @@ def test_p3_sample_gate_thresholds_are_the_frozen_v1_values() -> None:
 
 
 # ---------------------------------------------------------------------
-# Required test 6: lottery dominance.
+# Required test 6 / P3-R5: lottery dominance, corrected metrics.
 # ---------------------------------------------------------------------
 
 
 def test_p3_lottery_dominance_flag_and_boundary_are_deterministic() -> None:
-    """One position contributing more than 70% of lifetime P&L is
+    """One position contributing more than 70% of NET lifetime P&L is
     flagged LOTTERY_DOMINATED and penalized -- never automatically
     rejected (a flag/penalty, per section 40's own explicit rule)."""
     now = datetime(2026, 6, 1, tzinfo=UTC)
     # 24 small wins (pnl=1 each -> total small gains = 24) + one position
-    # contributing far more than 70% of the positive total.
+    # contributing far more than 70% of net lifetime P&L.
     small_wins = [_closed_position(f"tok-{i}", pnl="1") for i in range(24)]
     dominator = _closed_position("dominator", pnl="1000")
 
@@ -429,8 +528,105 @@ def test_p3_lottery_dominance_flag_and_boundary_are_deterministic() -> None:
     assert balanced.lottery_dominated is False
 
 
+def test_p3_lottery_dominance_uses_net_pnl_not_gross_gains_with_boundary() -> None:
+    """P3-R5: a +100 winner against a -90 loser nets only +10 -- the
+    ratio is 100/10 = 10.0 (1000%), not 100/100 = 1.0 against gross
+    gains alone. The exact 0.70 boundary is not flagged; just above it
+    is."""
+    winner = _closed_position("winner", pnl="100", value="10")
+    loser = _closed_position("loser", pnl="-90", value="10")
+    stats = compute_position_stats([winner, loser])
+    assert stats.total_realized_pnl == Decimal("10")
+    assert stats.largest_trade_contribution_pct == Decimal("100") / Decimal("10")
+    assert stats.lottery_dominated is True
+
+    # Net lifetime P&L <= 0: contribution is null/not-applicable, never
+    # a fabricated fraction of a non-positive total.
+    two_losers = [
+        _closed_position("l1", pnl="-10", value="10"),
+        _closed_position("l2", pnl="-5", value="10"),
+    ]
+    non_positive_net = compute_position_stats(two_losers)
+    assert non_positive_net.largest_trade_contribution_pct is None
+    assert non_positive_net.lottery_dominated is False
+
+    # Exact boundary: a largest-trade-contribution ratio of exactly
+    # 0.70 net is not flagged; a hair above 0.70 is.
+    at_boundary = [
+        _closed_position("big", pnl="70", value="10"),
+        _closed_position("rest", pnl="30", value="10"),
+    ]
+    at = compute_position_stats(at_boundary)
+    assert at.largest_trade_contribution_pct == Decimal("0.70")
+    assert at.lottery_dominated is False
+
+    above_boundary = [
+        _closed_position("big", pnl="71", value="10"),
+        _closed_position("rest", pnl="29", value="10"),
+    ]
+    above = compute_position_stats(above_boundary)
+    assert above.largest_trade_contribution_pct > Decimal("0.70")
+    assert above.lottery_dominated is True
+
+
+def test_p3_drawdown_uses_final_exit_at_order_not_last_entry_at() -> None:
+    """P3-R5: the realization-order equity curve is ordered by
+    ``final_exit_at`` (when an outcome was actually realized), never
+    ``last_entry_at`` (an entry-side timestamp) -- a big loss that
+    exits LAST must actually appear last in the drawdown curve even if
+    its entry-side timestamp sorts earlier."""
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    # entered first (so last_entry_at sorts it first) but exits LAST.
+    late_exit_loss = PositionForScoring(
+        token_id="late-exit",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal("-50"),
+        entry_value_quote=Decimal("10"),
+        peak_profit_capture=Decimal("0"),
+        first_entry_at=base,
+        last_entry_at=base,  # earliest entry
+        final_exit_at=base + timedelta(days=10),  # latest exit
+    )
+    early_exit_win = PositionForScoring(
+        token_id="early-exit",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_CLOSED,
+        realized_pnl_quote=Decimal("100"),
+        entry_value_quote=Decimal("10"),
+        peak_profit_capture=Decimal("1"),
+        first_entry_at=base + timedelta(days=5),
+        last_entry_at=base + timedelta(days=5),  # later entry
+        final_exit_at=base + timedelta(days=6),  # earlier exit
+    )
+    stats = compute_position_stats([late_exit_loss, early_exit_win])
+    # Exit order: win (+100, peak=100, dd=0) then loss (-50, running=50,
+    # dd=(100-50)/100=0.5). If last_entry_at were used instead, the loss
+    # would be ordered first (peak stays 0, no drawdown at all).
+    assert stats.max_drawdown == Decimal("0.5")
+
+
+def test_p3_distinct_tokens_counts_only_closed_usable_outcomes() -> None:
+    """P3-R5: an open position (however many exist) contributes no
+    usable outcome and must never inflate distinct-token eligibility."""
+    open_position = PositionForScoring(
+        token_id="open-tok",
+        confidence=CONFIDENCE_HIGH,
+        status=STATUS_OPEN,
+        realized_pnl_quote=None,
+        entry_value_quote=Decimal("10"),
+        peak_profit_capture=None,
+        first_entry_at=datetime(2026, 1, 1, tzinfo=UTC),
+        last_entry_at=datetime(2026, 1, 1, tzinfo=UTC),
+        final_exit_at=None,
+    )
+    closed_position = _closed_position("closed-tok", pnl="5")
+    stats = compute_position_stats([open_position, closed_position])
+    assert stats.distinct_tokens == 1
+
+
 # ---------------------------------------------------------------------
-# Required test 7: recency/versioning.
+# Required test 7 / P3-R6: recency/versioning, missing-evidence rule.
 # ---------------------------------------------------------------------
 
 
@@ -450,6 +646,7 @@ def test_p3_recency_uses_point_in_time_as_of_never_a_fixed_clock() -> None:
             peak_profit_capture=Decimal("0.5"),
             first_entry_at=entry_time,
             last_entry_at=entry_time,
+            final_exit_at=entry_time,
         )
     ]
 
@@ -468,3 +665,174 @@ def test_p3_recency_uses_point_in_time_as_of_never_a_fixed_clock() -> None:
     assert soon_after.component_values["recency"] == Decimal(100)
     assert long_after.component_values["recency"] == Decimal(0)
     assert soon_after.component_values["recency"] != long_after.component_values["recency"]
+
+
+def test_p3_missing_forward_information_counts_toward_missing_evidence_and_caps_confidence() -> (
+    None
+):
+    """P3-R6: forward_information's known absence counts toward the
+    missing-evidence tally like every other component -- HIGH confidence
+    is therefore structurally unreachable in Phase 3 (an honest,
+    documented consequence, not excluded from the count as the
+    pre-remediation code did). It still contributes its neutral-prior
+    weight to the score itself -- never redistributed."""
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    positions = [_closed_position(f"tok-{i}", pnl="5") for i in range(25)]
+    result = score_wallet(
+        all_positions=positions,
+        discovery_contaminated_token_ids=frozenset(),
+        history_completeness="HIGH",
+        as_of=now,
+    )
+    assert result.component_values["forward_information"] is None
+    assert result.confidence != "HIGH"
+
+
+# ---------------------------------------------------------------------
+# P3-R1: point-in-time firewall -- future-dated evidence fails closed.
+# ---------------------------------------------------------------------
+
+
+def test_p3_future_dated_swap_excluded_from_reconstruction_evidence_preserved() -> None:
+    """A swap whose own chain timestamp is later than ``as_of`` (a
+    malformed/future-dated economic timestamp) is excluded entirely from
+    reconstruction -- it contributes no recency credit and cannot enter
+    qualification -- while the underlying evidence itself is never lost
+    to the caller (the swap object is simply not selected, never
+    mutated or deleted)."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    as_of = t0 + timedelta(days=1)
+    future = t0 + timedelta(days=400)  # far beyond as_of
+
+    buy_swap = _buy(1, token_qty="100", sol_qty="100", at=t0)
+    future_sell = _sell(2, token_qty="100", sol_qty="500", at=future)
+
+    positions = reconstruct_positions_for_wallet([buy_swap, future_sell], as_of=as_of)  # type: ignore[arg-type]
+    assert len(positions) == 1
+    pos = positions[0]
+    # The future sell never executed from this snapshot's perspective --
+    # the position remains OPEN with only the real, past buy counted.
+    assert pos.status == STATUS_OPEN
+    assert pos.entry_quantity == Decimal("100")
+    assert pos.last_entry_at == t0
+    assert pos.realized_pnl_quote == Decimal(0)
+
+    # Both raw swaps are still there for the caller to inspect --
+    # nothing was deleted or mutated by reconstruction.
+    assert buy_swap.swap_id == "buy-1"
+    assert future_sell.swap_id == "sell-2"
+
+
+def test_p3_future_dated_only_evidence_excludes_the_token_entirely() -> None:
+    """A token touched ONLY by future-dated evidence produces no
+    position at all as of an earlier as_of -- it genuinely was not yet
+    known to exist."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    as_of = t0 - timedelta(days=1)  # before the swap even happened
+    swaps = [_buy(1, token_qty="100", sol_qty="100", at=t0)]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=as_of)  # type: ignore[arg-type]
+    assert positions == []
+
+
+# ---------------------------------------------------------------------
+# P3-R3: round-trip-safe, quote-safe weighted-average ledger.
+# ---------------------------------------------------------------------
+
+
+def test_p3_full_close_then_reopen_produces_two_independent_round_trips() -> None:
+    """Buy, full close, reopen, full close -- two separately identified
+    closed round trips with independently hand-calculated PnL and
+    holding times, never one merged lifetime aggregate."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    swaps = [
+        _buy(1, token_qty="100", sol_qty="100", at=t0),
+        _sell(2, token_qty="100", sol_qty="150", at=t0 + timedelta(hours=1)),  # closes: +50
+        _buy(3, token_qty="50", sol_qty="60", at=t0 + timedelta(hours=2)),
+        _sell(4, token_qty="50", sol_qty="40", at=t0 + timedelta(hours=3)),  # closes: -20
+    ]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
+    assert len(positions) == 2
+    first, second = positions
+    assert first.round_trip_index == 0
+    assert first.realized_pnl_quote == Decimal("50")
+    assert first.entry_quantity == Decimal("100")
+    assert first.status == STATUS_CLOSED
+    assert first.holding_duration_seconds == 3600  # 1 hour
+
+    assert second.round_trip_index == 1
+    assert second.realized_pnl_quote == Decimal("-20")
+    assert second.entry_quantity == Decimal("50")
+    assert second.status == STATUS_CLOSED
+    assert second.holding_duration_seconds == 3600  # 1 hour
+
+    # Disjoint raw-evidence references -- never conflated.
+    assert set(first.contributing_swap_ids) == {"buy-1", "sell-2"}
+    assert set(second.contributing_swap_ids) == {"buy-3", "sell-4"}
+    assert first.input_manifest_digest != second.input_manifest_digest
+
+
+def test_p3_partial_sell_then_later_buy_uses_current_open_inventory_basis() -> None:
+    """A still-open round trip's ``average_cost_quote`` is the CURRENT
+    weighted-average cost of the remaining open inventory after a
+    partial sell and a later buy -- never a lifetime-flat average
+    across all buys."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    swaps = [
+        _buy(1, token_qty="100", sol_qty="100", at=t0),  # cost basis 100, qty 100
+        _sell(2, token_qty="40", sol_qty="80", at=t0 + timedelta(hours=1)),
+        # open_qty 60, open_cost_basis 60 (100 - 40*1.0)
+        _buy(3, token_qty="50", sol_qty="150", at=t0 + timedelta(hours=2)),
+        # open_qty 110, open_cost_basis 210
+    ]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
+    assert len(positions) == 1
+    pos = positions[0]
+    assert pos.status == STATUS_OPEN
+    assert pos.average_cost_quote == Decimal("210") / Decimal("110")
+    assert pos.unrealized_pnl_quote is None  # never fabricated from a stale fill price
+
+
+def test_p3_mixed_quote_asset_never_summed_excluded_as_unresolved() -> None:
+    """Opening in SOL then a later leg denominated in USDC is never
+    summed into the same quantity/cost math -- excluded, preserved as a
+    raw reference, and the round trip's confidence is degraded to LOW
+    (excluded from qualification via the existing HIGH/MEDIUM filter),
+    never a fabricated conversion."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    swaps = [
+        _buy(1, token_qty="100", sol_qty="100", at=t0),
+        _buy_usdc(2, token_qty="50", usdc_qty="75", at=t0 + timedelta(hours=1)),
+    ]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
+    assert len(positions) == 1
+    pos = positions[0]
+    assert pos.mixed_quote_leg_count == 1
+    assert pos.confidence == CONFIDENCE_LOW
+    # Only the SOL-denominated buy entered quantity/cost math.
+    assert pos.entry_quantity == Decimal("100")
+    assert pos.quote_asset_mint == SOL
+    # The USDC leg's raw reference is preserved, not lost.
+    assert "buy-usdc-2" in pos.contributing_swap_ids
+
+
+def test_p3_input_permutations_and_same_slot_ties_are_byte_identical() -> None:
+    """Input-order permutations of the same underlying evidence, and
+    same-slot ties, must yield byte-identical reconstructed output."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    buy_a = _buy(1, token_qty="100", sol_qty="100", at=t0, swap_id="a")
+    sell_a = _sell(2, token_qty="100", sol_qty="200", at=t0 + timedelta(hours=1), swap_id="b")
+
+    forward = reconstruct_positions_for_wallet([buy_a, sell_a], as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
+    reversed_order = reconstruct_positions_for_wallet([sell_a, buy_a], as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
+    assert forward == reversed_order
+
+
+def test_p3_decimal_boundary_values_prove_no_float_conversion() -> None:
+    """A quantity with far more precision than any binary float can
+    represent exactly round-trips through reconstruction unchanged."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    precise_qty = "0.123456789012345678"
+    swaps = [_buy(1, token_qty=precise_qty, sol_qty="1", at=t0)]
+    positions = reconstruct_positions_for_wallet(swaps, as_of=_FAR_FUTURE_AS_OF)  # type: ignore[arg-type]
+    assert positions[0].entry_quantity == Decimal(precise_qty)
+    assert isinstance(positions[0].entry_quantity, Decimal)

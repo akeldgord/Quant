@@ -13,10 +13,24 @@ different parser/accounting version without losing anything -- see
 
 A row is never updated in place: a later reconstruction (more evidence, a
 fixed accounting bug, a new ``algorithm_version``) appends a new row for
-the same ``(wallet_id, token_id)`` rather than mutating history, matching
-the "derived score/position artifacts must be versioned/reproducible"
-persistence rule. Downstream scoring always reads the latest row per
-``(wallet_id, token_id)``.
+the same ``(wallet_id, token_id, round_trip_index)`` rather than mutating
+history, matching the "derived score/position artifacts must be
+versioned/reproducible" persistence rule. Downstream scoring always reads
+the latest row per ``(wallet_id, token_id, round_trip_index)``.
+
+``round_trip_index`` (Phase 3 remediation, `argus-phase-3-remediation-001`,
+finding P3-R3): one wallet can genuinely buy, fully close, and later
+reopen the same token -- each such closed-then-reopened cycle is a
+separate, independently identified round trip (0-indexed per token, in
+deterministic evidence order), not merged into one lifetime aggregate. A
+still-open round trip is always the highest index for that
+``(wallet_id, token_id)``. ``input_manifest_digest`` is a stable SHA-256
+hex digest of the exact, ordered raw ``swaps.swap_id`` references that
+fed this specific round trip -- "preserve every raw swap reference that
+fed each round trip... via a stable input-manifest digest" (this
+instruction's own requirement), independent of the derived numbers
+themselves so a changed evidence set is always detectable even when it
+happens to produce the same totals.
 
 Amounts are denominated in whatever asset was actually exchanged on-chain
 (``quote_asset_mint`` -- typically native SOL, sometimes a stablecoin),
@@ -90,6 +104,11 @@ class WalletPosition(Base):
             "length(quote_asset_mint) > 0", name="ck_wallet_positions_quote_asset_nonempty"
         ),
         CheckConstraint("partial_exit_count >= 0", name="ck_wallet_positions_partial_exit_count"),
+        CheckConstraint("round_trip_index >= 0", name="ck_wallet_positions_round_trip_index"),
+        CheckConstraint(
+            "length(input_manifest_digest) > 0",
+            name="ck_wallet_positions_input_manifest_digest_nonempty",
+        ),
     )
 
     position_id: Mapped[uuid.UUID] = mapped_column(
@@ -106,6 +125,8 @@ class WalletPosition(Base):
     )
 
     quote_asset_mint: Mapped[str] = mapped_column(String(64), nullable=False)
+    round_trip_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
 
     first_entry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_entry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

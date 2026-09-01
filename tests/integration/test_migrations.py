@@ -161,7 +161,7 @@ def _current_revision(database: str) -> str:
 def test_migration_from_zero_to_head_creates_identity_columns(scratch_database: str) -> None:
     command.upgrade(_alembic_config(), "head")
 
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -190,7 +190,7 @@ def test_upgrade_from_0003_through_head_creates_table_and_columns_together(
     assert "parse_attempts" not in existing_tables
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
 
@@ -293,7 +293,7 @@ def test_upgrade_head_is_idempotent_and_restart_safe(scratch_database: str) -> N
 
     command.upgrade(cfg, "head")  # simulated restart
 
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
     assert _column_names(scratch_database, "parse_attempts") == first_columns
 
 
@@ -307,7 +307,7 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -433,7 +433,7 @@ def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
 
     # Refused before touching anything: still at head, build_hash column
     # and both append-only rows still present and unmodified.
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
     assert "build_hash" in _column_names(scratch_database, "swaps")
     rows = _query(
         scratch_database,
@@ -589,7 +589,7 @@ def test_p2r7_downgrade_from_0009_fails_closed_when_value_exceeds_bigint_range(
         command.downgrade(cfg, "0008")
 
     # Refused before touching anything: still at head, value unchanged.
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
     stored = _query(
         scratch_database,
         "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t",
@@ -644,7 +644,7 @@ def test_p2r7_downgrade_from_0009_succeeds_when_values_fit_bigint_range(
     assert stored == 1_000_000
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0010"
+    assert _current_revision(scratch_database) == "0011"
 
 
 def test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening(scratch_database: str) -> None:

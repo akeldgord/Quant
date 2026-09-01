@@ -1,24 +1,30 @@
 """Honest wallet history-completeness assessment (MASTER_SPEC.md section
-34 HISTORICAL WALLET COMPLETENESS; Phase 3, `argus-phase-3-001`).
+34 HISTORICAL WALLET COMPLETENESS; Phase 3, `argus-phase-3-001`,
+remediated by `argus-phase-3-remediation-001` finding P3-R2).
 
 ``getSignaturesForAddress(wallet)`` alone is never assumed to represent
 complete wallet activity (section 34's own explicit warning) -- this
 module derives an honest ``HIGH``/``MEDIUM``/``LOW``/``UNKNOWN``
-completeness judgment from the REAL, evidence-grounded acquisition method
-that actually produced the wallet's ``swaps`` rows, never from a bare
-caller-supplied claim:
+completeness judgment from a REAL, structured, evidence-grounded
+:class:`AcquisitionManifest`, never from a bare caller-typed status
+string. The P3-R2 defect this replaces: a caller could previously pass
+``--acquisition-status COMPLETE`` as free text with no manifest at all
+and manufacture ``HIGH`` completeness for any wallet with even one
+``swaps`` row -- that path no longer exists.
 
-- ``EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK`` -- the wallet's transaction
-  history was walked by
-  :func:`argus.tokens.historical_acquisition.acquire_historical_transactions`
-  (the same real, bounded, fault-detecting, P2-R2-remediated pagination
-  service Phase 2 already built and proved for token addresses -- it is
-  address-generic, so Phase 3 reuses it unmodified for wallet addresses
-  too). Its own honest terminal ``status`` maps directly:
-  ``STATUS_COMPLETE`` -> ``HIGH`` (the walk genuinely reached the start
-  of this address's history), ``STATUS_PARTIAL`` -> ``MEDIUM`` (a real
-  backward walk occurred but stopped short, with the exact reason in
-  ``known_gaps``).
+- ``EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK`` -- requires a real
+  :class:`AcquisitionManifest`, produced by actually executing the typed
+  acquisition path (:func:`argus.tokens.historical_acquisition.
+  acquire_historical_transactions`, the same real, bounded,
+  fault-detecting, P2-R2-remediated pagination service Phase 2 already
+  built and proved -- it is address-generic, so Phase 3 reuses it
+  unmodified for wallet addresses too) and, where available, an
+  associated token-account enumeration/coverage walk. ``HIGH`` requires
+  BOTH the wallet-address walk to have genuinely completed AND every
+  known associated token account to have been enumerated and completed
+  -- a wallet-address-only ``COMPLETE`` is capped at ``MEDIUM``, never
+  ``HIGH``, since section 34 explicitly warns that address-only history
+  is not necessarily complete wallet activity.
 - ``EVIDENCE_SOURCE_STREAM_FORWARD_ONLY`` -- the wallet's ``swaps`` rows
   came only from Phase 1's live-streaming ingestion
   (``argus ingest run``), which is forward-only from whenever tracking
@@ -36,6 +42,7 @@ honest completeness judgment itself).
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -50,12 +57,39 @@ from argus.domain.wallet_history_quality import (
 )
 from argus.tokens.historical_acquisition import STATUS_COMPLETE, STATUS_PARTIAL
 
-ALGORITHM_VERSION: Final[str] = "history_reconstruction_v1"
+ALGORITHM_VERSION: Final[str] = "history_reconstruction_v2"
 
 EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK: Final[str] = "LIVE_ACQUISITION_WALK"
 EVIDENCE_SOURCE_STREAM_FORWARD_ONLY: Final[str] = "STREAM_FORWARD_ONLY"
 
 EvidenceSource = Literal["LIVE_ACQUISITION_WALK", "STREAM_FORWARD_ONLY"]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TokenAccountCoverage:
+    """One associated token account's own walk status -- part of a real
+    :class:`AcquisitionManifest`, never hand-typed by a caller."""
+
+    mint: str
+    status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AcquisitionManifest:
+    """The real, structured, immutable result of actually executing a
+    typed acquisition walk -- never a bare caller-supplied status
+    string. ``token_accounts_enumerated`` distinguishes "a real
+    enumeration call was made and found this exact set of accounts"
+    (even if that set is empty) from "no enumeration was ever
+    attempted" -- the latter can never support ``HIGH``, no matter how
+    complete the wallet-address walk itself was."""
+
+    wallet_walk_status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED
+    token_accounts_enumerated: bool
+    associated_token_accounts: tuple[TokenAccountCoverage, ...]
+    provider_set: str
+    known_gaps: str | None
+    evidence_reference: str
 
 
 class HistoryAssessment:
@@ -70,6 +104,7 @@ class HistoryAssessment:
         "history_provider_set",
         "history_completeness",
         "history_completeness_reason",
+        "acquisition_manifest",
     )
 
     def __init__(
@@ -80,12 +115,27 @@ class HistoryAssessment:
         history_provider_set: str,
         history_completeness: str,
         history_completeness_reason: str,
+        acquisition_manifest: AcquisitionManifest | None = None,
     ) -> None:
         self.history_start = history_start
         self.history_end = history_end
         self.history_provider_set = history_provider_set
         self.history_completeness = history_completeness
         self.history_completeness_reason = history_completeness_reason
+        self.acquisition_manifest = acquisition_manifest
+
+
+def manifest_as_dict(manifest: AcquisitionManifest) -> dict:
+    return {
+        "wallet_walk_status": manifest.wallet_walk_status,
+        "token_accounts_enumerated": manifest.token_accounts_enumerated,
+        "associated_token_accounts": [
+            {"mint": tac.mint, "status": tac.status} for tac in manifest.associated_token_accounts
+        ],
+        "provider_set": manifest.provider_set,
+        "known_gaps": manifest.known_gaps,
+        "evidence_reference": manifest.evidence_reference,
+    }
 
 
 def assess_wallet_history(
@@ -93,20 +143,15 @@ def assess_wallet_history(
     *,
     wallet_address: str,
     evidence_source: EvidenceSource,
-    acquisition_status: str | None = None,
-    acquisition_known_gaps: str | None = None,
+    acquisition_manifest: AcquisitionManifest | None = None,
 ) -> HistoryAssessment:
     """Derives an honest history-completeness assessment.
 
-    ``acquisition_status``/``acquisition_known_gaps`` are required when
-    ``evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK`` -- the
-    real terminal status from
-    :class:`argus.tokens.historical_acquisition.AcquisitionResult`, not a
-    caller assertion. A ``STATUS_FAILED`` (or any other non-COMPLETE/
-    non-PARTIAL) acquisition status is treated the same as PARTIAL here:
-    real evidence may still exist even though the walk itself failed
-    closed, so it is never silently promoted to "no evidence" (UNKNOWN)
-    if ``swaps`` rows are actually present.
+    ``acquisition_manifest`` is required when ``evidence_source ==
+    EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK`` -- a real, structured
+    :class:`AcquisitionManifest`, never a bare caller-supplied status
+    string (this is the P3-R2 fix: the exact caller-forged-completeness
+    path is no longer expressible in this function's own signature).
     """
     if not swaps:
         return HistoryAssessment(
@@ -125,41 +170,67 @@ def assess_wallet_history(
     history_end = max(times) if times else None
 
     if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK:
-        if acquisition_status is None:
+        if acquisition_manifest is None:
             raise ValueError(
-                "acquisition_status is required when evidence_source is "
-                "LIVE_ACQUISITION_WALK -- the real terminal AcquisitionResult.status, "
-                "never omitted or assumed"
+                "acquisition_manifest is required when evidence_source is "
+                "LIVE_ACQUISITION_WALK -- a real, structured AcquisitionManifest "
+                "produced by actually executing the typed acquisition path, never a "
+                "bare caller-supplied status string"
             )
         provider_set = (
             f"argus.tokens.historical_acquisition.acquire_historical_transactions "
-            f"(live pagination walk of wallet {wallet_address!r})"
+            f"(live pagination walk of wallet {wallet_address!r}); "
+            f"{acquisition_manifest.provider_set}"
         )
-        if acquisition_status == STATUS_COMPLETE:
-            return HistoryAssessment(
-                history_start=history_start,
-                history_end=history_end,
-                history_provider_set=provider_set,
-                history_completeness=COMPLETENESS_HIGH,
-                history_completeness_reason=(
-                    "live acquisition walk reached the genuine start of this address's "
-                    "signature history with no unresolved fault (STATUS_COMPLETE)"
-                ),
+        wallet_walk_complete = acquisition_manifest.wallet_walk_status == STATUS_COMPLETE
+
+        if not wallet_walk_complete:
+            reason = (
+                f"wallet-address walk did not complete "
+                f"(status={acquisition_manifest.wallet_walk_status!r})"
             )
-        reason = (
-            f"live acquisition walk did not reach the genuine start of this address's "
-            f"history (status={acquisition_status!r})"
-        )
-        if acquisition_known_gaps:
-            reason += f": {acquisition_known_gaps}"
+            if acquisition_manifest.known_gaps:
+                reason += f": {acquisition_manifest.known_gaps}"
+            completeness = (
+                COMPLETENESS_MEDIUM
+                if acquisition_manifest.wallet_walk_status == STATUS_PARTIAL
+                else COMPLETENESS_LOW
+            )
+        elif not acquisition_manifest.token_accounts_enumerated:
+            completeness = COMPLETENESS_MEDIUM
+            reason = (
+                "wallet-address walk complete, but associated token-account "
+                "enumeration was never performed -- section 34 explicitly warns "
+                "wallet-address history alone is not necessarily complete wallet "
+                "activity, so this cannot exceed MEDIUM"
+            )
+        else:
+            incomplete = [
+                tac.mint
+                for tac in acquisition_manifest.associated_token_accounts
+                if tac.status != STATUS_COMPLETE
+            ]
+            if incomplete:
+                completeness = COMPLETENESS_MEDIUM
+                reason = (
+                    f"wallet-address walk complete and token accounts enumerated, but "
+                    f"{len(incomplete)} associated account(s) have incomplete history: "
+                    f"{incomplete}"
+                )
+            else:
+                completeness = COMPLETENESS_HIGH
+                reason = (
+                    "wallet-address walk complete and every known associated "
+                    "token-account history is complete through the stated boundary"
+                )
+
         return HistoryAssessment(
             history_start=history_start,
             history_end=history_end,
             history_provider_set=provider_set,
-            history_completeness=COMPLETENESS_MEDIUM
-            if acquisition_status == STATUS_PARTIAL
-            else COMPLETENESS_LOW,
+            history_completeness=completeness,
             history_completeness_reason=reason,
+            acquisition_manifest=acquisition_manifest,
         )
 
     # EVIDENCE_SOURCE_STREAM_FORWARD_ONLY

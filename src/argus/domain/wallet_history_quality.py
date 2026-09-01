@@ -16,6 +16,17 @@ Append-only and versioned like every other Phase 1/2 decision ledger: a
 later reconstruction attempt (more evidence, a new provider, a bug fix)
 adds a new row rather than overwriting a prior point-in-time judgment.
 Downstream code always reads the latest row per wallet.
+
+``acquisition_manifest`` (Phase 3 remediation, `argus-phase-3-remediation-001`,
+finding P3-R2): when ``history_completeness`` was derived from a real
+``LIVE_ACQUISITION_WALK``, this stores the verified, immutable
+``argus.wallets.history_reconstruction.AcquisitionManifest`` that
+justified it -- the wallet-address walk's own real terminal status plus
+associated token-account enumeration/coverage -- so a HIGH/MEDIUM
+completeness judgment is always traceable to real, structured acquisition
+evidence, never a bare caller-typed status string. NULL for
+``STREAM_FORWARD_ONLY``/no-evidence assessments, which never claim a
+verified acquisition walk occurred.
 """
 
 from __future__ import annotations
@@ -24,7 +35,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from argus.db.base import Base
@@ -83,6 +94,10 @@ class WalletHistoryQuality(Base):
     history_provider_set: Mapped[str] = mapped_column(String(256), nullable=False)
     history_completeness: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     history_completeness_reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # See module docstring. NULL unless evidence_source was
+    # LIVE_ACQUISITION_WALK with a real, structured AcquisitionManifest.
+    acquisition_manifest: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)
 

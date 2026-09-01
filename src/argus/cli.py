@@ -1283,18 +1283,18 @@ def wallets_reconstruct_and_score(
         "--evidence-source",
         help="'LIVE_ACQUISITION_WALK' (this wallet's own history was walked via "
         "'argus discover acquire-and-run-archaeology'-style pagination -- requires "
-        "--acquisition-status) or 'STREAM_FORWARD_ONLY' (evidence is only from Phase 1 live "
-        "ingestion, forward-only from whenever tracking began).",
+        "--acquisition-manifest-file) or 'STREAM_FORWARD_ONLY' (evidence is only from Phase 1 "
+        "live ingestion, forward-only from whenever tracking began).",
     ),
-    acquisition_status: str = typer.Option(
+    acquisition_manifest_file: str = typer.Option(
         "",
-        "--acquisition-status",
-        help="Required when --evidence-source=LIVE_ACQUISITION_WALK: the real terminal "
-        "AcquisitionResult.status ('COMPLETE'/'PARTIAL'/'FAILED') from the walk that "
-        "actually produced this wallet's evidence -- never a bare assertion.",
-    ),
-    acquisition_known_gaps: str = typer.Option(
-        "", "--acquisition-known-gaps", help="The walk's own known_gaps disclosure, if any."
+        "--acquisition-manifest-file",
+        help="Required when --evidence-source=LIVE_ACQUISITION_WALK: path to a JSON file "
+        "holding the real, structured AcquisitionManifest produced by actually executing the "
+        "typed acquisition path (wallet_walk_status, token_accounts_enumerated, "
+        "associated_token_accounts, provider_set, known_gaps, evidence_reference) -- never a "
+        "bare --acquisition-status flag (Phase 3 remediation P3-R2: a caller can no longer "
+        "manufacture HIGH completeness by typing a status with no manifest at all).",
     ),
 ) -> None:
     """Phase 3 (MASTER_SPEC.md sections 34-43): reconstructs this
@@ -1306,12 +1306,16 @@ def wallets_reconstruct_and_score(
     executes anything -- research/scoring only (MASTER_SPEC.md section
     108). Idempotent: re-running against identical evidence writes no
     duplicate position/score/tier row."""
+    import json
     from datetime import UTC, datetime
+    from pathlib import Path
 
     from argus.config import resolve_production_git_commit
     from argus.wallets.history_reconstruction import (
         EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
         EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+        AcquisitionManifest,
+        TokenAccountCoverage,
     )
     from argus.wallets.qualification_service import reconstruct_and_score_wallet
 
@@ -1323,11 +1327,31 @@ def wallets_reconstruct_and_score(
             "[red]--evidence-source must be LIVE_ACQUISITION_WALK or STREAM_FORWARD_ONLY[/red]"
         )
         raise typer.Exit(code=1)
-    if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK and not acquisition_status:
-        console.print(
-            "[red]--acquisition-status is required when --evidence-source=LIVE_ACQUISITION_WALK[/red]"
-        )
-        raise typer.Exit(code=1)
+
+    manifest: AcquisitionManifest | None = None
+    if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK:
+        if not acquisition_manifest_file:
+            console.print(
+                "[red]--acquisition-manifest-file is required when "
+                "--evidence-source=LIVE_ACQUISITION_WALK[/red]"
+            )
+            raise typer.Exit(code=1)
+        try:
+            raw = json.loads(Path(acquisition_manifest_file).read_text())
+            manifest = AcquisitionManifest(
+                wallet_walk_status=raw["wallet_walk_status"],
+                token_accounts_enumerated=bool(raw["token_accounts_enumerated"]),
+                associated_token_accounts=tuple(
+                    TokenAccountCoverage(mint=tac["mint"], status=tac["status"])
+                    for tac in raw.get("associated_token_accounts", [])
+                ),
+                provider_set=raw["provider_set"],
+                known_gaps=raw.get("known_gaps"),
+                evidence_reference=raw["evidence_reference"],
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            console.print(f"[red]malformed --acquisition-manifest-file: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
 
     async def _run() -> int:
         config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
@@ -1338,8 +1362,7 @@ def wallets_reconstruct_and_score(
                     sessionmaker,
                     wallet_address=wallet,
                     evidence_source=evidence_source,  # type: ignore[arg-type]
-                    acquisition_status=acquisition_status or None,
-                    acquisition_known_gaps=acquisition_known_gaps or None,
+                    acquisition_manifest=manifest,
                     config=config,
                     git_commit=git_commit,
                     now=datetime.now(UTC),

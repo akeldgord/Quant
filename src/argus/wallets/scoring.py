@@ -40,11 +40,22 @@ from __future__ import annotations
 
 import dataclasses
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Final
 
 from argus.domain.wallet_positions import CONFIDENCE_HIGH, STATUS_CLOSED
+
+# Section 41's frozen v1 recency windows -- P3-R4: all five are
+# materialized as independent WalletMetricsSnapshot rows, never just
+# LIFETIME. None means unbounded (LIFETIME).
+WINDOW_DAYS: Final[dict[str, int | None]] = {
+    "LIFETIME": None,
+    "180D": 180,
+    "90D": 90,
+    "30D": 30,
+    "7D": 7,
+}
 
 ALGORITHM_VERSION: Final[str] = "wallet_scoring_v1"
 SCORE_VERSION: Final[str] = "qualification_score_v1"
@@ -98,6 +109,10 @@ class PositionForScoring:
     peak_profit_capture: Decimal | None
     first_entry_at: datetime | None
     last_entry_at: datetime | None
+    # P3-R5: required for realization-order drawdown and window-membership
+    # filtering -- a closed round trip's own exit time, never approximated
+    # by last_entry_at (an entry-side timestamp).
+    final_exit_at: datetime | None = None
     # From argus.domain.early_buyers, when this wallet has a recorded
     # early-buyer row for this token -- None when no such evidence
     # exists (never guessed).
@@ -169,7 +184,10 @@ def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats
             if p.realized_pnl_quote is not None and p.entry_value_quote
         )
     )
-    distinct_tokens = len({p.token_id for p in positions})
+    # P3-R5: distinct-token eligibility counts only tokens with at least
+    # one usable CLOSED outcome -- an open position (however many exist)
+    # contributes no usable outcome and must never inflate this count.
+    distinct_tokens = len({p.token_id for p in closed})
     total_pnl = sum((p.realized_pnl_quote or Decimal(0) for p in closed), Decimal(0))
 
     if not returns:
@@ -226,24 +244,32 @@ def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats
     gross_loss = sum(losses, Decimal(0))
     profit_factor = (gross_gain / gross_loss) if gross_loss > 0 else None
 
+    # P3-R5: the frozen lottery-dominance ratio is largest-single-
+    # position-PnL divided by estimated NET lifetime P&L (total_pnl,
+    # gains and losses both included) -- never divided by gross positive
+    # gains alone, which understates the ratio whenever real losses
+    # exist elsewhere (a wallet with +100/-90 nets only +10, so its
+    # single +100 winner is actually 10x its whole net result, not 100%
+    # of gross gains). Undefined (None, not zero) when net lifetime P&L
+    # is not positive -- "not a positive lifetime-profit contribution"
+    # cannot be described as a fraction of a non-positive total.
     pnls_sorted_desc = sorted((p.realized_pnl_quote or Decimal(0) for p in closed), reverse=True)
-    positive_total = sum(p for p in pnls_sorted_desc if p > 0) or Decimal(0)
-    largest_trade_contribution = (
-        (pnls_sorted_desc[0] / positive_total)
-        if positive_total > 0 and pnls_sorted_desc and pnls_sorted_desc[0] > 0
-        else Decimal(0)
-    )
-    top_three_contribution = (
-        (sum(p for p in pnls_sorted_desc[:3] if p > 0) / positive_total)
-        if positive_total > 0
-        else Decimal(0)
-    )
+    if total_pnl > 0 and pnls_sorted_desc and pnls_sorted_desc[0] > 0:
+        largest_trade_contribution: Decimal | None = pnls_sorted_desc[0] / total_pnl
+        top_three_contribution: Decimal | None = (
+            sum(p for p in pnls_sorted_desc[:3] if p > 0) / total_pnl
+        )
+    else:
+        largest_trade_contribution = None
+        top_three_contribution = None
 
     # Max drawdown across the closed-trade equity curve in realization
-    # (slot/time) order -- the only ordering evidence actually supports.
+    # (exit) order -- final_exit_at, never last_entry_at (an entry-side
+    # timestamp that does not reflect when a round trip's outcome was
+    # actually realized).
     ordered_by_exit = [
         p.realized_pnl_quote or Decimal(0)
-        for p in sorted(closed, key=lambda p: (p.last_entry_at or datetime.min, p.token_id))
+        for p in sorted(closed, key=lambda p: (p.final_exit_at or datetime.min, p.token_id))
     ]
     running = Decimal(0)
     peak = Decimal(0)
@@ -258,7 +284,10 @@ def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats
     distinct_profitable_tokens = len(
         {p.token_id for p in closed if (p.realized_pnl_quote or 0) > 0}
     )
-    lottery_dominated = largest_trade_contribution > LOTTERY_DOMINANCE_THRESHOLD
+    lottery_dominated = (
+        largest_trade_contribution is not None
+        and largest_trade_contribution > LOTTERY_DOMINANCE_THRESHOLD
+    )
 
     return PositionStats(
         closed_count=len(closed),
@@ -272,7 +301,7 @@ def compute_position_stats(positions: list[PositionForScoring]) -> PositionStats
         profit_factor=profit_factor,
         hit_rate=hit_rate,
         largest_trade_contribution_pct=largest_trade_contribution,
-        top_three_trade_contribution_pct=min(Decimal(1), top_three_contribution),
+        top_three_trade_contribution_pct=top_three_contribution,
         max_drawdown=max_dd,
         distinct_profitable_token_count=distinct_profitable_tokens,
         lottery_dominated=lottery_dominated,
@@ -429,6 +458,48 @@ def _weighted_score(component_values: dict[str, Decimal | None]) -> Decimal:
     return _clamp_0_100(total)
 
 
+def qualifying_positions_for(
+    all_positions: list[PositionForScoring], discovery_contaminated_token_ids: frozenset[str]
+) -> list[PositionForScoring]:
+    """The one structural contamination-exclusion filter (section 30):
+    every token this wallet was discovered through, AND every position
+    below HIGH/MEDIUM confidence (section 35's own "only high/medium
+    confidence positions substantially contribute to qualification"),
+    is excluded before anything else ever computes from this list.
+    Exposed publicly so ``score_wallet`` and the per-window metrics
+    computation (P3-R4) both build from exactly the same filtered set --
+    a contaminated token can never appear in any qualification window
+    either."""
+    return [
+        p
+        for p in all_positions
+        if p.token_id not in discovery_contaminated_token_ids
+        and p.confidence in (CONFIDENCE_HIGH, "MEDIUM")
+    ]
+
+
+def filter_positions_for_window(
+    positions: list[PositionForScoring], *, as_of: datetime, window_days: int | None
+) -> list[PositionForScoring]:
+    """P3-R4: restricts ``positions`` to the ones that belong in one
+    recency window. ``window_days=None`` is LIFETIME (unbounded).
+    Closed-position membership uses ``final_exit_at`` (when its outcome
+    was actually realized); an open position's evidence is relevant to a
+    window only via its own last-known activity (``last_entry_at``) --
+    never a later observation leaking into an earlier window snapshot,
+    since both timestamps are themselves already bounded by ``as_of``
+    upstream (P3-R1)."""
+    if window_days is None:
+        return positions
+    cutoff = as_of - timedelta(days=window_days)
+    result: list[PositionForScoring] = []
+    for p in positions:
+        member_at = p.final_exit_at if p.status == STATUS_CLOSED else p.last_entry_at
+        if member_at is not None and cutoff <= member_at <= as_of:
+            result.append(p)
+    return result
+
+
 def score_wallet(
     *,
     all_positions: list[PositionForScoring],
@@ -443,12 +514,7 @@ def score_wallet(
     medium confidence positions substantially contribute to
     qualification"); ``descriptive_score`` uses every position, any
     confidence, contaminated tokens included."""
-    qualifying_positions = [
-        p
-        for p in all_positions
-        if p.token_id not in discovery_contaminated_token_ids
-        and p.confidence in (CONFIDENCE_HIGH, "MEDIUM")
-    ]
+    qualifying_positions = qualifying_positions_for(all_positions, discovery_contaminated_token_ids)
 
     qual_stats = compute_position_stats(qualifying_positions)
     qual_fingerprint = compute_feature_fingerprint(qualifying_positions, qual_stats, as_of=as_of)
@@ -529,11 +595,18 @@ def score_wallet(
         shrunk = _NEUTRAL_PRIOR + (raw_qualification_score - _NEUTRAL_PRIOR) * sample_fraction
         qualification_score = _clamp_0_100(shrunk - total_penalty)
 
-    missing_required = sum(
-        1
-        for name in COMPONENT_WEIGHTS
-        if name != "forward_information" and component_values.get(name) is None
-    )
+    # P3-R6: forward_information's known absence counts toward the
+    # missing-evidence tally like every other component -- it is never
+    # excluded from this count. Since forward_information is always
+    # unavailable in Phase 3 (it needs Phase 4 prospective data that does
+    # not exist yet), HIGH confidence is therefore structurally
+    # unreachable until Phase 4 exists -- an honest, disclosed,
+    # documented V1 consequence (this instruction's own "must cap/lower
+    # confidence according to one documented V1 rule"), not a bug. It
+    # still contributes its neutral-prior weight to the score itself
+    # (section 38's "never redistributed" rule, applied in
+    # ``_weighted_score`` above) -- only the *confidence* tier is capped.
+    missing_required = sum(1 for name in COMPONENT_WEIGHTS if component_values.get(name) is None)
     if missing_required == 0:
         confidence = CONFIDENCE_HIGH_TIER
     elif missing_required <= 2:

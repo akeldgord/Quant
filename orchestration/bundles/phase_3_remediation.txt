@@ -1,3 +1,997 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE — Phase 3
+Generated: 2026-09-01T05:55:04.007813+00:00
+
+=== CHECKPOINT ===
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 3 consolidated remediation -- close all 7 frozen blocking
+  findings (P3-R1 through P3-R7) from independent audit `argus-phase-3-
+  audit-001`, per orchestrator instruction `argus-phase-3-remediation-001`
+  (`AUTHORIZED_ACTION: REMEDIATE_ALL_FROZEN_PHASE_3_BLOCKERS_ONLY`). This is
+  the first and only consolidated Phase 3 remediation.
+STATUS: All 7 frozen findings (P3-R1..P3-R7) are fixed with real, tested
+  code and real, tested checkpoint-protocol regression. All 9 required
+  prospective acceptance-test categories pass. Phase 3 remains NOT
+  orchestrator-approved -- this checkpoint reports remediation completion
+  for independent audit, it does not and cannot itself apply approval.
+UTC_TIMESTAMP: 2026-09-01T05:35:00Z
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TARGET_COMMIT: 69a8de622b1977f92999ca680fcb8d851ba78c9f
+AUTHORIZED_PHASE: 3
+APPROVES_PHASE: NONE
+
+B. Requirement-to-evidence disposition (one row per frozen finding)
+
+| Finding | Fix location | Test proof | Result |
+|---|---|---|---|
+| P3-R1 (point-in-time firewall absent in production) | `src/argus/wallets/qualification_service.py` sections 1-4 (swaps `first_seen_at <= now`, discovery events `created_at <= now`, early buyers `created_at <= now`, cluster links `as_of <= now AND created_at <= now`); `src/argus/wallets/position_reconstruction.py` (`known_swaps` filtered by `block_time <= as_of` before any round-trip math; malformed/future `block_time` excluded, never clamped) | Unit: `test_p3_future_dated_swap_excluded_from_reconstruction_evidence_preserved`, `test_p3_future_dated_only_evidence_excludes_the_token_entirely`, `test_p3_recency_uses_point_in_time_as_of_never_a_fixed_clock`. Integration: `test_p3_service_level_as_of_boundary_excludes_future_cluster_link` (real Postgres: cluster link dated after `t0` produces no quarantine/penalty at `t0`; scoring at `later` picks it up; replaying `t0` again after `later` exists reproduces the identical `t0` score) | FIXED |
+| P3-R2 (history completeness caller-asserted, token-account-blind) | `src/argus/wallets/history_reconstruction.py` (`AcquisitionManifest`/`TokenAccountCoverage` typed structures; HIGH requires `wallet_walk_status == COMPLETE` AND `token_accounts_enumerated is True` AND every known ATA's coverage complete); `src/argus/cli.py` (`--acquisition-status`/`--acquisition-known-gaps` free-text flags removed, replaced by `--acquisition-manifest-file <path>` parsed into the typed structure, fails closed on malformed input) | Unit: `test_p3_history_assessment_derives_from_real_acquisition_manifest_not_a_claim` (all 4 completeness tiers plus `ValueError` on missing manifest under `LIVE_ACQUISITION_WALK`) | FIXED |
+| P3-R3 (ledger not round-trip- or quote-safe) | `src/argus/wallets/position_reconstruction.py` (`ALGORITHM_VERSION` bumped to `position_reconstruction_v2`; `_RoundTripState.has_activity` state machine flushes and resets a `ReconstructedPosition` every time `open_quantity` returns to zero; `round_trip_index`/`contributing_swap_ids`/`input_manifest_digest` added; a leg in an incompatible quote asset is excluded from quantity/cost math, preserved as a raw reference, forces confidence to LOW) | Unit: `test_p3_full_close_then_reopen_produces_two_independent_round_trips`, `test_p3_partial_sell_then_later_buy_uses_current_open_inventory_basis`, `test_p3_mixed_quote_asset_never_summed_excluded_as_unresolved`, `test_p3_input_permutations_and_same_slot_ties_are_byte_identical`, `test_p3_decimal_boundary_values_prove_no_float_conversion` | FIXED |
+| P3-R4 (recency-window metrics schema-only) | `src/argus/wallets/qualification_service.py` section 5b (writes `WalletMetricsSnapshot` rows for LIFETIME/180D/90D/30D/7D every run, each from the same contamination-filtered, `final_exit_at`/`last_entry_at`-windowed qualifying-position set; an empty window gets explicit zero/null metrics) | Integration: `test_p3_all_five_metric_windows_persisted_with_correct_membership` (real Postgres: a closed round trip 3 days before `as_of` appears in all 5 windows; one 200 days before `as_of` appears only in LIFETIME, never copied into the bounded windows) | FIXED |
+| P3-R5 (lottery/drawdown/usable-outcome metrics wrong) | `src/argus/wallets/scoring.py` (`largest_trade_contribution_pct`/`top_three_trade_contribution_pct` now divide by estimated net lifetime P&L, `None` when net P&L <= 0; drawdown equity curve ordered by `final_exit_at`; `distinct_tokens` counts only tokens with a closed usable outcome) | Unit: `test_p3_lottery_dominance_uses_net_pnl_not_gross_gains_with_boundary`, `test_p3_drawdown_uses_final_exit_at_order_not_last_entry_at`, `test_p3_distinct_tokens_counts_only_closed_usable_outcomes` | FIXED |
+| P3-R6 (score/tier/identity disagreement) | `src/argus/wallets/qualification_service.py` (cluster-uncertainty penalty folded via `dataclasses.replace` into ONE canonical `ScoringResult` before persistence and tier evaluation; `_score_equal`/`_history_rows_equal` expanded to full semantic identity; `BUILD_HASH` now hashes all 6 Phase 3 artifact files); `src/argus/wallets/tier_lifecycle.py` (`current_tier is None` DISCOVERED special case removed -- desired tier always computed from current evidence); `src/argus/wallets/scoring.py` (`missing_required` now includes `forward_information`) | Integration: `test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjusted_score` (real Postgres: a 0.60-probability cluster link applies the fixed 10-point penalty, crossing the wallet from TIER_A (73.75) to TIER_B (63.75) -- never QUARANTINE -- and the persisted `WalletScoreSnapshot.qualification_score` is byte-identical to the tier-driving adjusted score), `test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_idempotent` (an eligible wallet's first score is its real, score-derived tier, never forced DISCOVERED; exact replay creates no new score/tier row -- exactly 1 `WalletTierTransition` row after 2 identical invocations). Unit: `test_p3_missing_forward_information_counts_toward_missing_evidence_and_caps_confidence` | FIXED |
+| P3-R7 (checkpoint missing terminal marker) | New `orchestration/checkpoints/phase_3_remediation.md`/`orchestration/bundles/phase_3_remediation.txt` (this checkpoint, correctly terminated); historical `orchestration/checkpoints/phase_3.md`/`.txt` left byte-for-byte unmodified, preserved as evidence of the defect | Unit: `test_validate_checkpoint_content_rejects_missing_end_marker`, `test_validate_checkpoint_content_rejects_the_actual_historical_phase_3_checkpoint` (reads the real, unmodified `orchestration/checkpoints/phase_3.md` from disk and proves the pre-existing, UNCHANGED `scripts/argus_orchestrator_watch.py::validate_checkpoint_content` validator already correctly rejects it -- the defect was in the prior submission process, not the validator; no production-code change was needed or made to the validator itself) | FIXED |
+
+C. Point-in-time knowledge-cutoff matrix
+
+| Evidence source | Bound applied | Where |
+|---|---|---|
+| `Swap` | `first_seen_at <= now` | `qualification_service.py` swap query, section 1 |
+| `Swap.block_time` (economic timestamp, independent of `first_seen_at`) | excluded (not clamped) if `> as_of` | `position_reconstruction.py::reconstruct_positions_for_wallet` |
+| `WalletDiscoveryEvent` | `created_at <= now` | `qualification_service.py` section 2 |
+| `EarlyBuyer` | `created_at <= now` | `qualification_service.py` section 3 |
+| `WalletClusterLink` | `as_of <= now AND created_at <= now` | `qualification_service.py` section 4 |
+
+All 4 evidence sources plus the reconstruction-level `block_time` guard were
+unbounded before this remediation (P3-R1's observed proof). Every one is now
+bounded to the same immutable `as_of`/`now` parameter passed into
+`reconstruct_and_score_wallet`, and position reconstruction, descriptive
+metrics, qualification metrics, contamination exclusions, recency windows,
+penalties, score snapshots, and tiers all consume that same bounded manifest
+-- proven at the real-service level by
+`test_p3_service_level_as_of_boundary_excludes_future_cluster_link`.
+
+D. History-coverage matrix (P3-R2)
+
+| `wallet_walk_status` | `token_accounts_enumerated` | ATA coverage | Result |
+|---|---|---|---|
+| COMPLETE | False | n/a | not HIGH (MEDIUM/LOW per manifest reason) |
+| COMPLETE | True | one account PARTIAL/FAILED | not HIGH, exact gap recorded |
+| COMPLETE | True | all accounts COMPLETE (or genuinely zero accounts) | HIGH |
+| PARTIAL/FAILED | any | any | not HIGH |
+| `evidence_source=STREAM_FORWARD_ONLY` | n/a | n/a | LOW (unchanged) |
+| no evidence | n/a | n/a | UNKNOWN (unchanged) |
+| `evidence_source=LIVE_ACQUISITION_WALK`, `acquisition_manifest=None` | -- | -- | `ValueError`, fails closed |
+
+The CLI no longer accepts a free-text `--acquisition-status`; `argus wallets
+reconstruct-and-score` now takes `--acquisition-manifest-file <path>`,
+parsing a real JSON manifest into the typed `AcquisitionManifest`/
+`TokenAccountCoverage` structures and failing closed (`typer.Exit(code=1)`)
+on malformed input.
+
+E. Round-trip / quote-safety matrix (P3-R3)
+
+| Scenario | Result |
+|---|---|
+| Buy, full close, reopen, full close | 2 independently identified `ReconstructedPosition` rows, each with its own `round_trip_index`, hand-verified PnL/holding-time |
+| Buy, partial sell, further buy while open | OPEN position's `average_cost_quote == open_cost_basis / open_quantity`, reflecting current inventory, not the lifetime-flat average |
+| Mixed SOL/USDC legs within one open inventory | never summed; round trip forced LOW confidence and excluded from qualification; raw legs preserved via `contributing_swap_ids` |
+| Input permutation / same-slot ties | byte-identical output (`test_p3_input_permutations_and_same_slot_ties_are_byte_identical`) |
+| Decimal boundary values | no float conversion anywhere in the path (`test_p3_decimal_boundary_values_prove_no_float_conversion`) |
+
+F. Metric-window matrix (P3-R4)
+
+| Window | Membership rule | Empty-window behavior |
+|---|---|---|
+| LIFETIME | all bounded, contamination-filtered closed round trips | n/a (always has data if any exist) |
+| 180D | `final_exit_at` (closed) / last-known-activity (open) within `[as_of-180d, as_of]` | explicit zero counts / null metrics, never a LIFETIME copy |
+| 90D | same, 90-day window | same |
+| 30D | same, 30-day window | same |
+| 7D | same, 7-day window | same |
+
+Real-Postgres proof (`test_p3_all_five_metric_windows_persisted_with_correct_
+membership`): a round trip closed 3 days before `as_of` is counted in all 5
+windows; one closed 200 days before `as_of` is counted only in LIFETIME.
+
+G. Lottery / drawdown / usable-outcome matrix (P3-R5)
+
+| Case | Result |
+|---|---|
+| PnL +100 / -90 (net lifetime PnL +10) | ratio 100/10 = 10.0 > 0.70 -- `LOTTERY_DOMINATED` fires |
+| Ratio exactly 0.70 | not flagged (strict `>`) |
+| Ratio just above 0.70 | flagged |
+| Net lifetime PnL <= 0 | contribution is `None` (not-applicable), never a spurious positive-contribution claim |
+| Drawdown equity curve | ordered by `final_exit_at` with a stable tie-breaker, not `last_entry_at` |
+| `distinct_tokens` | counts only tokens with >= 1 closed HIGH/MEDIUM-confidence round trip with a usable outcome; open/unresolved positions never inflate it |
+
+H. Canonical score/tier matrix (P3-R6)
+
+| Case | Result |
+|---|---|
+| Cluster penalty crosses A/B cutoff | persisted `WalletScoreSnapshot.qualification_score` and the tier decision both use the SAME `dataclasses.replace`-folded `ScoringResult` -- proven byte-identical at the real-service level |
+| Eligible wallet, first invocation | tier is the real score-derived tier, never forced DISCOVERED |
+| Eligible wallet, exact replay | no new score row, no new tier row (`score_written=False`, `tier_transition=None`) |
+| Missing `forward_information` | counted toward the missing-evidence confidence tally (previously excluded); remains null with its 15% neutral-prior weight, no redistribution |
+| Same final score, changed components/penalties/exclusions/history reason/manifest/as_of/build identity | `_score_equal` (11-parameter full semantic comparison) treats this as a NEW snapshot, never deduped |
+| History-row equality | now includes `history_completeness_reason` |
+| `BUILD_HASH` | hashes all 6 Phase 3 artifact files concatenated, not just `qualification_service.py` |
+
+I. Checkpoint-protocol matrix (P3-R7)
+
+| Item | Result |
+|---|---|
+| Historical `orchestration/checkpoints/phase_3.md` (no END marker) | rejected by the pre-existing, unmodified `validate_checkpoint_content` -- proven directly against the real file on disk |
+| This checkpoint (`phase_3_remediation.md`) | begins with the required `================ ARGUS ORCHESTRATOR CHECKPOINT ================` line and ends with the required `================ END ARGUS CHECKPOINT =========================` line |
+| `orchestration/bundles/phase_3_remediation.txt` | contains this checkpoint's bytes verbatim plus the required PROTOCOL.md review items |
+| Historical `phase_3.md`/`phase_3.txt` | byte-for-byte unmodified, preserved as evidence |
+
+J. PHASE_3_CANDIDATE_SAMPLE_BLOCKED disposition (unchanged, not a remediation item)
+
+Per `argus-phase-3-remediation-001`'s own explicit statement, "The exact
+PHASE_3_CANDIDATE_SAMPLE_BLOCKED result is accepted... It is not a
+remediation item." `orchestration/phase_3/SAMPLE_REPORT.md` is unchanged: 1
+genuine candidate wallet, zero usable positions, `history_completeness=
+UNKNOWN`, `qualification_score=descriptive_score=50.00` (the honest neutral
+prior). No new authorized authentic evidence exists in this sandbox that
+would change this disposition, so it was not touched.
+
+K. Commands actually run (all against this exact commit -- this
+   checkpoint's own `GIT_COMMIT`, filled in by the second commit per this
+   project's established two-commit convention)
+
+- `uv run pytest tests/unit/test_phase3_wallet_qualification.py -q` -- 23
+  passed (up from 12 in the original submission; +11 new remediation
+  tests).
+- `uv run pytest tests/integration/test_phase3_wallet_qualification.py -q`
+  -- 7 passed (up from 3; +4 new remediation tests, real PostgreSQL 16).
+- `uv run pytest tests/unit/test_orchestrator_watch.py -q` (the P3-R7
+  focused remediation module) -- includes 2 new tests proving the
+  pre-existing checkpoint-marker validator's correctness; full module
+  passes.
+- `uv run pytest tests/integration/test_migrations.py -q` -- 13 passed (7
+  head-revision assertions mechanically updated from `"0010"` to `"0011"`
+  for the new migration, same pattern as the original Phase 3 submission's
+  `"0009"` -> `"0010"` update).
+- `uv run pytest tests/golden tests/replay tests/phase_1_5 -q` -- 112
+  passed (unchanged -- regression).
+- `uv run pytest tests/integration -q` -- 78 passed (up from 74).
+- `uv run pytest -q` (full repository suite) -- 738 passed, 0 failed, 0
+  unexplained skipped (up from 721).
+- `uv run ruff check .` -- All checks passed.
+- `uv run ruff format --check .` -- 211 files already formatted.
+- `uv run mypy` (bare -- `[tool.mypy]` scopes this to `src/argus`) --
+  Success: no issues found in 110 source files.
+- `uv run alembic current` -- `0011 (head)`.
+- Migration round-trip: `tests/integration/test_migrations.py`'s
+  `test_migration_from_zero_to_head_creates_identity_columns` (zero-to-head
+  through 0011), `test_upgrade_head_is_idempotent_and_restart_safe`
+  (upgrade-from-0010-equivalent via a second head upgrade, restart-safe),
+  and `test_downgrade_then_upgrade_restores_identity_columns_cleanly`
+  (downgrade to 0005 then re-upgrade to head, clean) all pass at head
+  `0011` -- migration `0011_phase3_remediation_point_in_time_and_ledger_
+  integrity.py`'s own `upgrade()`/`downgrade()` are exercised by every one
+  of these.
+- `uv run argus fixtures validate-real-chain` -- all 12 real-chain fixtures
+  ok (unaffected by this round -- regression-confirmed).
+- Changed-file secret scan (AWS-style keys, PEM headers, inline
+  password/api-key/secret/token literals) across every file this round
+  touched (`git status --short`) -- clean, no matches.
+- `git diff --stat 69a8de622b1977f92999ca680fcb8d851ba78c9f -- .
+  ':!orchestration'` (including the new untracked migration file) -- 15
+  files changed, 1957 insertions(+), 363 deletions(-).
+
+PostgreSQL 16 remains the explicit functional substitute for PostgreSQL 17;
+none of the above is described as PostgreSQL 17 validation.
+
+L. Test results
+
+- unit `test_phase3_wallet_qualification.py`: 23/23 (was 12/12)
+- unit full suite: 548 passed
+- integration `test_phase3_wallet_qualification.py`: 7/7 (was 3/3, real
+  PostgreSQL 16)
+- integration `test_migrations.py`: 13/13
+- integration full suite: 78 passed (was 74)
+- golden + replay + phase_1_5: 112 passed (unchanged -- regression)
+- full repository suite: 738 passed, 0 failed, 0 unexplained skipped (up
+  from 721)
+- ruff check: clean
+- ruff format --check: clean (211 files)
+- mypy: clean, 110 source files
+- real-chain fixtures: 12/12 ok
+- alembic head: 0011
+
+M. Frozen findings disposition summary
+
+All 7 frozen findings (P3-R1 through P3-R7) are FIXED -- see sections B
+through I above for the exact code/test/evidence mapping required by this
+instruction. No optional hardening item from the `HARDENING_BACKLOG` list
+(automated cluster-link discovery, DB-enforced canonical wallet ordering,
+automatic RETIRED assignment, additional cluster signals, broader
+metric-snapshot deduplication beyond the exact frozen replay requirements)
+was pulled into this remediation's scope.
+
+N. Frozen regression (required test category 9)
+
+- The original discovery-contamination fixture
+  (`test_p3_discovery_contamination_excluded_from_qualification_not_
+  descriptive`, `test_p3_discovery_contamination_never_leaks_through_
+  recency_or_tier_gate`, and the integration
+  `test_p3_discovery_contamination_excluded_at_the_service_level`) still
+  proves descriptive inclusion and qualification exclusion through
+  components, counts, windows, penalties, confidence, and tier eligibility
+  -- unchanged pass.
+- Transfer uncertainty
+  (`test_p3_unresolved_transfer_never_becomes_a_fabricated_buy`,
+  `test_p3_transfer_alongside_genuine_swaps_downgrades_confidence_not_
+  quantity`), small-sample shrinkage
+  (`test_p3_tiny_but_superficially_excellent_sample_cannot_reach_top_
+  score`), frozen weights/threshold values
+  (`test_p3_sample_gate_thresholds_are_the_frozen_v1_values`), migration
+  history (0001-0010 all still apply cleanly beneath the new 0011), Phase 0
+  through 2 semantics (`tests/unit`, `tests/integration/
+  test_phase2_discovery.py` regression-clean inside the full-suite run),
+  golden fixtures, replay, and all safety prohibitions remain unchanged --
+  all pass unchanged in the full-suite run (section L).
+
+O. Environmental deferrals (unchanged from the original Phase 3 submission;
+   none reopened this round, per this instruction's own explicit
+   requirement that they "must remain explicitly deferred")
+
+- `LIVE_HELIUS_RPC_VALIDATION` -- DEFERRED_ENVIRONMENTAL_CHECK, unchanged.
+- `LIVE_HELIUS_WSS_VALIDATION` -- DEFERRED_ENVIRONMENTAL_CHECK, unchanged.
+- `PG17_COMPOSE_VALIDATION` -- DEFERRED_ENVIRONMENTAL_CHECK, unchanged.
+  PostgreSQL 16 remains the explicit functional substitute; every
+  Postgres-backed command in section K ran against it, never described as
+  PostgreSQL 17 validation.
+- `BQ_PUBLIC_DATASET_ACCESS` -- unchanged deferral.
+
+None of these deferrals is claimed as PASS, and none authorizes live
+readiness by itself.
+
+P. Deviation from the audit instruction
+
+None. Work was strictly limited to the 7 named frozen findings
+(`AUTHORIZED_ACTION: REMEDIATE_ALL_FROZEN_PHASE_3_BLOCKERS_ONLY`): no
+`HARDENING_BACKLOG` item was pulled into scope; the already-accepted
+structural contamination split, frozen component weights, 20-position/
+10-token thresholds, transfer-uncertainty rule, honest candidate-sample
+fallback, Phase 2 acquisition safety cases, and approved provider
+architecture were not redesigned or retuned beyond the minimal wiring these
+7 findings required (e.g. `AcquisitionManifest` replacing the free-text CLI
+flag for P3-R2, `round_trip_index` added to the existing schema for P3-R3
+without rewriting migration 0010). No Phase 4 work was begun. The
+historical `orchestration/checkpoints/phase_3.md`/`orchestration/bundles/
+phase_3.txt` were not overwritten. `orchestration/ORCHESTRATOR_
+INSTRUCTIONS.md` was not modified. No live trade, signing, credential
+disclosure, paid-provider upgrade, or threshold relaxation was performed or
+attempted.
+
+This sandbox's local PostgreSQL service was found stopped at the start of
+this round's validation (unrelated to any change made here) and was
+restarted (`sudo service postgresql start`), the same non-destructive,
+local dev cluster used throughout this project -- no data lost, no schema
+change beyond migration 0011's own deliberate, disclosed data-clearing
+step (section Q).
+
+Q. Migration 0011 data-clearing disclosure
+
+Migration `0011_phase3_remediation_point_in_time_and_ledger_integrity.py`
+adds new `NOT NULL` columns (`wallet_positions.round_trip_index`,
+`wallet_positions.input_manifest_digest`,
+`wallet_score_snapshots.input_manifest_digest`) that cannot be honestly
+backfilled for rows computed under the pre-remediation, now-fixed buggy
+code (single-lifetime-row positions, unbounded evidence queries, the
+unadjusted-tier bug). Its `upgrade()` therefore `DELETE`s all rows from the
+4 derived/recomputable Phase 3 decision tables (`wallet_tier_history`,
+`wallet_score_snapshots`, `wallet_metrics_snapshots`, `wallet_positions`)
+and resets `wallets.current_tier = NULL`. All raw evidence tables (`swaps`,
+`wallets` identity rows, `wallet_discovery_events`, `early_buyers`,
+`wallet_cluster_links`) are completely untouched -- no chain evidence is
+lost, only derived decisions computed by code this remediation replaces.
+This is disclosed here explicitly, not silent. `downgrade()` reverses the
+schema changes only (not data).
+
+R. Known bugs / debt
+
+- No new known bugs are introduced by this round's changes.
+- `WalletMetricsSnapshot` now persists all 5 windows (P3-R4 fixed) -- the
+  original submission's own disclosed debt item is closed.
+- All other known debt items disclosed in
+  `orchestration/checkpoints/phase_3.md` sections not superseded by this
+  remediation (wallet-cluster-link *detection* from raw evidence is not
+  built this round -- only *consumption* of already-persisted links,
+  unchanged and explicitly accepted as `HARDENING_BACKLOG` by this
+  instruction) remain unchanged and not reopened.
+
+S. Security state
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` -- unaffected.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast path
+  exists anywhere in this round's changed files (section K's diff-stat
+  file list).
+- Credential handling for `HELIUS_API_KEY` is unchanged.
+- Secret scan clean on this round's changed files (section K).
+- No paid-provider feature enabled; no Phase 4 or later-phase code started;
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` not modified.
+
+T. Cost confirmation
+
+No real provider call was made anywhere in this round: every new test uses
+the same deterministic fixtures/fakes already established in the Phase 3
+codebase (`_FakeSwap`, real-but-local-only Postgres rows via
+`connection_for_role(..., DbRole.INGEST)`), never a real or paid provider.
+Zero new usage-recorder rows this round.
+
+U. Next specified phase
+
+Per orchestrator instruction `argus-phase-3-remediation-001`, this
+instruction approves no phase and authorizes remediation of exactly the 7
+named frozen Phase 3 findings. `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
+was not modified.
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` (`2`) and
+`approved_commit` are left unchanged -- this session does not and cannot
+self-approve Phase 3. Per this project's established two-commit convention,
+this checkpoint, the paired bundle, `docs/BUILD_STATE.md`,
+`docs/DECISION_LOG.md`, and `orchestration/AGENT_HANDOFF.md` are committed
+once with every commit-hash-bearing field set to the literal placeholder
+`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately following
+commit fills in that first commit's own real hash in every one of those
+fields -- both commits carry the sole terminal trailer
+`ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-001` with no paragraph
+after it, verified via `git interpret-trailers --parse` before push.
+
+STOP. Await independent audit of this remediation before any further phase
+work. Passing these builder tests does not approve Phase 3.
+
+================ END ARGUS CHECKPOINT =========================
+
+--- git status --porcelain (ok) ---
+$ git status --porcelain
+M src/argus/cli.py
+ M src/argus/domain/wallet_history_quality.py
+ M src/argus/domain/wallet_metrics_snapshots.py
+ M src/argus/domain/wallet_positions.py
+ M src/argus/domain/wallet_score_snapshots.py
+ M src/argus/wallets/history_reconstruction.py
+ M src/argus/wallets/position_reconstruction.py
+ M src/argus/wallets/qualification_service.py
+ M src/argus/wallets/scoring.py
+ M src/argus/wallets/tier_lifecycle.py
+ M tests/integration/test_migrations.py
+ M tests/integration/test_phase3_wallet_qualification.py
+ M tests/unit/test_orchestrator_watch.py
+ M tests/unit/test_phase3_wallet_qualification.py
+?? migrations/versions/0011_phase3_remediation_point_in_time_and_ledger_integrity.py
+?? orchestration/checkpoints/phase_3_remediation.md
+
+--- git log -5 --oneline (ok) ---
+$ git log -5 --oneline
+da09d4f orchestration: require consolidated Phase 3 remediation
+69a8de6 docs(phase-3): fill in commit hash for checkpoint, bundle, and handoff
+f2e6942 Phase 3: wallet reconstruction + unbiased qualification
+c4adf96 orchestration: approve Phase 2 and authorize Phase 3
+a13ba2a docs(phase-2-remediation-2): fill in commit hash for checkpoint, bundle, and handoff
+
+--- git diff --stat HEAD (ok) ---
+$ git diff --stat HEAD
+src/argus/cli.py                                   |  57 ++-
+ src/argus/domain/wallet_history_quality.py         |  17 +-
+ src/argus/domain/wallet_metrics_snapshots.py       |   9 +-
+ src/argus/domain/wallet_positions.py               |  29 +-
+ src/argus/domain/wallet_score_snapshots.py         |  19 +
+ src/argus/wallets/history_reconstruction.py        | 175 +++++---
+ src/argus/wallets/position_reconstruction.py       | 374 ++++++++++-----
+ src/argus/wallets/qualification_service.py         | 365 +++++++++++----
+ src/argus/wallets/scoring.py                       | 129 ++++--
+ src/argus/wallets/tier_lifecycle.py                |  20 +-
+ tests/integration/test_migrations.py               |  14 +-
+ .../test_phase3_wallet_qualification.py            | 499 ++++++++++++++++++++-
+ tests/unit/test_orchestrator_watch.py              |  37 ++
+ tests/unit/test_phase3_wallet_qualification.py     | 424 +++++++++++++++--
+ 14 files changed, 1805 insertions(+), 363 deletions(-)
+
+--- git diff --name-status HEAD (ok) ---
+$ git diff --name-status HEAD
+M	src/argus/cli.py
+M	src/argus/domain/wallet_history_quality.py
+M	src/argus/domain/wallet_metrics_snapshots.py
+M	src/argus/domain/wallet_positions.py
+M	src/argus/domain/wallet_score_snapshots.py
+M	src/argus/wallets/history_reconstruction.py
+M	src/argus/wallets/position_reconstruction.py
+M	src/argus/wallets/qualification_service.py
+M	src/argus/wallets/scoring.py
+M	src/argus/wallets/tier_lifecycle.py
+M	tests/integration/test_migrations.py
+M	tests/integration/test_phase3_wallet_qualification.py
+M	tests/unit/test_orchestrator_watch.py
+M	tests/unit/test_phase3_wallet_qualification.py
+
+--- repository tree (depth 3) ---
+.
+./.coverage
+./.env
+./.env.example
+./.mypy_cache
+./.mypy_cache/.gitignore
+./.mypy_cache/3.12
+./.mypy_cache/3.12/cache.db
+./.mypy_cache/CACHEDIR.TAG
+./.pytest_cache
+./.pytest_cache/.gitignore
+./.pytest_cache/CACHEDIR.TAG
+./.pytest_cache/README.md
+./.pytest_cache/v
+./.pytest_cache/v/cache
+./.ruff_cache
+./.ruff_cache/.gitignore
+./.ruff_cache/0.16.5
+./.ruff_cache/0.16.5/10515629051138868178
+./.ruff_cache/0.16.5/11503104207240167356
+./.ruff_cache/0.16.5/12260078328580260821
+./.ruff_cache/0.16.5/14019792682234110828
+./.ruff_cache/0.16.5/16102025911255337710
+./.ruff_cache/0.16.5/16473032065540448277
+./.ruff_cache/0.16.5/18213512197950766699
+./.ruff_cache/0.16.5/2758661695359283116
+./.ruff_cache/0.16.5/2946778260339496259
+./.ruff_cache/0.16.5/4443864223019225297
+./.ruff_cache/0.16.5/523010622529496863
+./.ruff_cache/0.16.5/6348095768289384867
+./.ruff_cache/0.16.5/726814796474720772
+./.ruff_cache/0.16.5/7671417948754260473
+./.ruff_cache/0.16.5/8211647409924013096
+./.ruff_cache/0.16.5/9274844432529131567
+./.ruff_cache/CACHEDIR.TAG
+./.venv
+./.venv/.gitignore
+./.venv/.lock
+./.venv/CACHEDIR.TAG
+./.venv/bin
+./.venv/bin/activate
+./.venv/bin/activate.bat
+./.venv/bin/activate.csh
+./.venv/bin/activate.fish
+./.venv/bin/activate.nu
+./.venv/bin/activate.ps1
+./.venv/bin/activate_this.py
+./.venv/bin/alembic
+./.venv/bin/argus
+./.venv/bin/coverage
+./.venv/bin/coverage-3.12
+./.venv/bin/coverage3
+./.venv/bin/deactivate.bat
+./.venv/bin/dmypy
+./.venv/bin/dotenv
+./.venv/bin/fastapi
+./.venv/bin/httpx
+./.venv/bin/hypothesis
+./.venv/bin/idna
+./.venv/bin/mako-render
+./.venv/bin/markdown-it
+./.venv/bin/mypy
+./.venv/bin/mypyc
+./.venv/bin/py.test
+./.venv/bin/pydoc.bat
+./.venv/bin/pygmentize
+./.venv/bin/pytest
+./.venv/bin/python
+./.venv/bin/python3
+./.venv/bin/python3.12
+./.venv/bin/ruff
+./.venv/bin/stubgen
+./.venv/bin/stubtest
+./.venv/bin/typer
+./.venv/bin/uvicorn
+./.venv/bin/watchfiles
+./.venv/include
+./.venv/include/site
+./.venv/lib
+./.venv/lib/python3.12
+./.venv/lib64
+./.venv/pyvenv.cfg
+./Dockerfile
+./MASTER_SPEC.md
+./Makefile
+./README.md
+./alembic.ini
+./compose.yaml
+./config
+./config/argus.default.yaml
+./config/bootstrap_tokens.example.csv
+./config/providers.yaml
+./config/risk.default.yaml
+./config/scoring_v1.yaml
+./config/signals_v1.yaml
+./data
+./data/cache
+./data/cache/.gitkeep
+./data/exports
+./data/exports/.gitkeep
+./data/parquet
+./data/parquet/.gitkeep
+./data/raw
+./data/raw/.gitkeep
+./docs
+./docs/ARCHITECTURE.md
+./docs/BUILD_STATE.md
+./docs/CHECKPOINTS.md
+./docs/DATA_MODEL.md
+./docs/DECISION_LOG.md
+./docs/EXECUTION_SAFETY.md
+./docs/OPERATIONS.md
+./docs/PROVIDERS.md
+./docs/RESEARCH_METHODS.md
+./docs/RUNBOOK.md
+./migrations
+./migrations/env.py
+./migrations/script.py.mako
+./migrations/versions
+./migrations/versions/.gitkeep
+./migrations/versions/0001_baseline_roles_and_provider_usage.py
+./migrations/versions/0002_phase1_chain_events_swaps_watermarks.py
+./migrations/versions/0003_commitment_observations_and_swap_dedup.py
+./migrations/versions/0004_commitment_sequence_rejections_parse_attempts_immutability.py
+./migrations/versions/0005_wallet_reconciliation_ok_dimension.py
+./migrations/versions/0006_parse_attempt_build_config_git_identity.py
+./migrations/versions/0007_swaps_build_hash_versioning.py
+./migrations/versions/0008_phase2_token_wallet_discovery.py
+./migrations/versions/0009_phase2_u64_raw_quantities.py
+./migrations/versions/0010_phase3_wallet_reconstruction_and_qualification.py
+./migrations/versions/0011_phase3_remediation_point_in_time_and_ledger_integrity.py
+./orchestration
+./orchestration/AGENT_HANDOFF.md
+./orchestration/ORCHESTRATOR_INSTRUCTIONS.md
+./orchestration/PROTOCOL.md
+./orchestration/bundles
+./orchestration/bundles/phase_0_remediation.txt
+./orchestration/bundles/phase_1.txt
+./orchestration/bundles/phase_1_5.txt
+./orchestration/bundles/phase_1_5_remediation_1.txt
+./orchestration/bundles/phase_1_5_remediation_2.txt
+./orchestration/bundles/phase_1_remediation_1.txt
+./orchestration/bundles/phase_1_remediation_2.txt
+./orchestration/bundles/phase_1_remediation_3.txt
+./orchestration/bundles/phase_1_remediation_4.txt
+./orchestration/bundles/phase_1_remediation_5.txt
+./orchestration/bundles/phase_1_remediation_6.txt
+./orchestration/bundles/phase_2.txt
+./orchestration/bundles/phase_2_remediation.txt
+./orchestration/bundles/phase_2_remediation_2.txt
+./orchestration/bundles/phase_3.txt
+./orchestration/bundles/watcher_remediation.txt
+./orchestration/bundles/watcher_remediation_2.txt
+./orchestration/bundles/watcher_remediation_3.txt
+./orchestration/bundles/watcher_setup.txt
+./orchestration/checkpoints
+./orchestration/checkpoints/phase_0_remediation.md
+./orchestration/checkpoints/phase_1.md
+./orchestration/checkpoints/phase_1_5.md
+./orchestration/checkpoints/phase_1_5_remediation_1.md
+./orchestration/checkpoints/phase_1_5_remediation_2.md
+./orchestration/checkpoints/phase_1_remediation_1.md
+./orchestration/checkpoints/phase_1_remediation_2.md
+./orchestration/checkpoints/phase_1_remediation_3.md
+./orchestration/checkpoints/phase_1_remediation_4.md
+./orchestration/checkpoints/phase_1_remediation_5.md
+./orchestration/checkpoints/phase_1_remediation_6.md
+./orchestration/checkpoints/phase_2.md
+./orchestration/checkpoints/phase_2_remediation.md
+./orchestration/checkpoints/phase_2_remediation_2.md
+./orchestration/checkpoints/phase_3.md
+./orchestration/checkpoints/phase_3_remediation.md
+./orchestration/checkpoints/watcher_remediation.md
+./orchestration/checkpoints/watcher_remediation_2.md
+./orchestration/checkpoints/watcher_remediation_3.md
+./orchestration/checkpoints/watcher_setup.md
+./orchestration/phase_1_5
+./orchestration/phase_1_5/evidence
+./orchestration/phase_2
+./orchestration/phase_2/DEMONSTRATION.md
+./orchestration/phase_2/DEMONSTRATION_REMEDIATION.md
+./orchestration/phase_2/evidence
+./orchestration/phase_3
+./orchestration/phase_3/SAMPLE_REPORT.md
+./pyproject.toml
+./runtime
+./runtime/logs
+./runtime/logs/.gitkeep
+./runtime/logs/orchestrator_watcher.log
+./runtime/orchestrator_watcher.lock
+./runtime/orchestrator_watcher_state.json
+./runtime/reports
+./runtime/reports/.gitkeep
+./runtime/reports/checkpoint_phase_0.txt
+./runtime/reports/orchestrator_bundle_phase_0.txt
+./runtime/reports/orchestrator_bundle_phase_1.txt
+./runtime/reports/orchestrator_bundle_phase_3.txt
+./runtime/state
+./runtime/state/.gitkeep
+./scratchpad_sources
+./scripts
+./scripts/_generate_golden_fixtures.py
+./scripts/argus_orchestrator_watch.py
+./scripts/backup.sh
+./scripts/bootstrap.sh
+./scripts/checkpoint.sh
+./scripts/phase_1_5_feasibility.py
+./scripts/smoke_test.sh
+./src
+./src/argus
+./src/argus/__init__.py
+./src/argus/api
+./src/argus/checkpoint.py
+./src/argus/cli.py
+./src/argus/clock.py
+./src/argus/clustering
+./src/argus/config.py
+./src/argus/copyability
+./src/argus/db
+./src/argus/domain
+./src/argus/execution
+./src/argus/golden_fixtures.py
+./src/argus/graph
+./src/argus/health.py
+./src/argus/ingestion
+./src/argus/logging.py
+./src/argus/notifications
+./src/argus/outcomes
+./src/argus/parsing
+./src/argus/providers
+./src/argus/research
+./src/argus/risk
+./src/argus/scoring
+./src/argus/shadow
+./src/argus/signals
+./src/argus/tokens
+./src/argus/wallets
+./tests
+./tests/__init__.py
+./tests/fixtures
+./tests/fixtures/__init__.py
+./tests/golden
+./tests/golden/__init__.py
+./tests/golden/fixtures
+./tests/golden/test_generic_parser.py
+./tests/integration
+./tests/integration/__init__.py
+./tests/integration/conftest.py
+./tests/integration/test_checkpoint_bundle.py
+./tests/integration/test_cli.py
+./tests/integration/test_clock_health_sql.py
+./tests/integration/test_db_roles.py
+./tests/integration/test_health_endpoint.py
+./tests/integration/test_immutability_grants.py
+./tests/integration/test_migrations.py
+./tests/integration/test_phase1_schema.py
+./tests/integration/test_phase2_discovery.py
+./tests/integration/test_phase3_wallet_qualification.py
+./tests/integration/test_provider_usage_model.py
+./tests/integration/test_reconciliation_sql.py
+./tests/integration/test_usage_accounting.py
+./tests/phase_1_5
+./tests/phase_1_5/test_historical_feasibility.py
+./tests/replay
+./tests/replay/__init__.py
+./tests/replay/conftest.py
+./tests/replay/test_replay.py
+./tests/unit
+./tests/unit/__init__.py
+./tests/unit/test_checkpoint.py
+./tests/unit/test_clock.py
+./tests/unit/test_clock_monitor.py
+./tests/unit/test_commitment.py
+./tests/unit/test_config.py
+./tests/unit/test_db_credentials.py
+./tests/unit/test_db_errors.py
+./tests/unit/test_golden_fixtures.py
+./tests/unit/test_historical_acquisition.py
+./tests/unit/test_ingestion_manager.py
+./tests/unit/test_logging.py
+./tests/unit/test_orchestrator_watch.py
+./tests/unit/test_parse_ledger.py
+./tests/unit/test_phase2_discovery.py
+./tests/unit/test_phase3_wallet_qualification.py
+./tests/unit/test_priority_scheduler.py
+./tests/unit/test_probes.py
+./tests/unit/test_provider_adapters.py
+./tests/unit/test_reconciliation.py
+./tests/unit/test_retry.py
+./uv.lock
+
+--- dependency summary (uv pip list) (ok) ---
+$ uv pip list
+Package           Version         Editable project location
+----------------- --------------- -------------------------
+alembic           1.19.1
+annotated-doc     0.0.5
+annotated-types   0.8.0
+anyio             4.14.2
+argus             0.1.0           /home/user/Quant
+asgi-lifespan     2.1.0
+asyncpg           0.31.0
+certifi           2026.7.22
+click             8.5.0
+coverage          7.16.0
+fastapi           0.141.1
+greenlet          3.5.5
+h11               0.16.0
+httpcore          1.0.9
+httptools         0.8.0
+httpx             0.28.1
+hypothesis        6.167.1
+idna              3.19
+iniconfig         2.3.0
+librt             0.15.0
+mako              1.4.1
+markdown-it-py    4.2.0
+markupsafe        3.0.3
+mdurl             0.1.2
+mypy              1.20.2
+mypy-extensions   1.1.0
+packaging         26.3
+pathspec          1.1.1
+pluggy            1.6.0
+pydantic          2.13.5
+pydantic-core     2.46.5
+pydantic-settings 2.15.0
+pygments          2.21.0
+pytest            8.4.2
+pytest-asyncio    0.26.0
+pytest-cov        5.0.0
+python-dotenv     1.2.3
+pyyaml            6.0.3
+rich              13.9.4
+ruff              0.16.5
+shellingham       1.5.4
+sniffio           1.3.1
+sortedcontainers  2.4.0
+sqlalchemy        2.0.52
+starlette         1.6.0
+structlog         24.4.0
+typer             0.27.2
+types-pyyaml      6.0.12.20260815
+typing-extensions 4.16.0
+typing-inspection 0.4.4
+uvicorn           0.50.1
+uvloop            0.22.1
+watchfiles        1.2.0
+websockets        12.0
+
+--- compose service summary (ok) ---
+$ docker compose config --services
+postgres
+api
+
+--- alembic head (ok) ---
+$ uv run alembic current
+0011 (head)
+
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+
+--- MASTER_SPEC hash ---
+41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+
+--- BUILD_STATE.md ---
+# ARGUS Build State
+
+Machine-and-human-readable state for session recovery (MASTER_SPEC.md section 8).
+Every new implementation session must read this file before doing anything else.
+
+```yaml
+current_phase: 3  # Phase 3 (WALLET RECONSTRUCTION + UNBIASED QUALIFICATION) build complete (implementation-agent-reported); NOT yet orchestrator-approved
+last_completed_phase: 3  # implementation-agent-reported complete; see orchestration/checkpoints/phase_3.md; awaiting orchestrator review
+last_orchestrator_approved_phase: 2  # Applied per argus-phase-3-001's explicit approval (APPROVES_PHASE: 2). Phase 3 itself is NOT approved -- argus-phase-3-001's own explicit "must NOT become 3 until a later orchestrator approval."
+approved_commit: a13ba2ab8729a08de3c571b7b12c32cc3f14c56b  # Phase 2's orchestrator-approved commit (argus-phase-3-001's APPROVES_PHASE: 2) -- unchanged until Phase 3 is itself approved
+awaiting_orchestrator_review: true  # Phase 3 build complete; see orchestration/checkpoints/phase_3.md
+
+# PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
+# (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
+# exercised end-to-end. It is DEFERRED, not PASS and not FAIL: functional
+# correctness of the migration/application code was verified against a
+# substitute PostgreSQL 16 server instead (see known_blockers below and
+# docs/DECISION_LOG.md). Per explicit orchestrator instruction (2026-08-30):
+# this deferral does NOT block starting Phase 1, but DOES block approving
+# live readiness until it is closed out with a real postgres:17 run.
+PG17_COMPOSE_VALIDATION: DEFERRED_ENVIRONMENTAL_CHECK
+
+known_blockers:
+  - "PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK. This
+     implementation sandbox's egress policy blocks Docker Hub's image CDN
+     (production.cloudfront.docker.com -> 403 at the proxy), so
+     `docker compose up postgres` (the actual postgres:17 image) could not
+     be pulled or exercised here. compose.yaml is unmodified and still
+     targets postgres:17 as required by TECH-004 -- this is an environment
+     limitation of this sandbox, not an architecture change. As a substitute,
+     Phase 0 functional acceptance (migration-from-zero, DB roles,
+     provider_usage grants, argus health, full pytest suite, missing-credential
+     fail-closed behavior) was verified against the sandbox's
+     locally-installed PostgreSQL 16 server, running the exact same Alembic
+     migration and application code Compose would run against PostgreSQL 17.
+     This PG16 run demonstrates the migration/application logic is correct;
+     it does NOT demonstrate anything PostgreSQL-17-version-specific and
+     must not be cited as PostgreSQL 17 validation. Closing this out requires
+     running `make bootstrap && make up` (or equivalent) on a host with
+     normal Docker Hub access and recording the result here and in
+     docs/DECISION_LOG.md. See docs/DECISION_LOG.md for the full decision
+     record. Per explicit orchestrator instruction, this deferred check does
+     NOT block Phase 1, but IS required before live readiness can be
+     approved."
+  - "REALCHAIN_GOLDEN_FIXTURES = 9_OF_9_CATEGORIES_ONE_WITH_CAVEAT (round
+     5, findings #1/#2/#3/#4 -- see below for how this improved on round
+     4's honestly-reported 6/9). Round 2 imported 4 real fixtures from
+     solana-labs/explorer (MIT); round 3 imported 6 more from
+     0xjeffro/tx-parser (MPL-2.0); together these evidenced 6 of 9
+     required categories: 'simple transfer' (both perspectives),
+     SOL-to-token swap, token-to-SOL swap, token-to-USDC swap, multi-hop
+     swap, and partial sell. Round 5 finding #4 fixed the parser's
+     ambiguous-multi-asset handling, which as a side effect makes
+     `real_mainnet_dca_close_dual_asset_transfer_in` (imported in round
+     3, excluded from category count by round 4's correction below)
+     resolve to `UNKNOWN`, ineligible -- satisfying category 7,
+     'ambiguous multi-asset transaction', with no new fixture needed.
+     Round 5 finding #3 searched three named candidate repositories and
+     imported two more real fixtures: `real_mainnet_failed_nft_sale`
+     (milktoastlab/SolanaNFTBot, MIT -- a genuine failed on-chain Magic
+     Eden sale, `meta.err` set, extracted from its TypeScript-module
+     wrapper via a new deterministic `extract_ts_const_export_default`
+     transform step), satisfying category 9, 'failed on-chain
+     transaction', cleanly; and
+     `real_mainnet_orca_increase_liquidity_multi_asset_outflow`
+     (quellen-sol/ingestooor, GPL-3.0 -- a genuine Orca Whirlpool
+     increaseLiquidity call), mapped to category 8, 'multiple
+     token-account/LP-style action', **with an explicit caveat**: the
+     parser's own `LP_ACTION` label does not fire for this specific
+     transaction (only one non-SOL asset is directly signer-owned; the
+     LP position is held by a program-derived vault account instead), so
+     it resolves via the ambiguous-multi-asset-outflow branch to
+     `UNKNOWN` instead -- the substantive requirement (a real
+     multi-token-account liquidity transaction, correctly never a
+     confident single-asset trade) is satisfied, the specific label is
+     not. **All 9 of 9 round-1-required categories now have real-chain
+     evidence**, 8 without caveat and 1 (LP action) with the caveat above
+     -- see tests/golden/fixtures/real/SEARCH_LOG.md's 'Round 5' section
+     for the full search log, candidate-repository evaluation, and
+     license-compatibility reasoning (including for GPL-3.0, reused here
+     as one immutable verbatim data file, not linked code). Round 2/3/4's
+     own checkpoints and phase-history rows below are left unmodified as
+     immutable history of what was claimed at the time.
+     ROUND 6 UPDATE: independent re-review (round 6 finding #3) found the
+     round-5 LP/multiple-account fixture
+     (real_mainnet_orca_increase_liquidity_multi_asset_outflow) had only
+     one material non-SOL token account from the reviewed wallet's own
+     perspective -- it did not actually satisfy the category. Per the
+     round-6 instruction's explicit 'source a better fixture; do not
+     relabel it', it was replaced (same upstream repo/commit, different
+     wallet perspective:
+     real_mainnet_orca_close_position_multi_account, wallet
+     JC8m5y9D7atuzD7mToWN8VVrtxyxCXQ3SFWMHFiLZagN, the transaction's
+     actual signer) with a fixture independently proven, via a new
+     account-level delta oracle (compute_account_level_deltas /
+     ExpectedAccountAssetDelta), to have two genuinely distinct material
+     token accounts. All 9 of 9 required categories still have real-chain
+     evidence, with NO remaining label caveat on this category (the
+     parser correctly still emits UNKNOWN/ineligible for it, which the
+     round-6 instruction explicitly accepts for this category as long as
+     the underlying multi-account evidence is independently proven -- see
+     orchestration/checkpoints/phase_1_remediation_6.md section E item 4
+     and tests/golden/fixtures/real/SEARCH_LOG.md's 'Round 6' section).
+     Round 6 also closed a gap where fixture provenance's saved
+     `git ls-tree` line only proved self-consistency, not an actual
+     offline-verifiable commit->tree->blob object chain (finding #2) --
+     see golden_fixtures.py's GitTreeAttestation/verify_git_object_chain."
+```
+
+## Phase history
+
+| Phase | Status | Commit | Notes |
+|-------|--------|--------|-------|
+| 0 | ORCHESTRATOR-APPROVED (`argus-phase-1-001`, 2026-08-31) | b838558f7eae1eac8d3559c7826ab340d604d916, remediated at ca74d09b3f976a5726fe46c1a8ea59d7bbdd3ad7 (history rewritten 2026-08-30 to scrub inert dev-only placeholder credential strings — see docs/DECISION_LOG.md; these are the post-rewrite hashes) | Foundation scaffold: repo layout, uv env, Compose+Postgres, Alembic baseline + DB roles, config/spec hashing, clock abstraction, structured logging, CLI skeleton, FastAPI skeleton, health framework, provider_usage schema, checkpoint bundle framework. Remediated per orchestrator feedback: removed all hardcoded fallback DB passwords (migrations/versions/0001_*.py, compose.yaml, src/argus/db/connection.py) in favor of required env vars that fail closed via MissingCredentialError; corrected checkpoint STATUS to not claim an unconditional PASS while PG17-via-Docker-Compose remains untested (see PG17_COMPOSE_VALIDATION above). 41/41 tests pass, 93% coverage, ruff+mypy clean. Approved by the ARGUS ORCHESTRATOR at commit `141af487fcfdff41d1597c19ea062139f5427f52` as `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`. See runtime/reports/checkpoint_phase_0.txt for the full checkpoint. |
+| 1 | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-001`, target `141af487fcfdff41d1597c19ea062139f5427f52`) | 28a88f74d28e70542050f5d5e8d9a9d139f26bb8 | Live chain data acquisition + deterministic canonical parsing: Helius RPC/WSS adapter, DexScreener/GeckoTerminal/Jupiter adapters (no signing), fast-path+truth-path reconciliation with per-wallet watermarks and DEGRADED gating, durable clock-anomaly detection wired into reconciliation, immutable `chain_events`/`swaps`/`clock_health_events` ledger, generic balance-delta swap parser (11 golden fixtures), P0-P6 priority scheduler, provider usage accounting with 70/85/95% warnings wired into every real adapter call, HTTP retry/backoff, provider capability/history/usage probe CLI. 204 tests passing, 91% coverage, ruff+mypy clean. STATUS `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`: acceptance criteria 1-2 (live Solana RPC/WebSocket) NOT TESTED -- no `HELIUS_API_KEY` configured and no general internet egress in this sandbox; no end-to-end stream-manager orchestration loop exists yet (each piece is built and tested in isolation). See `orchestration/checkpoints/phase_1.md` for the full 27-item disposition and disclosed gaps. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation row below** -- an independent orchestrator audit (`argus-phase-1-remediation-001`) rejected this self-assessment as overstated; this row is kept unmodified as immutable history. |
+| 1 (remediation round 1) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-001`, target `32c2898ab8c278c2f75f4a2f40fedd9d35b24b08`) | 83bb38497ac3af1402f38dabee6858e00ce2e9fb | Remediated all 10 audit findings from `argus-phase-1-remediation-001`: production `IngestionManager`/`argus ingest run` composing the WebSocket stream, reconciliation, and clock monitor into real runtime behavior; bounded cursor-based truth-path pagination that never silently truncates a gap; an auditable append-only commitment-observation model (replacing the dead `confirmed_at`/`finalized_at` columns) with regression/conflict rejection; parsing wired end-to-end into `swaps` persistence via a real `SqlSwapRecorder`; typed provider-contract validation replacing bare `isinstance(dict)` checks; usage accounting that survives transport exhaustion and is wired into the manager's real streaming code path; a dispatch-count-bounded scheduler starvation guarantee; 6 real `tests/replay` tests (was 0 collected). 260 tests passing, 84% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean. STATUS `PARTIAL_NOT_TESTED_REALCHAIN_FIXTURES`: 25 of 26 mandatory acceptance criteria PASS; criterion 15 (authenticated real-chain golden fixtures) is honestly NOT TESTED/blocked -- this sandbox has no general internet egress and no already-available safe source of authentic transaction data, per the instruction's own explicit fallback for this exact case. See `orchestration/checkpoints/phase_1_remediation_1.md` for the full 26-item disposition. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation round 2 row below** -- an independent orchestrator audit (`argus-phase-1-remediation-002`) rejected round 1 as still insufficient; this row is kept unmodified as immutable history. |
+| 1 (remediation round 2) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-002`, target `04f367b8e03e99718812f872a34e73e170c44f0d`) | e44b5885b8aa02105e13051af4045e23e17b084c | Remediated all 12 audit findings from `argus-phase-1-remediation-002`: session-per-operation unit-of-work (no `AsyncSession` shared across concurrent tasks); explicit subscription-acknowledgement lifecycle with three independent recovery dimensions (stream/reconciliation/clock) so no single dimension can restore OK alone; structured task supervision (`IngestionManagerFailure`, fail-closed on any child-task death); finalization sweep wired into a real manager background loop; deterministic atomic commitment derivation (monotonic `sequence` column, `pg_advisory_xact_lock` serialization, full-same-level-state conflict validation, `commitment_observation_rejections` audit table); mechanical append-only enforcement at the database role layer; typed canonical provider response models (`argus.providers.models`) replacing provider-shaped dicts; usage records exactly one terminal outcome decided after decode/validation (including a visible signal on recorder failure); durable versioned `parse_attempts` ledger + `argus ingest reparse`; pagination continuity/ordering validation; a cancelled scheduler submission can never execute; and 4 genuine real-chain golden fixtures (of 9 required categories) sourced via this sandbox's working GitHub read access, imported through a new offline `argus fixtures import-real-chain`/`validate-real-chain` tool. 327 tests passing, 85% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean through migration 0005. STATUS `PARTIAL_REALCHAIN_FIXTURES_4_OF_9_CATEGORIES`: 26 of 27 mandatory acceptance criteria PASS; criterion 21 (real-chain golden fixtures) is honestly PARTIAL -- 4 of 9 required categories now genuinely real-chain evidenced, the remaining 8 (every DEX-swap-shaped category) are NOT TESTED since no repository searched embeds real swap-transaction bytes. See `orchestration/checkpoints/phase_1_remediation_2.md` for the full 27-item disposition and `tests/golden/fixtures/real/SEARCH_LOG.md` for the search log. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation round 3 row below** -- an independent orchestrator audit (`argus-phase-1-remediation-003`) rejected round 2 as still insufficient; this row is kept unmodified as immutable history. |
+| 1 (remediation round 3) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-003`, target `87a0e2efe329512a78f81331da24a85adf62bbbe`) | 81dd46cbfa3a46dd97c2f59a92ec62a42ab4fda9 | Remediated all 6 audit findings from `argus-phase-1-remediation-003`: evidence-bearing pagination boundary verification (a persisted boundary must be directly observed in the provider's own address-history sequence, never inferred from an empty/short page alone); every Helius RPC method's full nested contract validation now runs inside its single accounted usage operation (no malformed result can leave an "ok" usage row); streaming usage-recorder failures emit a visible `usage_recorder_failed` structured warning instead of disappearing via `contextlib.suppress`; `parse_attempts` durably records build/config/MASTER_SPEC/git identity (4 new NOT NULL CHECK-constrained columns, migration 0006, backed by a new `argus.config.git_commit_sha()` and `argus.parsing.generic_parser.PARSER_BUILD_HASH`); `sweep_finalization()` returns a typed `FinalizationSweepResult` distinguishing a genuine zero-promotion sweep from a provider/malformed-response/per-event-append failure, surfaced by the manager's own background loop; and 6 more genuine real-chain golden fixtures (of 9 required categories, now 7/9 total) sourced from `0xjeffro/tx-parser` (MPL-2.0). New `tests/integration/test_migrations.py` (6 tests) independently re-proves migration-from-zero/upgrade-from-0003/upgrade-from-0005/downgrade/idempotency/restart-safety against a disposable scratch database. 371 tests passing, 86% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean through migration 0006. STATUS `PARTIAL_REALCHAIN_FIXTURES_7_OF_9_CATEGORIES`: 17 of 18 mandatory acceptance criteria PASS; criterion 1 (real-chain golden fixtures) is honestly PARTIAL -- 7 of 9 required categories now genuinely real-chain evidenced, the remaining 2 ('multiple token-account/LP-style action', a genuinely failed transaction) are NOT TESTED since no repository searched (across either round) embeds either. See `orchestration/checkpoints/phase_1_remediation_3.md` for the full 18-item disposition and `tests/golden/fixtures/real/SEARCH_LOG.md` for the search log. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation round 4 row below** -- an independent orchestrator audit (`argus-phase-1-remediation-004`) rejected round 3's 17/18 self-scoring as overstating fixture coverage and several runtime acceptance claims; this row is kept unmodified as immutable history. |
+| 1 (remediation round 4) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-004`, target `a589e15c29937b140ae96bdfc2d75de62a9109c2`) | 9d51dcfbcf1c303da120d771cecda940ab51cf25 | Remediated all 8 audit findings from `argus-phase-1-remediation-004`: corrected real-chain fixture coverage from round 3's overstated 7/9 to the genuine 6/9 (`real_mainnet_ambiguous_multi_asset` renamed to `real_mainnet_dca_close_dual_asset_transfer_in` and excluded from the ambiguous category -- the parser resolves it decisively to TRANSFER_IN, not UNKNOWN); rebuilt real-chain fixture provenance to preserve exact upstream bytes (content-addressed `sources/` directory keyed by git blob SHA-1, an ordered hashed transform manifest, and independent offline rebuild-and-verify for all 10 fixtures); decoupled golden `expected_classification`/`expected_confidence` (now required, independently-asserted arguments) from the parser's own `observed_classification`/`observed_confidence`; deepened Helius contract validation (bool-as-int slot/blockTime/decimals rejection, `TokenAccountInfo` canonical model, non-object-transaction/missing-nested-field rejection) and fixed WebSocket ack matching (exact JSON-RPC id/version match, bounded connect/send/ack timeouts); made reparse selection and `swaps` versioning parser-artifact-aware (`parser_version` + `build_hash`, migration 0007, 6 new real-Postgres tests); removed the false historical-version `--parser-version` CLI flag in favor of an honest current-artifact-only design; made production git identity fail closed on a dirty/unverifiable checkout (`resolve_production_git_commit()`); and made a missing finalization source a typed `ok=False` misconfiguration instead of a false clean sweep. 420 tests passing, 86% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean through migration 0007. STATUS `PARTIAL_REALCHAIN_FIXTURES_6_OF_9_CATEGORIES`: 19 of 20 mandatory acceptance criteria PASS; criterion 5 (genuine ambiguous-transaction / failed-transaction fixtures) is honestly NOT TESTED/PARTIAL -- neither has been sourced in any round to date. See `orchestration/checkpoints/phase_1_remediation_4.md` for the full 20-item disposition and `tests/golden/fixtures/real/SEARCH_LOG.md` for the search log. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation round 5 row below** -- an independent orchestrator audit (`argus-phase-1-remediation-005`) rejected round 4 outright (`FAIL_REMEDIATION_REQUIRED`) on 9 findings; this row is kept unmodified as immutable history. |
+| 1 (remediation round 5) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-005`, target `2f436ae775c6185f820f59bc8dbef61ce0a95160`) | 6c7f4df1cce181dd54383b6dbb09f6be27df4471 | Remediated all 9 audit findings from `argus-phase-1-remediation-005` (which rejected round 4 outright, not merely PARTIAL, on 9 findings): replaced golden fixtures' flat `expected_classification`/`expected_confidence`/license strings with a typed, independently-reviewed `ExpectedOutcome` (wallet perspective, every asset delta, expected input/output, network fee, failed-tx status, confidence rule, reviewer method/rationale/evidence) and real `git ls-tree`-backed `GitTreeAttestation`/`LicenseEvidence` cryptographically binding upstream repo/commit/path/blob/license, folded into one `evidence_chain_hash` so any single-field edit is detectable offline; sourced real-chain fixtures for all 9 of 9 round-1-required categories (up from 6/9) -- a genuine failed on-chain transaction (`real_mainnet_failed_nft_sale`, via a new deterministic `extract_ts_const_export_default` transform step unlocking TypeScript-wrapped upstream sources) and a genuine multi-token-account Orca Whirlpool liquidity transaction (`real_mainnet_orca_increase_liquidity_multi_asset_outflow`, with an explicit documented caveat: it resolves via the ambiguous-multi-asset-outflow branch, not the `LP_ACTION` label), plus the previously-imported DCA-close fixture now genuinely satisfying the ambiguous-multi-asset category as a side effect of the parser fix below; made the generic parser fail-closed for ambiguous/NFT/LP/multi-hop assets (`SWAP_COMPLEX` no longer copy-eligible, decimals-zero legs never eligible, 2+ same-direction assets with no offsetting leg is `UNKNOWN` not a confident guess, new public `compute_asset_deltas()`); deepened Helius HTTP contract validation (strict-nonnegative-int slot/balance/fee fields, full accountKeys/preTokenBalances/postTokenBalances validation, `get_token_accounts` ownership cross-check and bounded decimals, immutable `TokenAccountInfo.raw`); fixed a WebSocket ack type-equality bug (`"id": true` could match request id 1 under Python's `==`), added early-notification buffering (a message arriving before the ack is preserved and replayed, never discarded), added a transport-level ping/pong liveness probe so a quiet-but-healthy connection is no longer reconnected on every receive-timeout, and bounded the close/cleanup path; fixed production git-identity override precedence (dirty/HEAD is now checked before an override is ever trusted, closing a spoofing path); and made migration 0007's downgrade fail closed with a precise reason when incompatible multi-build `swaps` data exists, rather than an opaque Postgres constraint violation, proven against a genuinely populated scratch database. 490 tests passing (up from 420), 87% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean through migration 0007 including new populated-data downgrade tests. STATUS `REALCHAIN_FIXTURES_9_OF_9_CATEGORIES_ONE_WITH_CAVEAT`: see `orchestration/checkpoints/phase_1_remediation_5.md` for the full acceptance-matrix disposition and `tests/golden/fixtures/real/SEARCH_LOG.md` for the complete search log. NOT yet orchestrator-approved -- only the orchestrator may advance `last_orchestrator_approved_phase`. **Superseded by the remediation round 6 row below** -- an independent orchestrator audit (`argus-phase-1-remediation-006`) rejected round 5 as `FAIL_REMEDIATION_REQUIRED` on 6 findings; this row is kept unmodified as immutable history. |
+| 1 (remediation round 6) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-remediation-006`, target `fbe46c44861e489f65d55abac01eedc4934318a7`) | 6e4aa5a9a0e2cdb2f75f1465d3939e8d73002ba0 | Remediated all 6 audit findings from `argus-phase-1-remediation-006` (which rejected round 5 as `FAIL_REMEDIATION_REQUIRED`): production Git identity now distinguishes absent-Git from present-but-unverifiable-Git via an explicit `_GitCheckoutState` enum, closing a fail-open path where any `git status`/`rev-parse` failure on a genuinely present checkout was misread as "no checkout" and could accept an arbitrary override; fixture provenance now preserves a genuine offline-verifiable Git object chain (`GitTreeAttestation`/`attest_git_tree()`/`verify_git_object_chain()`, raw commit/tree object bytes, independently recomputed via git's own content-addressing) replacing round 5's self-referential saved `ls-tree` line; the golden oracle now preserves account-level deltas before by-mint aggregation (`compute_account_level_deltas()`/`ExpectedAccountAssetDelta`) and binds/checks record identity fields (category, chain, signature, slot, transaction_version, upstream_path) against the rebuilt payload rather than trusting them as inputs; the round-5 LP/multiple-account fixture was replaced (not relabeled) with `real_mainnet_orca_close_position_multi_account`, independently proven via account-level evidence to have two genuinely distinct material token accounts (see the ROUND 6 UPDATE note above); Helius HTTP validation deepened further (JSON-RPC envelope validation, `get_transaction` signature-identity binding, strict u64 numeric domains, ASCII-bounded raw-amount-string validation, `get_signature_statuses` required-key checks, deep alias-safe `_deep_freeze()` immutability replacing a shallow `MappingProxyType`); and the unattended watcher's pre-launch remote-freshness race is closed with a fresh final barrier (re-fetch + re-verify clean worktree, HEAD==remote, instruction-file hash-vs-committed-blob, instruction fields, target-commit, and phase authorization immediately before launch), reverting to `IDLE` (never consuming the instruction as `FAILED`) on any barrier failure. 547 tests passing (up from 490), 86% coverage, ruff+mypy clean, alembic downgrade-to-base/upgrade-to-head clean through migration 0007. STATUS: 19 of 20 mandatory acceptance-matrix items unconditional PASS, item 17 the standing permitted `DEFERRED_ENVIRONMENTAL_CHECK` for live Helius/PG17 connectivity -- see `orchestration/checkpoints/phase_1_remediation_6.md` section E for the full disposition. This round's own evidence cross-check (finding #6) also surfaced and honestly disclosed a pre-existing, previously-unreported commit-trailer-formatting defect (a trailing `Co-Authored-By`/`Claude-Session` paragraph breaks `git interpret-trailers`' recognition of an earlier `ARGUS-INSTRUCTION-ID:` paragraph as a real trailer on 3 of this round's own commits and 2 historical commits dating to rounds 1 and 5) -- see checkpoint section H; not corrected via history rewrite, reported for orchestrator disposition instead. **Phase 1 is now ORCHESTRATOR APPROVED** (`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`) at this exact commit, per instruction `argus-phase-1-5-001` (`APPROVES_PHASE: 1`, independently audited, not the implementation agent's own PASS claim) -- see the row below for what that instruction authorized next; `docs/DECISION_LOG.md` records the approval decision. |
+| 1.5 | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-5-001`, target `2fbc566af74832bc6523648f60ba8cb60d98eb31`, `APPROVES_PHASE: 1`) | f334f70908e9744940571f7caffd29c515eb0dac | Phase 1.5 historical-data feasibility spike: established both required inputs automatically from already-reachable free/public sources (no `BOOTSTRAP_TOKEN_INPUT_REQUIRED`) -- a real pump.fun token (`5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump`, from its own creation transaction) and a real candidate wallet (`JAMESC37CTVoFEt7TAEcqBjdjAfAWZiPR1YdWotAFjeQ`, 14 real transactions spanning ~1 year across 4 protocols), both sourced from GitHub repositories already used and license-vetted by this project (`0xjeffro/tx-parser`, `quellen-sol/ingestooor`) since this session's proxy rejects GitHub's open-ended search API and general Solana RPC/BigQuery-credentialed egress is blocked/unavailable. Test A (early-buyer reconstruction) recovered exactly 1 real buyer (the token creator's own bundled dev-buy) -- honest, non-fabricated, but severely incomplete since no further buyer discovery is possible without a live RPC or indexed-dataset credential this sandbox lacks. Test B (wallet history) reconstructed the 14 real transactions via the unmodified existing Phase 1 parser, finding a genuine, disclosed 43% `UNKNOWN` classification rate on real lending/yield-position activity (a parser-completeness gap, not a data gap). Test C cross-validated 28 real transactions (the token tx + 14 candidate-wallet + 13 supplementary-wallet transactions from the same source) via an independent, from-scratch raw-evidence recomputation against `compute_account_level_deltas()`'s actual output: 28/28 agreements, 0 disagreements. Test D measured this spike's own offline cost (0 RPC calls, 0 credits, ~1MB evidence, sub-10ms processing) and gave an explicitly-labeled, theoretical linear-extrapolation scaling estimate (~501 RPC calls/wallet assumption -> ~50,100 for 100 wallets, ~501,000 for 1,000), declining to fabricate a dollar/credit cost with no documented per-call price table in this repository. `HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS`, with both limitations (unproven acquisition breadth; the 43% classification gap) carried forward explicitly, not smoothed over; `FAIL` was considered and rejected since a genuine (if minimal) result was recovered and the downstream interpretation architecture is positively proven correct. 551 tests passing (up from 547), ruff+mypy clean. No schema migration, no Phase 2 work, no credential entered/disclosed. See `orchestration/checkpoints/phase_1_5.md` for the full 14-item disposition and `orchestration/phase_1_5/evidence/PROVENANCE.md` for complete evidence citations. `last_orchestrator_approved_phase` remains `1` (only the orchestrator may advance it to `1.5`) -- this instruction's own explicit requirement. **Superseded by the remediation round 1 row below** -- an independent orchestrator audit (`argus-phase-1-5-remediation-001`) rejected this submission as `FAIL_REMEDIATION_REQUIRED` on one SPEC_BLOCKING/SAFETY_OR_INTEGRITY_BLOCKING finding; this row is kept unmodified as immutable history. |
+| 1.5 (remediation round 1) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-5-remediation-001`, target `b68e37393370c7f9f3eb8860fecdaaa3f9c28696`, `APPROVES_PHASE: NONE`) | 3aa61b4d220c3211e4dca1ca46b18b1ab510376e | Remediated the one SPEC_BLOCKING/SAFETY_OR_INTEGRITY_BLOCKING finding from `argus-phase-1-5-remediation-001`: two authentic non-trade transactions (a real Solend `Withdraw Obligation Collateral and Redeem Reserve Collateral`, a real xStep `Stake`) were reported `SWAP_SIMPLE`/`is_copy_eligible=true` solely because each has a clean one-negative/one-positive balance shape -- confirmed via `git stash` that the pre-fix parser genuinely returned `is_copy_eligible=True` for the real Solend transaction. Added a deterministic **positive semantic proof gate** to `src/argus/parsing/generic_parser.py`: a new, centrally versioned `_SUPPORTED_SWAP_PROGRAM_IDS` registry of 4 program IDs (Jupiter Aggregator V6, Raydium Liquidity Pool V4, Orca Whirlpool, pump.fun), each independently cross-checked against this project's own already-hand-reviewed permanent golden-fixture evidence before being added; `ParsedTransaction.is_copy_eligible` now additionally requires positive instruction-level evidence (`matched_swap_program_id is not None`) that the transaction's own top-level or inner instructions actually invoked a registered trade venue -- a narrow allowlist/proof gate, not a Solend/xStep denylist, so any other unsupported program (present or future) correctly stays research-only rather than requiring a new denylist entry. `PARSER_VERSION` bumped to `generic_balance_delta_v2` (observable eligibility output changed for real evidence). Both named false positives are now ineligible; all 4 permanent golden real-chain fixtures already marked eligible before this round remain eligible (independently re-verified against the new gate, not merely re-asserted). Reran the Phase 1.5 analysis under the corrected parser: delta-arithmetic agreement (28/28) is now reported separately from semantic eligibility validation (4/28 copy-eligible, each with its cited program) so the two claims are never conflated; `HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS` unchanged, now resting on a corrected foundation. 8 new golden-fixture tests plus 2 new Phase 1.5 tests (10 new; 563 total, up from 553 before the fix's own delta -- see checkpoint for the exact breakdown), ruff+mypy clean, no schema change, no credential entered/disclosed. See `orchestration/checkpoints/phase_1_5_remediation_1.md` for the full 14-item disposition. `last_orchestrator_approved_phase` remains `1` -- this remediation approves no phase. **Superseded by the remediation round 2 row below** -- an independent orchestrator audit (`argus-phase-1-5-remediation-002`) rejected round 1's gate as still insufficient (program identity mistaken for swap-instruction identity); this row is kept unmodified as immutable history. |
+| 1.5 (remediation round 2) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-1-5-remediation-002`, target `5d85848ab5bff397a192a0868ffcf1077b691706`, `APPROVES_PHASE: NONE`) | f4ed7893849128257b3b5e62f44b93b779ee50c8 | Remediated the one SPEC_BLOCKING/SAFETY_OR_INTEGRITY_BLOCKING finding from `argus-phase-1-5-remediation-002` (`P15-R2-001`): round 1's gate proved only that *some* instruction invoked an allowlisted program, never that the matched instruction was itself a swap -- reproduced directly against `TARGET_COMMIT`'s real code (all 6 representative adversarial probes genuinely returned `is_copy_eligible=True` pre-fix, including the instruction's own Orca/Raydium/pump.fun + non-swap-log audit probe). Replaced `_SUPPORTED_SWAP_PROGRAM_IDS` with a **program-AND-instruction-discriminator registry** (`_SWAP_INSTRUCTION_REGISTRY`) binding the resolved program ID, the SAME instruction's own decoded `data`, and an exact registered discriminator to one canonical instruction object; added a strict, local, bounded base58 decoder (`_decode_base58_strict`, fixed alphabet, canonical round-trip validation, no new dependency); extended `ParsedTransaction` with `matched_semantic_label`/`matched_discriminator_hex` (all three fields now required for `is_copy_eligible`). All 4 registry pairs (Jupiter V6 `shared_accounts_route`, Raydium LP V4 `swap_base_in`, Orca Whirlpool `swap`, pump.fun `buy`) independently derived by decoding each cited authentic fixture's own raw instruction data -- never from memory or documentation; the real Orca `DecreaseLiquidity`/`CollectFees`/`ClosePosition` non-swap discriminators (from `real_mainnet_orca_close_position_multi_account.json`) are proven absent from the registry. Honest disclosure: `suppl_13_titan_swap_with_fees_2.json`, eligible under round 1's program-only check, correctly becomes ineligible under round 2 -- its actual Raydium invocation's discriminator (`0x10`) is not the registered `swap_base_in` (`0x09`); the instruction explicitly permits this ("failing closed is required"). Added all T1-T11 required tests (T1 missing data, T2 non-swap discriminator including the authentic Orca bytes verbatim, T3 program/discriminator mismatch, T4 log-text-cannot-grant-eligibility, T5 Solend/xStep extended to assert no semantic match at all, T6 fixed independent oracle against every registry pair, T7 altered-evidence-fails-closed, T8 malformed-base58, T9 regression sweep, T10 deterministic reparse, T11 a hand-written Phase 1.5 oracle that does not import the production registry). `PARSER_VERSION` bumped to `generic_balance_delta_v3`. 613 tests passing (up from 563: golden 95 (was 46), phase_1_5 7 (was 6)), ruff+mypy clean, no schema change, no credential entered/disclosed. See `orchestration/checkpoints/phase_1_5_remediation_2.md` for the full 14-item disposition. `last_orchestrator_approved_phase` remains `1` -- this remediation approves no phase. |
+| 2 | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-2-001`, target `c3148cc191de58ecab9b11cd05291cc8ffe45455`, `APPROVES_PHASE: 1.5`) | bd35f3a7a95d6c6b977be9e421c5ea16779e472c | Phase 2 (TOKEN + WALLET DISCOVERY): 11 new tables (migration 0008) -- tokens, token_mint_validations, reference_asset_prices, token_market_snapshots, token_winner_milestones, archaeology_triggers, archaeology_runs, wallets, wallet_discovery_events, early_buyers, token_negative_controls -- with least-privilege role grants and idempotency/partial-unique constraints throughout. Deterministic on-chain mint validation (two evidence paths: live `getAccountInfo`, and this sandbox's actual free-first `committed_transaction_token_balance_evidence` path) never treats address shape as validation. Bootstrap-token importer, market-snapshot/reference-price point-in-time ledger (NULL over false precision), versioned winner-milestone baseline detection (`MAJOR_WINNER>=10x`/`MONSTER>=20x`/`EXTREME>=50x`, zero-liquidity launch instant correctly excluded from baseline), automatic archaeology-trigger creation/consumption, deterministic order-independent early-buyer extraction ("tag, don't delete"), permanent wallet-discovery provenance (`exclusion_reason` DB-CHECK-constrained to `DISCOVERY_CONTAMINATION` on every row), and negative-control schema round-trip -- all wired through real `argus tokens import-bootstrap`/`argus discover archaeology-run`/`argus discover watch-replay` CLI commands, not test-only helpers. Real historical-token demonstration reused the Phase 1.5-verified pump.fun token (`5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump`): mint `VALID` from real evidence, 2 early buyers recovered from the real creation transaction (with an honest disclosed limitation -- one is very likely the bonding-curve program's own reserve account, not a human trader, since raw balance-delta extraction cannot itself distinguish the two), and a `MAJOR_WINNER` (12x) milestone demonstrated end-to-end from explicitly-labeled REPLAY synthetic market data (never claimed as real price history) -- full report in `orchestration/phase_2/DEMONSTRATION.md`. All 11 required P2-T1..T11 acceptance tests implemented and passing (40 focused Phase 2 tests). Fixed a genuine pre-existing defect this phase's own new cross-table foreign key surfaced: `src/argus/domain/__init__.py` was empty, so a process importing only some domain submodules could hit `NoReferencedTableError`; fixed via eager submodule imports. 653 tests passing (up from 613), ruff+mypy clean, migration-from-zero/upgrade-from-0007 clean through 0008, 12/12 real-chain fixtures ok, secret scan clean, no credential entered/disclosed, no signing/execution/broadcast/paid-provider path. See `orchestration/checkpoints/phase_2.md` for the full 14-item disposition. This instruction's own explicit Phase 1.5 approval is applied above (`last_orchestrator_approved_phase: 1.5`); **Phase 2 itself remains NOT orchestrator-approved** -- this instruction's own explicit "Do not mark Phase 2 approved." **Superseded by the remediation round 1 row below** -- an independent orchestrator audit (`argus-phase-2-remediation-001`) rejected this submission as not approved on 8 frozen findings; this row is kept unmodified as immutable history. |
+| 2 (remediation round 1) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-2-remediation-001`, target `6bde9fdf6d56c38517854700e8863d9103e831aa`, `APPROVES_PHASE: NONE`) | 16737ca851ec51a528f4251fa94be3ef8ae84fc9 | Remediated all 8 frozen findings (P2-R1 through P2-R8) from `argus-phase-2-remediation-001`: corrected mint-account discrimination (`_classify_mint_account_layout()` replaces a bare `len(decoded) < 82` check that accepted a 165-byte legacy SPL token *account* as a valid Mint; a real SPL Token-2022 `AccountType` discriminator byte now genuinely distinguishes Mint from Account for extended accounts) and made mint-validation evidence handling fail closed on conflicting matching token-balance entries while persisting available `chain_time` (P2-R1+P2-R8); added a real, typed, provider-neutral historical acquisition service (`src/argus/tokens/historical_acquisition.py`, new file) over the existing Phase 1 `ChainProvider` contract, wired through a new production CLI command `argus discover acquire-and-run-archaeology`, explicitly handling multiple pages, duplicate item/page (both immediately-repeated-cursor and multi-step-cycle forms), premature short pages, safety-ceiling exhaustion, timeout/rate-limit/malformed-response provider failures, and per-transaction fetch failures -- proven by a new 14-test deterministic-fake-provider contract suite, `tests/unit/test_historical_acquisition.py` (P2-R2); made early-buyer ordering genuinely deterministic across `PYTHONHASHSEED` values (a full `(slot, signature, wallet_address)` sort key replacing an implicit Python `set`/`dict` iteration-order tie-break, proven via a real subprocess test) and added an evidence-grounded `ownership_classification` (transaction-signer-set membership) so a known pump.fun bonding-curve reserve PDA is no longer promoted into `wallets`/`early_buyers`/discovery events while its raw evidence is still preserved (P2-R3); made winner-milestone evaluation confidence-aware (`_is_reliably_tradable()` gates baseline/peak selection to HIGH/MEDIUM confidence only, closing the exact "12x LOW-confidence probe produced MAJOR_WINNER" scenario the finding named) (P2-R4); added a bounded, restart-safe automatic trigger consumer/executor (`run_next_pending_trigger`/`run_all_pending_triggers_for_token`, wired through a new CLI command `argus discover run-pending-trigger` with no `--trigger-id` option at all) so a milestone-triggered archaeology run executes without a human copying a trigger ID between commands (P2-R5); refactored `run_archaeology` into three independently-committing transaction phases (claim / extract+persist outputs / terminalize) plus a restart-recovery reaper (`reap_stale_archaeology_runs`), proven via a 4-point real-Postgres crash-injection matrix so a process crash at any required boundary leaves recoverable, non-lost attempt provenance (P2-R6); widened `token_market_snapshots.supply_raw`/`early_buyers.amount_raw` from signed `BigInteger` to a new `U64Numeric` type (`NUMERIC(39,10)` storage with range/integrality CHECK constraints, chosen after direct empirical proof that `NUMERIC(p,0)` silently rounds rather than rejects a fractional value) via new migration `0009_phase2_u64_raw_quantities.py`, with a fail-closed downgrade path and boundary round-trip tests for 0/1/2^63/2^64-1 (P2-R7). All 8 frozen remediation acceptance-test items (R1-R7 plus the regression item) pass. 702 tests passing (up from 653), 85% coverage, ruff+mypy+format clean, 12/12 real-chain fixtures ok, secret scan clean, no credential entered/disclosed, no signing/execution/broadcast/paid-provider path. A fresh, from-clean-database, real end-to-end CLI re-run of the demonstration against the real pump.fun evidence confirms the corrected behavior directly via Postgres queries -- `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md` (new file; the original `orchestration/phase_2/DEMONSTRATION.md` is left unmodified as immutable historical record). See `orchestration/checkpoints/phase_2_remediation.md` for the full 8-finding/8-acceptance-test disposition. `last_orchestrator_approved_phase` remains `1.5` -- this remediation approves no phase. **Phase 2 remains NOT orchestrator-approved.** **Superseded by the remediation round 2 row below** -- an independent re-audit (`argus-phase-2-remediation-002`) found 7 of the 8 findings closed but left one narrow P2-R2 acceptance case open; this row is kept unmodified as immutable history. |
+| 2 (remediation round 2) | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-2-remediation-002`, target `c99341a9c767c006cfe96fa4948dd54a9efe712b`, `APPROVES_PHASE: NONE`) | da7d09ec8d78f38906e69e7353db39ea8d18e8e7 | Fixed the one narrow remaining P2-R2 acceptance case left open by the round-2 re-audit: `acquire_historical_transactions()` (`src/argus/tokens/historical_acquisition.py`) gained an optional `expected_oldest_slot` boundary parameter -- when a caller supplies an independently known expected historical boundary (e.g. a token's own known creation slot), an empty/short pagination page is trusted as genuinely `COMPLETE` only once the walk has actually observed a signature at or before that slot; a premature truncation before then reports `PARTIAL` with the unsatisfied boundary explicitly named in `known_gaps`, preserving every signature/transaction already acquired. Omitting the parameter preserves the exact prior (round-1) unconditional short/empty-page-is-complete behavior, directly proven via a dedicated regression test using the identical page shape that reports `PARTIAL` with the boundary supplied. Wired through a new `--expected-oldest-slot` option on `argus discover acquire-and-run-archaeology` (real production CLI surface, not a test-only argument). 4 new frozen remediation-002 acceptance tests (module `test_historical_acquisition.py` 14 -> 18 tests). Exactly 3 files touched (`src/argus/cli.py`, `src/argus/tokens/historical_acquisition.py`, `tests/unit/test_historical_acquisition.py`) -- none of the seven closed P2-R findings' own code was revisited, only their regression tests re-run (all pass unchanged). 706 tests passing (up from 702), 85% coverage (unchanged), ruff+mypy+format clean, 12/12 real-chain fixtures ok, secret scan clean on the changed files. See `orchestration/checkpoints/phase_2_remediation_2.md` for the full defect-to-code/test mapping and the 4-item frozen acceptance-test disposition. `last_orchestrator_approved_phase` remains `1.5` -- this remediation approves no phase. **Phase 2 remains NOT orchestrator-approved.** |
+| 3 | BUILD COMPLETE, AWAITING ORCHESTRATOR REVIEW (authorized by `argus-phase-3-001`, target `c4adf963ed3a0cae815867b6cc97b6aa5b47f48a`, `APPROVES_PHASE: 2`) | f2e69423c1f93beb657ccc0bc415828ac2de046b | Phase 3 (WALLET RECONSTRUCTION + UNBIASED QUALIFICATION): 6 new tables plus `wallets.current_tier` (migration 0010) -- `wallet_history_quality`, `wallet_positions`, `wallet_metrics_snapshots`, `wallet_score_snapshots` (the phase's audit-critical decision ledger, `FullIdentityMixin`), `wallet_tier_history`, `wallet_cluster_links` -- with least-privilege role grants (including `wallets`' first ever `UPDATE` grant, for `current_tier`). Deterministic Decimal-exact V1 weighted-average-cost position reconstruction from existing `swaps` evidence (never a new raw-event table); position/history confidence (`HIGH/MEDIUM/LOW/UNRESOLVED` and `HIGH/MEDIUM/LOW/UNKNOWN`); a **structural** discovery-contamination firewall (`score_wallet()` computes `qualification_score` from a separately-filtered position set that never contains a contaminated token, and `descriptive_score` from an independent full pass -- proven byte-identical/measurably-different at both the pure-function and real-Postgres-service level, the phase-blocking MASTER_SPEC critical test); the frozen V1 qualification-score weights (never retuned) with a missing-component neutral-prior-imputation rule that lowers confidence rather than fabricating or redistributing weight; the frozen V1 sample-size gate (>=20 closed positions, >=10 distinct tokens, completeness not LOW/UNKNOWN) with deterministic proportional shrinkage (including a completeness-only shrinkage term, a genuine defect found and fixed during this run's own required-test-writing -- see checkpoint section K) rather than a fixed score cap; lottery-dominance flagging (>70% largest-position-share penalty, never automatic rejection); point-in-time recency decay; initial pairwise wallet-cluster-link evidence consumption (never real-world identity claims); and the full 9-state wallet tier lifecycle with immutable, timestamped transitions (proven via a real Postgres cluster-link-driven QUARANTINE transition that does not rewrite the wallet's earlier DISCOVERED transition row) -- all wired through a real `argus wallets reconstruct-and-score` CLI command, not a test-only helper. All 9 required test categories implemented and passing (12 unit + 3 integration tests against real Postgres). Required five-wallet sample report honestly reports `PHASE_3_CANDIDATE_SAMPLE_BLOCKED`: exactly 1 genuine candidate wallet exists in this sandbox from already-authorized authentic evidence (this project's one real pump.fun creation-transaction evidence source, unchanged since Phase 1.5/2), with zero real `swaps` evidence and therefore `history_completeness=UNKNOWN`/`qualification_score=descriptive_score=50.00` (the honest neutral prior) -- the frozen thresholds were not loosened and no wallet history was fabricated to reach 5; see `orchestration/phase_3/SAMPLE_REPORT.md`. 721 tests passing (up from 706), ruff+mypy+format clean, migration-from-zero/upgrade-from-0009/downgrade-then-reupgrade clean through 0010, 12/12 real-chain fixtures ok, secret scan clean, no credential entered/disclosed, no signing/execution/broadcast/paid-provider path. See `orchestration/checkpoints/phase_3.md` for the full 13-item build-surface and 8-item frozen-acceptance disposition. This instruction's own explicit Phase 2 approval is applied above (`last_orchestrator_approved_phase: 2`); **Phase 3 itself remains NOT orchestrator-approved** -- this instruction's own explicit "must NOT become 3 until a later orchestrator approval." |
+
+## Operational tooling
+
+- `scripts/argus_orchestrator_watch.py` (`make orchestrator-watch`) — local
+  "no-nudge" watcher: polls `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` for
+  a new `ACTIVE` instruction and, when one appears and passes the
+  TARGET_COMMIT and phase-authorization checks, launches the local Claude
+  CLI non-interactively to execute exactly that instruction under
+  `orchestration/PROTOCOL.md`. Not running by default — the human operator
+  starts it explicitly. See `docs/OPERATIONS.md` for usage.
+  Evidence history:
+  - `orchestration/checkpoints/watcher_setup.md` — original build/test record.
+  - `orchestration/checkpoints/watcher_remediation.md` — a four-defect
+    remediation pass (AUTHORIZED_PHASE was never validated; handoff
+    instruction-id matching used substring containment instead of exact
+    equality; checkpoint/bundle evidence was only checked for existence;
+    a crash between CLAIMED and RUNNING was never recovered on restart).
+  - `orchestration/checkpoints/watcher_remediation_2.md` — a second,
+    orchestrator-requested remediation pass (instruction
+    `argus-watcher-remediation-002`), rejecting the first pass as
+    insufficient and requiring: strict fail-closed state handling
+    (including a handoff-cross-check on state loss); a failed Claude
+    process now always fails the run before any evidence is considered;
+    evidence must be newly added, immutable, and structurally valid (not a
+    placeholder); branch-movement/merge-commit/commit-attribution
+    (`ARGUS-INSTRUCTION-ID:` trailer) verification; a blob-hash check that
+    mechanically prevents the implementation agent from modifying
+    `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` during a run; explicit
+    string-sequence phase gating (`0, 1, 1.5, 2, ..., 6, 6.5, ..., 11`) via
+    a new `APPROVES_PHASE` field; strict instruction-field parsing; and a
+    conservative, ordered post-run verification sequence. 26 new/updated
+    adversarial regression tests.
+  - `orchestration/checkpoints/watcher_remediation_3.md` — a third,
+    orchestrator-requested remediation pass (instruction
+    `argus-watcher-remediation-003`), rejecting round 2 as still fail-open
+    in several places and requiring: a terminal, non-retryable
+    `QUARANTINED` state (with a manual `--reset-quarantine` recovery
+    procedure) the moment the instructions file is found modified —
+    checked first and unconditionally, closing a bypass where a
+    self-authored next instruction could otherwise launch on a later tick;
+    tightened `TARGET_COMMIT` provenance (exactly one instruction-only
+    commit whose parent is exactly the target; no `TARGET_COMMIT == HEAD`;
+    no multi-commit or merge gaps); every safety-critical Git read now
+    fails closed (`None`/explicit-failure) rather than defaulting to
+    empty/clean/absent on a command error; commit attribution via a real
+    `git interpret-trailers`-parsed terminal trailer, not text anywhere in
+    body prose; broadened launch-exception handling that never leaves a
+    stale `RUNNING` state, with raw Claude subprocess output never logged
+    at all (only whitelisted metadata); real canonical-UTC timestamp
+    parsing (not shape-only regex) for both instructions and handoffs; and
+    tightened evidence linkage (exact checkpoint-bytes embedding in the
+    bundle, exactly-once/full-SHA checkpoint identity fields, handoff
+    `CURRENT_PHASE` matching `AUTHORIZED_PHASE`, required section
+    headings). 74 total watcher tests (up from 51). This is operational
+    tooling, not ARGUS phase work — `current_phase` above is unaffected.
+  - Phase 1 remediation round 6 (instruction
+    `argus-phase-1-remediation-006`, finding #5) added a final, fresh
+    pre-launch remote-freshness barrier: `tick()`'s old
+    `head_before`/`git_remote_head()` comparison read only the locally
+    cached `origin/{branch}` ref set by the tick's early fetch, stale by
+    however long instruction/target-commit/phase validation took. A new
+    barrier performs a fresh fetch immediately before transitioning to
+    `RUNNING`/launching Claude and re-verifies fetch success, worktree
+    cleanliness, HEAD==freshly-fetched-remote-HEAD, an explicit
+    working-tree-hash-vs-committed-blob snapshot of
+    `ORCHESTRATOR_INSTRUCTIONS.md`, unchanged instruction fields,
+    target-commit provenance, and phase authorization; any failure
+    reverts to `IDLE` (never `FAILED`) without consuming the instruction,
+    so the next tick freely re-evaluates. 77 total watcher tests (up
+    from 74), including 3 new deterministic tests confirmed via `git
+    stash` to genuinely launch Claude against the pre-fix watcher. This
+    is operational tooling, not ARGUS phase work — `current_phase` above
+    is unaffected.
+
+## Rules
+
+- This file may be updated by the implementation agent to reflect actual build
+  progress.
+- `last_orchestrator_approved_phase` and `approved_commit` may ONLY be set to a
+  new value after receiving **explicit** orchestrator approval for that phase.
+  The implementation agent must never self-approve a phase here.
+- Do not begin work on `current_phase + 1` while `awaiting_orchestrator_review`
+  is `true` for the current phase.
+
+
+--- DECISION_LOG.md ---
 # ARGUS Decision Log
 
 Append-only record of every orchestrator-approved material change to
@@ -1868,83 +2862,3 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   the full disposition.
 - git_commit: f2e69423c1f93beb657ccc0bc415828ac2de046b
 
-### 2026-09-01 — Phase 3 consolidated remediation (P3-R1..P3-R7)
-
-- requirement_id: MASTER_SPEC.md v2.0 Phase 3, sections 34-43, CORE-001,
-  CORE-004, sections 104-109, section 116.
-- decision: implemented all 7 frozen findings from independent audit
-  `argus-phase-3-audit-001` (`FAIL_REMEDIATION_REQUIRED` on the original
-  Phase 3 submission at `69a8de622b1977f92999ca680fcb8d851ba78c9f`), per
-  orchestrator instruction `argus-phase-3-remediation-001`
-  (`AUTHORIZED_ACTION: REMEDIATE_ALL_FROZEN_PHASE_3_BLOCKERS_ONLY`,
-  `APPROVES_PHASE: NONE`). No `HARDENING_BACKLOG` item was pulled into
-  scope; the already-accepted structural contamination split, frozen
-  component weights, sample-size thresholds, transfer-uncertainty rule,
-  honest candidate-sample fallback, and approved provider architecture were
-  not redesigned beyond the minimal wiring these 7 findings required.
-- reason: the audit found the production scoring service's evidence
-  queries unbounded by `as_of` (P3-R1), history completeness derivable
-  from a caller-typed CLI flag rather than real acquisition evidence
-  (P3-R2), the position ledger collapsing multiple round trips into one
-  lifetime row and summing incompatible quote assets (P3-R3), only the
-  LIFETIME metrics window ever persisted (P3-R4), lottery/drawdown/
-  usable-outcome metrics using the wrong denominator/ordering/population
-  (P3-R5), the cluster-uncertainty penalty applied to a local variable the
-  tier decision never saw plus a forced-DISCOVERED-on-first-run bug
-  breaking replay idempotency (P3-R6), and the submitted checkpoint
-  missing its required terminal marker (P3-R7, confirmed directly against
-  the unmodified, pre-existing validator).
-- requested_by: ARGUS ORCHESTRATOR, via
-  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
-  `argus-phase-3-remediation-001` (`STATUS: ACTIVE`, `TARGET_COMMIT:
-  69a8de622b1977f92999ca680fcb8d851ba78c9f`, `AUTHORIZED_ACTION:
-  REMEDIATE_ALL_FROZEN_PHASE_3_BLOCKERS_ONLY`, `AUTHORIZED_PHASE: 3`,
-  `APPROVES_PHASE: NONE`; all mandatory session-start preconditions --
-  instruction-only-commit parentage exactly matching `TARGET_COMMIT`,
-  changing only `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`, Phase 3
-  awaiting review and not yet orchestrator-approved, clean/synced worktree
-  -- independently verified before this task began).
-- impact: new migration `0011_phase3_remediation_point_in_time_and_
-  ledger_integrity.py` (`round_trip_index`/`input_manifest_digest` on
-  `wallet_positions`, `input_manifest_digest` on `wallet_score_snapshots`,
-  `acquisition_manifest` JSONB on `wallet_history_quality`,
-  `largest_trade_contribution_pct`/`top_three_trade_contribution_pct`
-  widened `Numeric(6,5)` -> `Numeric(20,6)` since the corrected net-PnL
-  denominator can legitimately exceed 1.0); its `upgrade()` deliberately
-  clears the 4 derived Phase 3 decision tables (`wallet_tier_history`,
-  `wallet_score_snapshots`, `wallet_metrics_snapshots`,
-  `wallet_positions`) and resets `wallets.current_tier = NULL`, since
-  their pre-remediation rows reflect buggy computation this remediation
-  replaces -- all raw evidence tables (`swaps`, `wallets` identity rows,
-  `wallet_discovery_events`, `early_buyers`, `wallet_cluster_links`) are
-  completely untouched; disclosed here explicitly, not silent. 6 source
-  files rewritten/extended (`cli.py`, `wallet_history_quality.py`,
-  `wallet_metrics_snapshots.py`, `wallet_positions.py`,
-  `wallet_score_snapshots.py`, `history_reconstruction.py`,
-  `position_reconstruction.py`, `qualification_service.py`,
-  `scoring.py`, `tier_lifecycle.py`). One real, non-financial defect was
-  found and fixed via this run's own required-test-writing before any
-  evidence was recorded: `position_reconstruction.py`'s new round-trip
-  state machine used the nullable `first_entry_at`/`final_exit_at`
-  timestamp fields as control-flow sentinels for "has this round trip
-  started/closed," silently dropping every position whenever `block_time`
-  was legitimately `None` (the integration-test fixtures' own prior
-  gap) -- fixed by adding an explicit `has_activity: bool` flag decoupled
-  from the nullable timestamp data. 11 new unit tests (module 12 -> 23)
-  and 4 new integration tests (module 3 -> 7, real PostgreSQL 16) cover
-  all 9 required prospective acceptance-test categories, including a
-  real-service test proving a cluster-uncertainty penalty crossing the
-  A/B tier cutoff persists the exact same adjusted score the tier
-  decision used. `docs/BUILD_STATE.md` gained a new "3 (remediation)"
-  phase-history row; `last_orchestrator_approved_phase`/`approved_commit`
-  remain `2`/`a13ba2ab8729a08de3c571b7b12c32cc3f14c56b` -- this instruction
-  approves no phase. 738 tests passing (up from 721), ruff+mypy+format
-  clean, migration-from-zero/upgrade-from-0010/downgrade-then-reupgrade
-  clean through 0011, 12/12 real-chain fixtures ok, secret scan clean. The
-  accepted `PHASE_3_CANDIDATE_SAMPLE_BLOCKED` result is unchanged, per
-  this instruction's own explicit non-blocking disposition of that item.
-  See `orchestration/checkpoints/phase_3_remediation.md` for the full
-  disposition; the historical `orchestration/checkpoints/phase_3.md`/
-  `orchestration/bundles/phase_3.txt` are left byte-for-byte unmodified,
-  preserved as evidence of the P3-R7 defect.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT

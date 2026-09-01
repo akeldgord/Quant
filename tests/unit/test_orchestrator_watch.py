@@ -2184,6 +2184,43 @@ def test_validate_checkpoint_content_accepts_realistic_fixture() -> None:
     assert ok, reason
 
 
+def test_validate_checkpoint_content_rejects_missing_end_marker() -> None:
+    """Phase 3 remediation (`argus-phase-3-remediation-001`, finding
+    P3-R7): an otherwise well-formed checkpoint missing the required
+    terminal ``================ END ARGUS CHECKPOINT
+    =========================`` line must fail validation -- proven here
+    by dropping only that one line from an otherwise-valid fixture, never
+    by constructing a degenerate placeholder that would fail for other
+    reasons too."""
+    well_formed = _checkpoint_text("instr-x", FIXTURE_SHA)
+    assert watch.CHECKPOINT_END_MARKER in well_formed
+    missing_end_marker = well_formed.replace(f"\n{watch.CHECKPOINT_END_MARKER}\n", "\n")
+    assert watch.CHECKPOINT_END_MARKER not in missing_end_marker
+
+    ok, reason = watch.validate_checkpoint_content(missing_end_marker)
+    assert not ok
+    assert "end marker" in reason
+
+
+def test_validate_checkpoint_content_rejects_the_actual_historical_phase_3_checkpoint() -> None:
+    """P3-R7's own observed proof, reproduced directly: the Phase 3
+    checkpoint submitted under `argus-phase-3-001`
+    (`orchestration/checkpoints/phase_3.md`) begins with the required
+    start marker but contains zero occurrences of the required terminal
+    end marker. This instruction requires "preserve it as evidence, do
+    not rewrite it" -- so this test proves the validator genuinely
+    rejects the real, unmodified historical file, rather than merely a
+    synthetic fixture standing in for it."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    historical_checkpoint = (repo_root / "orchestration" / "checkpoints" / "phase_3.md").read_text()
+
+    ok, reason = watch.validate_checkpoint_content(historical_checkpoint)
+    assert not ok
+    assert "end marker" in reason
+
+
 def test_validate_bundle_content_rejects_placeholder() -> None:
     ok, _reason = watch.validate_bundle_content("bundle\n", "checkpoint\n")
     assert not ok

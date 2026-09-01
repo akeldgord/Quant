@@ -1,5 +1,6 @@
 """Deterministic wallet lifecycle-state transitions (MASTER_SPEC.md
-section 36 WALLET LIFECYCLE; Phase 3, `argus-phase-3-001`).
+section 36 WALLET LIFECYCLE; Phase 3, `argus-phase-3-001`, remediated by
+`argus-phase-3-remediation-001` finding P3-R6).
 
 ``determine_tier_transition`` is a pure function: current tier + a fresh
 ``ScoringResult`` (+ cluster/insider evidence already folded into it) in,
@@ -8,6 +9,18 @@ freshly-computed tier equals the current tier is deliberate and required
 for restart/replay idempotency (this instruction's required test 9):
 repeated scoring from identical evidence must never insert a duplicate
 ``wallet_tier_history`` row.
+
+**The desired tier is always computed from the current, complete score**
+(P3-R6 fix): ``current_tier is None`` (a wallet's very first scoring run)
+is never special-cased to force ``DISCOVERED`` regardless of evidence --
+the pre-remediation code did exactly that, which meant an eligible,
+genuinely high-scoring wallet's first-ever invocation was *always*
+recorded as ``DISCOVERED``, and only its *second*, otherwise-identical
+invocation could reach ``A``/``S`` -- violating exact-replay idempotency
+(the second call was not a no-op). Now the very first invocation and
+every subsequent identical-evidence replay compute the identical desired
+tier from the same rule, so only a genuine change in evidence ever
+produces a second transition row.
 
 ``A``/``S`` are "potentially live eligible" evidence, never live
 authorization by themselves (section 36's own explicit rule, restated on
@@ -65,11 +78,6 @@ def determine_tier_transition(
     insider_risk: Decimal | None,
     cluster_risk: Decimal | None,
 ) -> tuple[str, str] | None:
-    if current_tier is None:
-        # A wallet's very first transition, before any score exists --
-        # matches section 36's own "DISCOVERED: insufficient analysis."
-        return (TIER_DISCOVERED, "first tier assignment: no prior score exists")
-
     if (insider_risk is not None and insider_risk >= _INSIDER_QUARANTINE_THRESHOLD) or (
         cluster_risk is not None and cluster_risk >= _CLUSTER_QUARANTINE_THRESHOLD_PCT
     ):

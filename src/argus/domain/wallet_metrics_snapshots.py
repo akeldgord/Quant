@@ -105,11 +105,16 @@ class WalletMetricsSnapshot(Base):
     winsorized_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     profit_factor: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     hit_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 5), nullable=True)
+    # Numeric(20, 6), not a bounded Numeric(6, 5): P3-R3 remediation
+    # (argus-phase-3-remediation-001) corrected this to largest-single-
+    # closed-round-trip PnL divided by estimated NET lifetime P&L, which
+    # is not bounded to [0, 1] -- e.g. one +100 winner against a -90
+    # loser nets +10, an honest 10.0 (1000%) contribution ratio.
     largest_trade_contribution_pct: Mapped[Decimal | None] = mapped_column(
-        Numeric(6, 5), nullable=True
+        Numeric(20, 6), nullable=True
     )
     top_three_trade_contribution_pct: Mapped[Decimal | None] = mapped_column(
-        Numeric(6, 5), nullable=True
+        Numeric(20, 6), nullable=True
     )
     max_drawdown: Mapped[Decimal | None] = mapped_column(Numeric(6, 5), nullable=True)
     distinct_profitable_token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
