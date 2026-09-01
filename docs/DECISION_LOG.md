@@ -2337,7 +2337,7 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   this instruction does not amend MASTER_SPEC.md, and required-versus-
   optional language retains its original strength. Full detail recorded
   in `orchestration/checkpoints/phase_4.md` once this batch completes.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT (this entry's own completion record)
+- git_commit: 92bcc6a2d9b77497d077c671df9a5fb6d011332a (this entry's own completion record)
 
 ### 2026-09-01 — Phase 4 (PROSPECTIVE MONITORING + SHADOW COPYING) build complete, awaiting independent audit
 

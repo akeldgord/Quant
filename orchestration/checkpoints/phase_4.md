@@ -24,7 +24,7 @@ STATUS: Phase 4 build complete: schema, prospective-event/shadow-intent/
   reports build completion for independent audit, it does not and cannot
   itself apply approval.
 UTC_TIMESTAMP: 2026-09-01T14:35:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 92bcc6a2d9b77497d077c671df9a5fb6d011332a
 TARGET_COMMIT: 379c5bc886abe7e99cdd3360fe3e71925ac932ce
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
@@ -305,7 +305,7 @@ self-approve Phase 4. Per this project's established two-commit convention,
 this checkpoint, the paired bundle, `docs/BUILD_STATE.md`, `docs/
 DECISION_LOG.md`, and `orchestration/AGENT_HANDOFF.md` are committed once
 with every commit-hash-bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately following
+`92bcc6a2d9b77497d077c671df9a5fb6d011332a`, then a second, immediately following
 commit fills in that first commit's own real hash in every one of those
 fields -- both commits carry the sole terminal trailer `ARGUS-INSTRUCTION-
 ID: argus-phase-4-001` with no paragraph after it, verified via `git
