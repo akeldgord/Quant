@@ -26,7 +26,7 @@ STATUS: All 4 continued findings (P4-R1, P4-R3, P4-R4, P4-R6) are fixed
   completion for independent re-audit, it does not and cannot itself
   apply approval.
 UTC_TIMESTAMP: 2026-09-01T19:35:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 9890802f91da02c51fc4a2f12715c821158dc53b
 TARGET_COMMIT: 1d5cc5d93819cdeec050889a5b37c44d5b2f5c0b
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
@@ -310,7 +310,7 @@ Per this project's established two-commit convention, this checkpoint, the
 paired bundle, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every commit-hash-
 bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately following
+`9890802f91da02c51fc4a2f12715c821158dc53b`, then a second, immediately following
 commit fills in that first commit's own real hash in every one of those
 fields -- both commits carry the sole terminal trailer `ARGUS-INSTRUCTION-
 ID: argus-phase-4-remediation-002` with no paragraph after it, verified via
