@@ -271,6 +271,8 @@ def _quote(*, input_mint: str, output_mint: str, in_amount: int, out_amount: int
         in_amount_raw=in_amount,
         out_amount_raw=out_amount,
         raw={
+            "inputMint": input_mint,
+            "outputMint": output_mint,
             "priceImpactPct": impact,
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),

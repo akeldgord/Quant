@@ -61,6 +61,31 @@ non-empty ``routePlan`` evidence (never merely a positive ``outAmount``)
 before ever reporting ``route_present=True``/``SUCCESS`` -- a malformed or
 identity-mismatched response is an honest ``QUOTE_FAILED``, never a
 fabricated success.
+
+P4-remediation-002 R4: the mint-identity check now compares the response's
+own ``inputMint``/``outputMint`` fields against the mints this call actually
+requested -- never the caller-echoed labels on :class:`ExecutableQuote`,
+which merely restate the request and cannot reveal a genuine provider-side
+mint disagreement. Route-plan evidence must be structurally well-formed
+(each entry a dict carrying its own ``swapInfo`` dict), not merely a
+non-empty list -- ``routePlan=[null]`` is equivalent to no route. A price-
+impact value that is *present but garbage* (non-numeric, NaN, infinite) is
+now an honest ``QUOTE_FAILED``, distinct from a genuinely *absent* impact
+field, which stays leniently ``None`` -- missing evidence is unknown,
+supplied-but-untrustworthy evidence is a failure, never silently equated.
+Jupiter's own ``platformFee.amount`` is now honestly parsed into
+``fee_estimate_raw`` when present and well-formed, ``None`` otherwise --
+never fabricated or summed across currencies. ``requested_at``/
+``responded_at`` are now captured from inside the actually-dispatched
+callable (so a scheduler queue wait before dispatch is correctly reflected
+in ``scheduling_delay_seconds``, never conflated with post-dispatch network
+latency), and both stay honestly ``None`` for a genuine scheduler-level
+capacity drop that never reached the provider. A new ``terminal_at``
+column, set on every terminal write regardless of dispatch, is now the
+single source of truth for "is this probe done" across claim-candidate
+filtering, no-fill/intent-finalization checks, and report windowing --
+``responded_at`` alone is no longer assumed to be the only completion
+proof.
 """
 
 from __future__ import annotations
@@ -163,48 +188,103 @@ def _classify_provider_exception(exc: Exception) -> str:
     return OUTCOME_QUOTE_FAILED
 
 
+def _is_structurally_valid_route_entry(entry: object) -> bool:
+    """A genuine Jupiter v6 ``routePlan`` entry is an object carrying its
+    own ``swapInfo`` object (never a bare ``null``/non-object placeholder)
+    -- this checks the EXISTING quote contract's own minimal shape, never
+    demands new economic/semantic proof beyond it (P4-remediation-002 R4:
+    "Nonempty list is not route validation... do not demand new economic/
+    semantic proof beyond that contract")."""
+    return isinstance(entry, dict) and isinstance(entry.get("swapInfo"), dict)
+
+
+def _extract_fee_estimate_raw(quote_raw: dict) -> int | None:
+    """Jupiter's own v6 ``platformFee`` field (``{"amount": "...",
+    "feeBps": N}``), when present and structurally parseable, in the ONE
+    fixed currency Jupiter itself always denominates it in -- never summed
+    or converted across mints (P4-remediation-002 R4: "never add
+    heterogeneous currencies"). Absent or malformed stays honestly
+    unavailable (``None``), never fabricated."""
+    platform_fee = quote_raw.get("platformFee")
+    if not isinstance(platform_fee, dict):
+        return None
+    amount = platform_fee.get("amount")
+    if amount is None:
+        return None
+    try:
+        return int(amount)
+    except (TypeError, ValueError):
+        return None
+
+
 def _classify_quote(
     quote_raw: dict,
     *,
     out_amount_raw: int,
     in_amount_raw: int,
     requested_notional_raw: int,
+    requested_input_mint: str,
+    requested_output_mint: str,
     config: ArgusConfig,
 ) -> tuple[str, Decimal | None, bool]:
     """Real Jupiter quotes always carry ``priceImpactPct``/``routePlan``;
     this project decides whether that impact is excessive (section 48),
-    never Jupiter itself. Missing/unparseable impact data is treated
+    never Jupiter itself. A genuinely MISSING impact field is treated
     leniently (``None``, not excessive) -- an honestly-unknown impact is
-    not the same claim as a known-excessive one.
+    not the same claim as a known-excessive one. A SUPPLIED but malformed
+    or nonfinite impact value, by contrast, is untrustworthy evidence and
+    produces an explicit ``QUOTE_FAILED`` with no fill
+    (P4-remediation-002 R4: "missing impact must remain explicit; never
+    silently assert a known-safe value" is not the same rule as "a
+    present-but-garbage value is silently ignored").
 
-    P4-R4: a response whose own echoed ``inAmount`` does not match the
-    exact notional this probe requested is untrustworthy and is never
-    used as a success, regardless of its ``outAmount``; ``route_present``
-    requires genuine non-empty ``routePlan`` evidence, never merely a
-    positive output amount (an empty/absent route plan with a nonzero
-    output is malformed, not a real fill)."""
+    P4-R4 (round 1): a response whose own echoed ``inAmount`` does not
+    match the exact notional this probe requested is untrustworthy and is
+    never used as a success, regardless of its ``outAmount``.
+
+    P4-remediation-002 R4 (round 2): the response's own RAW
+    ``inputMint``/``outputMint`` fields (never the caller-echoed labels
+    :class:`~argus.providers.models.ExecutableQuote` puts on the object)
+    must match what was actually requested -- a provider response for an
+    unrelated mint pair is never a valid quote for THIS probe.
+    ``route_present`` requires genuine, structurally valid ``routePlan``
+    entries (each carrying its own ``swapInfo`` object) -- a nonempty list
+    of ``null``/malformed placeholders is not route evidence, exactly like
+    an empty list."""
+    raw_input_mint = quote_raw.get("inputMint")
+    raw_output_mint = quote_raw.get("outputMint")
+    if raw_input_mint != requested_input_mint or raw_output_mint != requested_output_mint:
+        return OUTCOME_QUOTE_FAILED, None, False
+
     if in_amount_raw != requested_notional_raw:
         return OUTCOME_QUOTE_FAILED, None, False
 
     raw_impact = quote_raw.get("priceImpactPct")
     price_impact: Decimal | None
-    try:
-        price_impact = Decimal(str(raw_impact)) if raw_impact is not None else None
-    except (ValueError, ArithmeticError):
+    if raw_impact is None:
         price_impact = None
-    if price_impact is not None and not price_impact.is_finite():
-        # Decimal("NaN")/Decimal("Infinity") parse without raising (they
-        # are valid IEEE-754-style Decimal special values), but comparing
-        # one with `>` below raises InvalidOperation -- a nonfinite value
-        # is exactly as unparseable as a genuinely malformed string, and
-        # must be treated with the same honest leniency (None, not
-        # excessive), never crash the whole claimed batch.
-        price_impact = None
+    else:
+        try:
+            price_impact = Decimal(str(raw_impact))
+        except (ValueError, ArithmeticError):
+            return OUTCOME_QUOTE_FAILED, None, False
+        if not price_impact.is_finite():
+            # Decimal("NaN")/Decimal("Infinity") parse without raising
+            # (they are valid IEEE-754-style Decimal special values) but
+            # are a genuinely SUPPLIED, malformed value -- untrustworthy
+            # evidence, an honest QUOTE_FAILED, never silently dropped to
+            # the "missing" leniency path.
+            return OUTCOME_QUOTE_FAILED, None, False
+
     threshold = config.get("thresholds.max_price_impact_pct")
     max_impact = Decimal(str(threshold)) if threshold is not None else _DEFAULT_MAX_PRICE_IMPACT_PCT
 
     route_plan = quote_raw.get("routePlan")
-    has_route_evidence = isinstance(route_plan, list) and len(route_plan) > 0
+    has_route_evidence = (
+        isinstance(route_plan, list)
+        and len(route_plan) > 0
+        and all(_is_structurally_valid_route_entry(entry) for entry in route_plan)
+    )
     if not has_route_evidence or out_amount_raw <= 0:
         return OUTCOME_NO_ROUTE, price_impact, False
     if price_impact is not None and price_impact > max_impact:
@@ -229,7 +309,7 @@ async def _claim_due_probes(
                 .where(
                     ShadowQuoteProbe.probe_kind == probe_kind,
                     ShadowQuoteProbe.target_due_at <= now,
-                    ShadowQuoteProbe.responded_at.is_(None),
+                    ShadowQuoteProbe.terminal_at.is_(None),
                     or_(
                         ShadowQuoteProbe.claimed_at.is_(None),
                         ShadowQuoteProbe.claimed_at < stale_cutoff,
@@ -268,7 +348,7 @@ async def _maybe_finalize_intent_no_fill(
         .scalars()
         .all()
     )
-    if not entry_probes or any(p.responded_at is None for p in entry_probes):
+    if not entry_probes or any(p.terminal_at is None for p in entry_probes):
         return
     if any(p.outcome == OUTCOME_SUCCESS for p in entry_probes):
         return
@@ -371,13 +451,17 @@ async def _execute_and_record_probe(
     async with session_factory() as session:
         probe = await session.get(ShadowQuoteProbe, probe_id)
         assert probe is not None
-        if probe.responded_at is not None:
+        if probe.terminal_at is not None:
             # Already terminal -- a needless provider call must never
             # happen for an invocation that has nothing left to record
-            # (P4-R5). No lock is needed to observe this: only a genuine
-            # NEW claim (a higher claim_generation) can ever move a probe
-            # from terminal back to claimable, and this call's own
-            # observed_generation was captured at ITS claim time.
+            # (P4-R5). ``terminal_at`` (never ``responded_at`` alone,
+            # P4-remediation-002 R4) is the one true "is this probe done"
+            # signal: a genuine scheduler-level capacity drop is terminal
+            # with NO ``responded_at`` ever set at all. No lock is needed
+            # to observe this: only a genuine NEW claim (a higher
+            # claim_generation) can ever move a probe from terminal back
+            # to claimable, and this call's own observed_generation was
+            # captured at ITS claim time.
             return probe
         input_mint = probe.input_mint
         output_mint = probe.output_mint
@@ -391,7 +475,17 @@ async def _execute_and_record_probe(
             _claim_generation if _claim_generation is not None else probe.claim_generation
         )
 
-    requested_at = clock.utc_now()
+    # P4-remediation-002 R4: requested_at/responded_at are captured INSIDE
+    # the dispatched callable itself, immediately before/after the actual
+    # provider call -- never before scheduler.submit() is even invoked.
+    # A scheduler queue wait is scheduling delay, not provider latency: if
+    # the scheduler defers dispatch, requested_at correctly reflects the
+    # real, later dispatch instant, not the earlier enqueue instant. A
+    # request that is DROPPED before ever being dispatched (RequestDropped
+    # raised by the scheduler itself, before _call_provider ever runs)
+    # leaves both None -- no request/response ever genuinely happened.
+    requested_at: datetime | None = None
+    responded_at: datetime | None = None
     outcome = OUTCOME_QUOTE_FAILED
     expected_output: int | None = None
     price_impact: Decimal | None = None
@@ -400,9 +494,18 @@ async def _execute_and_record_probe(
     raw_quote: dict | None = None
 
     async def _call_provider() -> ExecutableQuote:
-        return await provider.get_quote(
-            input_mint=input_mint, output_mint=output_mint, amount_raw=notional
-        )
+        nonlocal requested_at, responded_at
+        requested_at = clock.utc_now()
+        try:
+            return await provider.get_quote(
+                input_mint=input_mint, output_mint=output_mint, amount_raw=notional
+            )
+        finally:
+            # Real dispatch happened (success OR a real provider-side
+            # error like HTTP 429/no-route) -- both keep actual
+            # send/response evidence, per P4-remediation-002 R4's own
+            # "HTTP429 is different: it DID make a request" rule.
+            responded_at = clock.utc_now()
 
     try:
         if scheduler is not None and priority_class is not None:
@@ -417,6 +520,8 @@ async def _execute_and_record_probe(
             out_amount_raw=quote.out_amount_raw,
             in_amount_raw=quote.in_amount_raw,
             requested_notional_raw=notional,
+            requested_input_mint=input_mint,
+            requested_output_mint=output_mint,
             config=config,
         )
         expected_output = (
@@ -424,9 +529,19 @@ async def _execute_and_record_probe(
             if outcome in (OUTCOME_SUCCESS, OUTCOME_PRICE_IMPACT_EXCESSIVE)
             else None
         )
-        fee_estimate = None
+        fee_estimate = _extract_fee_estimate_raw(dict(quote.raw))
         raw_quote = dict(quote.raw)
-    responded_at = clock.utc_now()
+    terminal_at = clock.utc_now()
+    scheduling_delay_seconds = (
+        Decimal(str((requested_at - target_due_at).total_seconds()))
+        if requested_at is not None
+        else None
+    )
+    latency_ms = (
+        int((responded_at - requested_at).total_seconds() * 1000)
+        if requested_at is not None and responded_at is not None
+        else None
+    )
 
     entry_price_usd: Decimal | None = None
     if (
@@ -452,20 +567,21 @@ async def _execute_and_record_probe(
                 .with_for_update()
             )
         ).scalar_one()
-        if probe.responded_at is not None or probe.claim_generation != observed_generation:
+        if probe.terminal_at is not None or probe.claim_generation != observed_generation:
             # Already recorded by another worker/attempt, or this
             # attempt's own claim was superseded by a fresher reclaim --
             # idempotent no-op, never a second/late write (section 84,
-            # P4-R5). The provider call above already happened and its
-            # result is simply discarded here.
+            # P4-R5). ``terminal_at``, not ``responded_at`` alone
+            # (P4-remediation-002 R4) -- a scheduler-drop terminal write
+            # never sets ``responded_at`` at all. The provider call above
+            # already happened and its result is simply discarded here.
             return probe
 
         probe.requested_at = requested_at
         probe.responded_at = responded_at
-        probe.scheduling_delay_seconds = Decimal(
-            str((requested_at - target_due_at).total_seconds())
-        )
-        probe.latency_ms = int((responded_at - requested_at).total_seconds() * 1000)
+        probe.scheduling_delay_seconds = scheduling_delay_seconds
+        probe.latency_ms = latency_ms
+        probe.terminal_at = terminal_at
         probe.expected_output_amount_raw = expected_output
         probe.price_impact_pct = price_impact
         probe.route_present = route_present
@@ -503,6 +619,11 @@ async def _execute_and_record_probe(
                     )
                 ).scalar_one_or_none()
                 if existing_position is None:
+                    # SUCCESS is only ever reached after a real dispatch
+                    # (the outcome starts as QUOTE_FAILED and is only
+                    # changed once a provider call actually completed),
+                    # so responded_at is always set here.
+                    assert responded_at is not None
                     position = ShadowPosition(
                         shadow_position_id=uuid.uuid4(),
                         shadow_intent_id=shadow_intent_id,

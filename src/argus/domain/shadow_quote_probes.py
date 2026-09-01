@@ -149,10 +149,17 @@ class ShadowQuoteProbe(Base):
     claim_generation: Mapped[int] = mapped_column(nullable=False, default=0)
 
     # Actual timings -- always distinct from target_due_at (section 46).
+    # requested_at/responded_at/scheduling_delay_seconds/latency_ms are
+    # ALL still None for a genuine scheduler-level capacity drop (no real
+    # provider dispatch ever happened -- P4-remediation-002 R4); terminal_at
+    # is set on EVERY terminal write regardless, so "is this probe done"
+    # queries never have to assume responded_at non-null is the only
+    # completion proof.
     requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scheduling_delay_seconds: Mapped[Decimal | None] = mapped_column(Numeric(12, 3), nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(nullable=True)
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     expected_output_amount_raw: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     price_impact_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)

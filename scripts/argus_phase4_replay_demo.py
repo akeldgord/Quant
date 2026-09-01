@@ -123,7 +123,7 @@ from argus.telegram.notifier import FakeTelegramTransport, TelegramNotifier  # n
 REAL_FIXTURE = (
     REPO_ROOT / "tests" / "golden" / "fixtures" / "real" / "real_mainnet_sol_to_token_swap.json"
 )
-EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_remediation_1" / "evidence"
+EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_remediation_2" / "evidence"
 RESULTS_PATH = EVIDENCE_DIR / "replay_demo_results.json"
 
 _LEADER_TIME = datetime(2024, 9, 18, 9, 22, 18, tzinfo=UTC)  # the fixture's real blockTime
@@ -234,6 +234,8 @@ def _quote(
         in_amount_raw=in_amount,
         out_amount_raw=out_amount,
         raw={
+            "inputMint": input_mint,
+            "outputMint": output_mint,
             "priceImpactPct": "0.01",
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),
@@ -414,7 +416,9 @@ async def _run_replay_lifecycle(sessionmaker, config) -> dict[str, Any]:
     entry_due_at = observed_at + timedelta(seconds=1)  # event.first_seen_at + "1s"
     actual_requested_at = entry_due_at + timedelta(seconds=2, milliseconds=700)
     actual_responded_at = actual_requested_at + timedelta(milliseconds=100)
-    entry_clock = _ScriptedClock([actual_requested_at, actual_responded_at])
+    entry_clock = _ScriptedClock(
+        [actual_requested_at, actual_responded_at, actual_responded_at + timedelta(milliseconds=5)]
+    )
     entry_provider = QueuedExecutionProvider(
         queue=[
             _quote(
@@ -507,7 +511,9 @@ async def _run_replay_lifecycle(sessionmaker, config) -> dict[str, Any]:
     }
 
     reverse_provider = QueuedExecutionProvider(queue=[NoRouteError("no route out (replay)")])
-    reverse_clock = _ScriptedClock([maturity, maturity + timedelta(milliseconds=50)])
+    reverse_clock = _ScriptedClock(
+        [maturity, maturity + timedelta(milliseconds=50), maturity + timedelta(milliseconds=55)]
+    )
     reverse_results = await run_due_reverse_probes(
         sessionmaker, reverse_provider, config=config, clock=reverse_clock, now=maturity, limit=10
     )

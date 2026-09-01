@@ -1,0 +1,111 @@
+{
+  "replay_label": "REPLAY -- NOT PROSPECTIVE ALPHA EVIDENCE",
+  "real_fixture": "tests/golden/fixtures/real/real_mainnet_sol_to_token_swap.json",
+  "leader_executes": {
+    "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE",
+    "slot": 290506981,
+    "classification": "SWAP_SIMPLE",
+    "confidence": "1.000",
+    "input_mint": "SOL",
+    "input_amount_raw": 3072039280,
+    "output_mint": "D66sbPtYqLnwPYcUqjDktrQtb52CnfF77C3sdpNpR8Si",
+    "output_amount_raw": 56716561396327,
+    "parser_version": "generic_balance_delta_v3"
+  },
+  "argus_observes": {
+    "first_seen_at": "2024-09-18T09:22:19+00:00"
+  },
+  "source_tx_confirms": {
+    "commitment_level": "CONFIRMED",
+    "observed_at": "2024-09-18T09:22:21+00:00"
+  },
+  "shadow_signal": {
+    "prospective_event_id": "ef32180e-da9f-4056-83fd-511ef93834a4",
+    "first_seen_at": "2024-09-18T09:22:19+00:00",
+    "shadow_intent_id": "6e02dabc-138d-4490-bbcc-ef7e2d61b35a",
+    "notional_input_amount_raw": 100000000,
+    "entry_probe_labels": [
+      "1s",
+      "5s",
+      "15s",
+      "30s",
+      "60s",
+      "300s"
+    ]
+  },
+  "entry_quote_and_fill": {
+    "probe_id": "eafc0f24-dae2-4062-9031-ea674b899403",
+    "target_label": "1s",
+    "target_due_at": "2024-09-18T09:22:20+00:00",
+    "requested_at": "2024-09-18T09:22:22.700000+00:00",
+    "responded_at": "2024-09-18T09:22:22.800000+00:00",
+    "scheduling_delay_seconds": "2.7",
+    "latency_ms": 100,
+    "outcome": "SUCCESS",
+    "shadow_position_id": "d51322ec-f379-4f92-bc3b-74b0a5483b12",
+    "entry_price_usd": "1.000000000000000000"
+  },
+  "mark_outcome": {
+    "shadow_mark_outcome_id": "deb347e1-bc6f-4fa9-84f2-60b780610b49",
+    "horizon_label": "5m",
+    "outcome": "RECORDED",
+    "mark_price_usd": "1.50",
+    "mark_return_pct_approx": "50.0"
+  },
+  "reverse_executable_quote": {
+    "shadow_quote_probe_id": "7370158f-0a60-4633-8a84-b5c444f935af",
+    "target_label": "5m",
+    "outcome": "NO_ROUTE"
+  },
+  "telegram_notification": {
+    "transport": "FakeTelegramTransport",
+    "sent": [
+      {
+        "chat_id": "replay-demo-chat",
+        "text": "REPLAY demo: shadow position d51322ec-f379-4f92-bc3b-74b0a5483b12 opened, mark +50.0%, reverse-executable NO_ROUTE"
+      }
+    ]
+  },
+  "daily_report": {
+    "window_start": "2024-09-17T09:28:23.800000+00:00",
+    "window_end": "2024-09-18T09:28:23.800000+00:00",
+    "tracking": {
+      "tracked_wallets": 1,
+      "wallet_trades": 1,
+      "stream_gaps_degraded_wallets": 0,
+      "reconciliations_in_window": 0
+    },
+    "signals": {
+      "signals": 1,
+      "confirmations": 1,
+      "convergence_events": "NOT_IMPLEMENTED"
+    },
+    "shadow": {
+      "shadow_trades_opened_in_window": 1,
+      "reverse_executable_outcomes_in_window": {
+        "successful": 0,
+        "unsellable": 1,
+        "missing_capacity": 0,
+        "usable_sample": 1,
+        "total_attempts_including_missing_capacity": 1
+      },
+      "reverse_executable_overdue_unattempted": 0,
+      "matured_mark_outcomes_in_window": 1,
+      "open_shadow_positions_total": 1,
+      "mfe_mae": {
+        "sample_count": 1,
+        "sampled_max_return_pct": "0.500000",
+        "sampled_min_return_pct": "0.500000",
+        "note": "descriptive, sampled mark-price returns at fixed horizons within this report's window -- not a continuous MFE/MAE price path"
+      }
+    },
+    "data_quality": {
+      "ambiguous_swaps_in_window": 0,
+      "missing_mark_observations_overdue": 0,
+      "low_completeness_wallets": 0,
+      "provider_gaps": 0
+    }
+  },
+  "status": "COMPLETE",
+  "scratch_database": "argus_phase4_replay_demo_ec68b48b283d4910"
+}

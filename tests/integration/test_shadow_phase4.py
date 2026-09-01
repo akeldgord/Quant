@@ -261,6 +261,8 @@ def _quote(*, input_mint: str, output_mint: str, in_amount: int, out_amount: int
         in_amount_raw=in_amount,
         out_amount_raw=out_amount,
         raw={
+            "inputMint": input_mint,
+            "outputMint": output_mint,
             "priceImpactPct": impact,
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),
@@ -508,7 +510,8 @@ async def test_entry_probe_records_actual_latency_not_target_delay(admin_engine)
         target_due_at = _NOW + timedelta(seconds=1)
         actual_requested_at = target_due_at + timedelta(seconds=2.7)
         actual_responded_at = actual_requested_at + timedelta(milliseconds=100)
-        clock = _ScriptedClock([actual_requested_at, actual_responded_at])
+        actual_terminal_at = actual_responded_at + timedelta(milliseconds=5)
+        clock = _ScriptedClock([actual_requested_at, actual_responded_at, actual_terminal_at])
 
         provider = QueuedExecutionProvider(
             queue=[

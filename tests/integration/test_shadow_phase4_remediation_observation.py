@@ -23,6 +23,7 @@ event.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -38,7 +39,11 @@ from argus.config import load_config
 from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
-from argus.domain.commitment import COMMITMENT_CONFIRMED, CommitmentObservation
+from argus.domain.commitment import (
+    COMMITMENT_CONFIRMED,
+    COMMITMENT_FINALIZED,
+    CommitmentObservation,
+)
 from argus.domain.prospective_events import ProspectiveEvent
 from argus.domain.shadow_intents import ShadowIntent
 from argus.domain.shadow_quote_probes import ShadowQuoteProbe
@@ -49,7 +54,12 @@ from argus.domain.wallet_cluster_links import EVIDENCE_SYNCHRONIZED_ACTIVITY, Wa
 from argus.domain.wallet_history_quality import WalletHistoryQuality
 from argus.domain.wallet_positions import CONFIDENCE_HIGH, STATUS_OPEN, WalletPosition
 from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
-from argus.domain.wallet_tier_history import TIER_DISCOVERED, WalletTierTransition
+from argus.domain.wallet_tier_history import (
+    TIER_A,
+    TIER_DISCOVERED,
+    TIER_WATCH,
+    WalletTierTransition,
+)
 from argus.domain.wallets import Wallet
 from argus.providers.models import ExecutableQuote
 from argus.shadow.intents import entry_probe_label
@@ -167,14 +177,23 @@ async def _cleanup_token(admin_engine: Any, mint: str) -> None:
 
 
 async def _seed_score_snapshot(
-    session: Any, *, wallet_id: uuid.UUID, score: Decimal, at: datetime
+    session: Any,
+    *,
+    wallet_id: uuid.UUID,
+    score: Decimal,
+    at: datetime,
+    as_of: datetime | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
+    """``as_of``/``created_at`` default to ``at`` (the common case); pass
+    them explicitly to construct a split effective-vs-recorded timestamp
+    (P4-remediation-002 R1's own literal audit probe scenario)."""
     score_id = uuid.uuid4()
     session.add(
         WalletScoreSnapshot(
             score_id=score_id,
             wallet_id=wallet_id,
-            as_of=at,
+            as_of=as_of if as_of is not None else at,
             score_version="test-v1",
             descriptive_score=score,
             qualification_score=score,
@@ -188,7 +207,7 @@ async def _seed_score_snapshot(
             config_hash="test-config",
             master_spec_hash="test-spec",
             git_commit=_TEST_GIT_COMMIT,
-            created_at=at,
+            created_at=created_at if created_at is not None else at,
         )
     )
     await session.flush()
@@ -203,7 +222,10 @@ async def _seed_tier_transition(
     at: datetime,
     from_tier: str | None = None,
     source_score_id: uuid.UUID | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
+    """``created_at`` defaults to ``at`` (used as ``transitioned_at``);
+    pass it explicitly for a split effective-vs-recorded timestamp."""
     transition_id = uuid.uuid4()
     session.add(
         WalletTierTransition(
@@ -214,7 +236,7 @@ async def _seed_tier_transition(
             to_tier=to_tier,
             reason="test",
             transitioned_at=at,
-            created_at=at,
+            created_at=created_at if created_at is not None else at,
         )
     )
     await session.flush()
@@ -405,8 +427,15 @@ async def _seed_token(session: Any, *, mint: str, at: datetime) -> uuid.UUID:
 
 
 async def _seed_token_market_snapshot(
-    session: Any, *, token_id: uuid.UUID, observed_at: datetime, price_usd: Decimal
+    session: Any,
+    *,
+    token_id: uuid.UUID,
+    observed_at: datetime,
+    price_usd: Decimal,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
+    """``created_at`` defaults to ``observed_at``; pass it explicitly for a
+    split effective-vs-recorded timestamp."""
     snapshot_id = uuid.uuid4()
     session.add(
         TokenMarketSnapshot(
@@ -428,7 +457,7 @@ async def _seed_token_market_snapshot(
             evidence_reference=None,
             algorithm_version="test-v1",
             build_hash="test-build",
-            created_at=observed_at,
+            created_at=created_at if created_at is not None else observed_at,
         )
     )
     await session.flush()
@@ -631,7 +660,20 @@ async def test_snapshot_reflects_only_pre_cutoff_evidence_never_later_updates(ad
         await engine.dispose()
 
 
-async def test_snapshot_with_no_pre_cutoff_score_or_tier_falls_back_honestly(admin_engine) -> None:
+async def test_wallet_with_zero_tier_history_is_genuinely_ineligible_not_scanned(
+    admin_engine,
+) -> None:
+    """P4-remediation-002 R1: a wallet with ZERO tier-transition evidence
+    has no known eligible tier at ANY cutoff -- it falls back to
+    TIER_DISCOVERED (never fabricated as tier_allowed), and since the
+    scanner now evaluates eligibility from real tier history (not
+    ``wallets.current_tier``, which the seeding helper sets directly
+    regardless of transition history), such a wallet is correctly never
+    scanned at all. This replaces the pre-remediation-002 version of this
+    test, which asserted the scanner used to WRONGLY create an event for
+    this wallet purely because ``wallets.current_tier`` happened to be
+    seeded as "A" -- exactly the current-tier-prefilter bug this round
+    fixes."""
     wallet_address = _unique_wallet()
     mint = _unique_mint()
     config, engine, sessionmaker = _sessionmaker()
@@ -651,21 +693,126 @@ async def test_snapshot_with_no_pre_cutoff_score_or_tier_falls_back_honestly(adm
             created = await scan_for_new_prospective_events(
                 session, tier_allowed=["A", "S"], now=_NOW
             )
-        assert len(created) == 1
-        event = created[0]
+        assert created == []
+
+        # Positive control: the very same swap IS picked up once the
+        # allowed-tier set genuinely includes the honest DISCOVERED
+        # fallback -- proving the exclusion above is a real eligibility
+        # decision, not an accidental empty result (e.g. a broken join).
+        async with sessionmaker() as session, session.begin():
+            created_with_discovered_allowed = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S", TIER_DISCOVERED], now=_NOW
+            )
+        assert len(created_with_discovered_allowed) == 1
+        event = created_with_discovered_allowed[0]
         assert event.wallet_score_snapshot is None
         assert event.wallet_tier_snapshot == TIER_DISCOVERED
         assert event.score_snapshot_id is None
         assert event.tier_transition_id is None
-
         assert event.position_size_context["available"] is False
         assert isinstance(event.position_size_context["reason"], str)
         assert event.position_size_context["reason"] != ""
-
-        # No tokens row for this mint either -- honest "unavailable", not
-        # a crash or an invented market state.
         assert event.token_state_snapshot["available"] is False
         assert isinstance(event.token_state_snapshot["reason"], str)
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_wallet_with_real_tier_but_no_score_snapshot_falls_back_honestly(
+    admin_engine,
+) -> None:
+    """A wallet DOES have a genuine, eligible tier-at-cutoff (a real
+    ``WalletTierTransition`` to "A"), but no ``WalletScoreSnapshot`` row at
+    all -- the scanner correctly picks it up (real tier evidence exists),
+    and the created event's score is honestly ``None`` rather than a
+    fabricated or defaulted value; the tier snapshot is the real
+    transitioned tier, not the TIER_DISCOVERED fallback (that fallback
+    only applies when NO transition exists at all)."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=_NOW,
+                    current_tier="A",
+                    created_at=_NOW,
+                )
+            )
+            await session.flush()
+            transition_id = await _seed_tier_transition(
+                session, wallet_id=wallet_id, to_tier="A", at=_NOW, source_score_id=None
+            )
+            event_id = uuid.uuid4()
+            session.add(
+                ChainEvent(
+                    event_id=event_id,
+                    chain="solana",
+                    slot=1,
+                    block_time=_NOW,
+                    first_seen_at=_NOW,
+                    provider="helius",
+                    provider_received_at=_NOW,
+                    transaction_signature=f"p4ro-noscore-{uuid.uuid4()}",
+                    event_type="TRANSACTION_OBSERVED",
+                    wallet_address=wallet_address,
+                    raw_payload={},
+                    payload_hash="h",
+                    parser_version="v1",
+                    created_at=_NOW,
+                )
+            )
+            await session.flush()
+            session.add(
+                CommitmentObservation(
+                    observation_id=uuid.uuid4(),
+                    event_id=event_id,
+                    commitment_level=COMMITMENT_CONFIRMED,
+                    transaction_succeeded=True,
+                    observed_at=_NOW,
+                    provider="helius",
+                    provider_received_at=_NOW,
+                    created_at=_NOW,
+                )
+            )
+            session.add(
+                Swap(
+                    swap_id=uuid.uuid4(),
+                    event_id=event_id,
+                    wallet_address=wallet_address,
+                    classification="SWAP_SIMPLE",
+                    input_mint=SOL_MINT,
+                    input_amount_raw=100_000_000,
+                    input_amount_ui=Decimal("0.1"),
+                    output_mint=mint,
+                    output_amount_raw=1_000_000,
+                    output_amount_ui=Decimal("1"),
+                    network_fee_raw=5000,
+                    slot=1,
+                    block_time=_NOW,
+                    first_seen_at=_NOW,
+                    confidence=Decimal("1.000"),
+                    parser_version="v1",
+                    build_hash="test-build",
+                    created_at=_NOW,
+                )
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S"], now=_NOW
+            )
+        assert len(created) == 1
+        event = created[0]
+        assert event.wallet_score_snapshot is None
+        assert event.wallet_tier_snapshot == "A"
+        assert event.score_snapshot_id is None
+        assert event.tier_transition_id == transition_id
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
         await engine.dispose()
@@ -1045,12 +1192,502 @@ def _quote(
         in_amount_raw=in_amount,
         out_amount_raw=out_amount,
         raw={
+            "inputMint": input_mint,
+            "outputMint": output_mint,
             "priceImpactPct": "0.01",
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),
             "routePlan": [{"swapInfo": {"label": "fake-amm"}, "percent": 100}],
         },
     )
+
+
+# ---------------------------------------------------------------------
+# P4-remediation-002 R1: split effective-vs-recorded ("both bounds")
+# timestamps, exactly the audit's own literal probe scenario.
+# ---------------------------------------------------------------------
+
+
+async def test_score_with_future_as_of_but_past_created_at_is_excluded(admin_engine) -> None:
+    """Audit probe #1, score half: ``created_at`` <= cutoff but ``as_of``
+    > cutoff (a score computed on time but describing a FUTURE effective
+    period) must never be selected -- the pre-remediation-002 query
+    checked only ``created_at``."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                seed_score_and_tier=False,
+            )
+            await _seed_tier_transition(session, wallet_id=wallet_id, to_tier="A", at=T)
+            # Recorded (created_at) right at T, but its own effective
+            # period (as_of) is an hour in the future relative to T.
+            await _seed_score_snapshot(
+                session,
+                wallet_id=wallet_id,
+                score=Decimal("77.000"),
+                at=T,
+                as_of=T + timedelta(hours=1),
+                created_at=T,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.wallet_score_snapshot is None
+        assert event.score_snapshot_id is None
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_score_with_past_as_of_but_future_created_at_is_excluded(admin_engine) -> None:
+    """Symmetric case: ``as_of`` <= cutoff but ``created_at`` > cutoff (a
+    score whose own EFFECTIVE period is in the past, but that ARGUS did
+    not actually compute/persist until after cutoff) must also never be
+    selected -- both bounds are required, not either alone."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                seed_score_and_tier=False,
+            )
+            await _seed_tier_transition(session, wallet_id=wallet_id, to_tier="A", at=T)
+            await _seed_score_snapshot(
+                session,
+                wallet_id=wallet_id,
+                score=Decimal("77.000"),
+                at=T,
+                as_of=T,
+                created_at=T + timedelta(hours=1),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.wallet_score_snapshot is None
+        assert event.score_snapshot_id is None
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_tier_effective_at_cutoff_but_recorded_later_is_excluded(admin_engine) -> None:
+    """Audit probe #1, tier half, the literal reproduction: a tier
+    transition's ``transitioned_at`` == T but its ``created_at`` == T+1h
+    (i.e. a rescore that only actually RAN an hour after T, backdating its
+    own effective time to T) must not be treated as known at T. Falls back
+    to TIER_DISCOVERED (not in tier_allowed), so no event is created at
+    all -- proving the scanner's own eligibility gate uses the same
+    dual-bound rule as the snapshot builder, not just the snapshot."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                seed_score_and_tier=False,
+            )
+            await _seed_tier_transition(
+                session,
+                wallet_id=wallet_id,
+                to_tier="A",
+                at=T,
+                created_at=T + timedelta(hours=1),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert created == []
+
+        # Positive control -- with TIER_DISCOVERED allowed, the swap is
+        # picked up and its tier snapshot is honestly TIER_DISCOVERED, not
+        # the not-yet-known "A" transition.
+        async with sessionmaker() as session, session.begin():
+            created_discovered = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S", TIER_DISCOVERED], now=T
+            )
+        assert len(created_discovered) == 1
+        assert created_discovered[0].wallet_tier_snapshot == TIER_DISCOVERED
+        assert created_discovered[0].tier_transition_id is None
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_tier_recorded_at_cutoff_but_effective_later_is_excluded(admin_engine) -> None:
+    """Symmetric case: ``created_at`` <= cutoff but ``transitioned_at`` >
+    cutoff (recorded on time, but describing a tier that only becomes
+    effective in the future) must also never be selected."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                seed_score_and_tier=False,
+            )
+            transition_id = uuid.uuid4()
+            session.add(
+                WalletTierTransition(
+                    transition_id=transition_id,
+                    wallet_id=wallet_id,
+                    source_score_id=None,
+                    from_tier=None,
+                    to_tier="A",
+                    reason="test",
+                    transitioned_at=T + timedelta(hours=1),
+                    created_at=T,
+                )
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert created == []
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_token_market_snapshot_effective_at_cutoff_but_recorded_later_unavailable(
+    admin_engine,
+) -> None:
+    """Same dual-bound rule for the token market snapshot: ``observed_at``
+    <= cutoff but ``created_at`` > cutoff must not be selected."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            _wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            token_id = await _seed_token(session, mint=mint, at=T)
+            await _seed_token_market_snapshot(
+                session,
+                token_id=token_id,
+                observed_at=T,
+                price_usd=Decimal("2.50"),
+                created_at=T + timedelta(hours=1),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.token_state_snapshot["available"] is True
+        assert event.token_state_snapshot["market_snapshot_available"] is False
+        assert event.token_state_snapshot["lifecycle_stage"] is None
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+async def test_token_first_known_after_cutoff_is_entirely_unavailable(admin_engine) -> None:
+    """A ``Token`` row whose own ``first_observed_at`` is after cutoff was
+    genuinely not a known mint yet at T -- reported entirely unavailable,
+    never a token identity ARGUS did not actually know about yet."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            token_id = await _seed_token(session, mint=mint, at=T + timedelta(hours=1))
+            await _seed_token_market_snapshot(
+                session,
+                token_id=token_id,
+                observed_at=T + timedelta(hours=1),
+                price_usd=Decimal("2.50"),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.token_state_snapshot["available"] is False
+        assert isinstance(event.token_state_snapshot["reason"], str)
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+async def test_eligible_token_with_only_post_cutoff_lifecycle_state_reports_unavailable(
+    admin_engine,
+) -> None:
+    """The token itself IS known by cutoff (``first_observed_at`` <= T),
+    but its ONLY market/lifecycle snapshots are dated after T -- the
+    snapshot must report the lifecycle/market state honestly unavailable,
+    never silently fall back to ``tokens.current_lifecycle_stage`` (that
+    denormalized cache reflects the token's CURRENT, possibly much-later,
+    state)."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            # Token itself known at T, but its current_lifecycle_stage
+            # cache (AMM_POOL, set by _seed_token) reflects state as of
+            # NOW -- only a post-T market snapshot exists.
+            token_id = await _seed_token(session, mint=mint, at=T)
+            await _seed_token_market_snapshot(
+                session,
+                token_id=token_id,
+                observed_at=T + timedelta(hours=1),
+                price_usd=Decimal("2.50"),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.token_state_snapshot["available"] is True
+        assert event.token_state_snapshot["market_snapshot_available"] is False
+        # The critical assertion: never the token's CURRENT cached stage.
+        assert event.token_state_snapshot["lifecycle_stage"] is None
+        assert event.token_state_snapshot["lifecycle_stage"] != LIFECYCLE_AMM_POOL
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P4-remediation-002 R1: scanner eligibility from real tier HISTORY at
+# each swap's own first_seen_at, never from wallets.current_tier.
+# ---------------------------------------------------------------------
+
+
+async def test_wallet_tier_allowed_at_t_then_demoted_swap_still_creates_event(
+    admin_engine,
+) -> None:
+    """Wallet was tier A (allowed) AT T, demoted to WATCH (not allowed)
+    before the scan runs -- the swap genuinely qualified at its own
+    first_seen_at and must still create a prospective event, with the
+    real historical tier "A", regardless of the wallet's later demotion.
+    The pre-remediation-002 scanner filtered by wallets.current_tier, so
+    THIS direction happened to still work by coincidence of using the
+    wallet's real historical row for the SNAPSHOT even while gating
+    inclusion on current_tier -- but the opposite direction (next test)
+    exposes the actual bug."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="WATCH",  # current_tier ends up WATCH (post-demotion)
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                seed_score_and_tier=False,
+            )
+            score_id = await _seed_score_snapshot(
+                session, wallet_id=wallet_id, score=Decimal("90.000"), at=T
+            )
+            await _seed_tier_transition(
+                session, wallet_id=wallet_id, to_tier=TIER_A, at=T, source_score_id=score_id
+            )
+            # Demoted an hour after T, before the scan.
+            await _seed_tier_transition(
+                session,
+                wallet_id=wallet_id,
+                to_tier=TIER_WATCH,
+                at=T + timedelta(hours=1),
+                from_tier=TIER_A,
+            )
+            # wallets.current_tier reflects the LATEST state -- WATCH.
+            wallet = await session.get(Wallet, wallet_id)
+            wallet.current_tier = TIER_WATCH
+
+        scan_time = T + timedelta(hours=2)
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S"], now=scan_time
+            )
+        assert len(created) == 1
+        assert created[0].wallet_tier_snapshot == TIER_A
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_wallet_ineligible_at_t_then_promoted_swap_never_creates_event(
+    admin_engine,
+) -> None:
+    """The actual bug this round fixes: wallet was WATCH (NOT allowed) AT
+    T, promoted to A (allowed) before the scan runs. The old scanner
+    prefiltered by wallets.current_tier == "A" (now true), so it
+    incorrectly let this historically-ineligible swap through. The fixed
+    scanner evaluates eligibility at the swap's OWN first_seen_at via real
+    tier history, correctly excluding it: a later promotion cannot
+    retroactively qualify an old event."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",  # current_tier ends up A (post-promotion)
+                score=Decimal("40.000"),
+                mint=mint,
+                at=T,
+                seed_score_and_tier=False,
+            )
+            await _seed_tier_transition(session, wallet_id=wallet_id, to_tier=TIER_WATCH, at=T)
+            # Promoted an hour after T, before the scan.
+            score_id = await _seed_score_snapshot(
+                session,
+                wallet_id=wallet_id,
+                score=Decimal("90.000"),
+                at=T + timedelta(hours=1),
+            )
+            await _seed_tier_transition(
+                session,
+                wallet_id=wallet_id,
+                to_tier=TIER_A,
+                at=T + timedelta(hours=1),
+                from_tier=TIER_WATCH,
+                source_score_id=score_id,
+            )
+            wallet = await session.get(Wallet, wallet_id)
+            wallet.current_tier = TIER_A
+
+        scan_time = T + timedelta(hours=2)
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S"], now=scan_time
+            )
+        assert created == []
+
+        # Confirm it is genuinely absent, not merely delayed -- a repeated
+        # scan (deterministic replay) still finds nothing.
+        async with sessionmaker() as session, session.begin():
+            replay = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S"], now=scan_time
+            )
+        assert replay == []
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_permanently_ineligible_rows_never_starve_eligible_work_before_limit(
+    admin_engine,
+) -> None:
+    """>limit permanently-ineligible-at-their-own-cutoff swaps (wallets
+    that were never in an allowed tier at their own first_seen_at, and
+    never will be -- no later promotion coming) are seeded FIRST (earliest
+    created_at, so they would occupy every LIMIT slot under an
+    after-the-fact Python filter); ONE genuinely eligible swap is seeded
+    after them. A limit=3 scan must still find the eligible swap -- proof
+    the tier-eligibility filter is evaluated inside the SQL query itself,
+    before LIMIT, not applied to an already-truncated batch."""
+    ineligible_addresses = [_unique_wallet() for _ in range(5)]
+    eligible_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            for i, addr in enumerate(ineligible_addresses):
+                wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                    session,
+                    wallet_address=addr,
+                    tier="WATCH",
+                    score=Decimal("10.000"),
+                    mint=mint,
+                    at=T + timedelta(seconds=i),
+                    seed_score_and_tier=False,
+                )
+                # Permanently WATCH -- no promotion ever recorded.
+                await _seed_tier_transition(session, wallet_id=wallet_id, to_tier=TIER_WATCH, at=T)
+            eligible_wallet_id, eligible_swap_id, _ = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=eligible_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T + timedelta(seconds=10),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S"], now=T + timedelta(seconds=20), limit=3
+            )
+        assert len(created) == 1
+        assert created[0].swap_id == eligible_swap_id
+        assert created[0].wallet_id == eligible_wallet_id
+    finally:
+        for addr in ineligible_addresses:
+            await _cleanup_wallet(admin_engine, addr)
+        await _cleanup_wallet(admin_engine, eligible_address)
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------
@@ -1109,7 +1746,8 @@ async def test_probe_due_at_anchored_to_first_seen_at_matches_worked_example(adm
 
         actual_requested_at = T + timedelta(seconds=62.7)
         actual_responded_at = actual_requested_at + timedelta(milliseconds=100)
-        clock = _ScriptedClock([actual_requested_at, actual_responded_at])
+        actual_terminal_at = actual_responded_at + timedelta(milliseconds=5)
+        clock = _ScriptedClock([actual_requested_at, actual_responded_at, actual_terminal_at])
 
         provider = _QueuedExecutionProvider(
             queue=[
@@ -1494,4 +2132,399 @@ async def test_two_parser_artifacts_same_event_id_produce_only_one_prospective_e
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
         await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P4-remediation-002 R3: confirmation candidate set resolvable-before-
+# LIMIT, real success-distinguishing semantics, concurrent-insert
+# idempotency.
+# ---------------------------------------------------------------------
+
+
+async def _seed_confirmation_observation(
+    session: Any,
+    *,
+    event_id: uuid.UUID,
+    commitment_level: str,
+    transaction_succeeded: bool | None,
+    at: datetime,
+) -> uuid.UUID:
+    observation_id = uuid.uuid4()
+    session.add(
+        CommitmentObservation(
+            observation_id=observation_id,
+            event_id=event_id,
+            commitment_level=commitment_level,
+            transaction_succeeded=transaction_succeeded,
+            observed_at=at,
+            provider="helius",
+            provider_received_at=at,
+            created_at=at,
+        )
+    )
+    await session.flush()
+    return observation_id
+
+
+async def test_confirmation_batch_drains_past_permanently_unresolvable_events(
+    admin_engine,
+) -> None:
+    """The audit's own literal reproduction: many unconfirmed events with
+    NO resolvable evidence at all precede one later event that DOES have
+    real, successful confirmation evidence. Repeated bounded
+    ``revisit_pending_confirmations`` passes must reach the later,
+    genuinely-resolvable event -- the pre-remediation-002 version selected
+    candidates purely by ``confirmation_time IS NULL``, so the oldest
+    never-confirmed events permanently occupied every LIMIT slot and the
+    truly-confirmed one was never reached, no matter how many passes ran."""
+    unresolved_addresses = [_unique_wallet() for _ in range(7)]
+    resolved_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        resolved_event_id: uuid.UUID | None = None
+        resolved_prospective_id: uuid.UUID | None = None
+        async with sessionmaker() as session, session.begin():
+            for i, addr in enumerate(unresolved_addresses):
+                await _seed_tracked_wallet_with_buy_swap(
+                    session,
+                    wallet_address=addr,
+                    tier="A",
+                    score=Decimal("90.000"),
+                    mint=mint,
+                    at=T + timedelta(seconds=i),
+                    confirmed=False,
+                )
+            _wallet_id, _swap_id, resolved_event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=resolved_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T + timedelta(seconds=100),
+                confirmed=False,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(
+                session, tier_allowed=["A", "S"], now=T + timedelta(seconds=200)
+            )
+        assert len(created) == 8
+        resolved_prospective_id = next(
+            e.prospective_event_id for e in created if e.event_id == resolved_event_id
+        )
+
+        confirmed_at = T + timedelta(seconds=300)
+        async with sessionmaker() as session, session.begin():
+            await _seed_confirmation_observation(
+                session,
+                event_id=resolved_event_id,
+                commitment_level=COMMITMENT_CONFIRMED,
+                transaction_succeeded=True,
+                at=confirmed_at,
+            )
+
+        # limit=3: fewer than the 7 permanently-unresolvable events. Three
+        # repeated passes -- the audit's own exact reproduction count.
+        all_updated: set[uuid.UUID] = set()
+        async with sessionmaker() as session, session.begin():
+            all_updated |= set(await revisit_pending_confirmations(session, limit=3))
+        async with sessionmaker() as session, session.begin():
+            all_updated |= set(await revisit_pending_confirmations(session, limit=3))
+        async with sessionmaker() as session, session.begin():
+            all_updated |= set(await revisit_pending_confirmations(session, limit=3))
+
+        assert resolved_prospective_id in all_updated
+        # The 7 permanently-unresolvable events are never (falsely)
+        # reported as updated either.
+        assert len(all_updated) == 1
+
+        async with sessionmaker() as session:
+            reloaded = await session.get(ProspectiveEvent, resolved_prospective_id)
+            assert reloaded.confirmation_time == confirmed_at
+    finally:
+        for addr in unresolved_addresses:
+            await _cleanup_wallet(admin_engine, addr)
+        await _cleanup_wallet(admin_engine, resolved_address)
+        await engine.dispose()
+
+
+async def test_finalized_only_success_is_a_valid_confirmation(admin_engine) -> None:
+    """An event whose ONLY commitment evidence is a FINALIZED,
+    successfully-executed observation (no intermediate CONFIRMED record
+    ever existed) must still be recognized as genuinely confirmed --
+    "a finalized-only successful observation must not be missed solely
+    because no intermediate CONFIRMED record exists"."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            _wallet_id, _swap_id, event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                confirmed=False,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        assert created[0].confirmation_time is None
+
+        finalized_at = T + timedelta(minutes=5)
+        async with sessionmaker() as session, session.begin():
+            observation_id = await _seed_confirmation_observation(
+                session,
+                event_id=event_id,
+                commitment_level=COMMITMENT_FINALIZED,
+                transaction_succeeded=True,
+                at=finalized_at,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            updated = await revisit_pending_confirmations(session)
+        assert created[0].prospective_event_id in updated
+
+        async with sessionmaker() as session:
+            reloaded = await session.get(ProspectiveEvent, created[0].prospective_event_id)
+            assert reloaded.confirmation_time == finalized_at
+            assert reloaded.confirmation_observation_id == observation_id
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "commitment_level,transaction_succeeded",
+    [
+        pytest.param(COMMITMENT_CONFIRMED, False, id="failed-confirmed"),
+        pytest.param(COMMITMENT_FINALIZED, False, id="failed-finalized"),
+        pytest.param(COMMITMENT_CONFIRMED, None, id="unknown-success-confirmed"),
+        pytest.param(COMMITMENT_FINALIZED, None, id="unknown-success-finalized"),
+    ],
+)
+async def test_failed_or_unknown_execution_is_never_a_successful_confirmation(
+    admin_engine, commitment_level: str, transaction_succeeded: bool | None
+) -> None:
+    """A CONFIRMED-or-FINALIZED observation whose ``transaction_succeeded``
+    is False (a real, genuinely-executed FAILED transaction) or None
+    (execution result still unknown) must never be treated as a
+    successful confirmation -- "never treat failed/unknown as successful
+    confirmation". The prospective event's real, honest commitment-level/
+    success facts remain queryable directly from the immutable
+    ``commitment_observations`` row itself (never deleted or hidden), just
+    never smuggled into ``confirmation_time`` as if it meant success."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            _wallet_id, _swap_id, event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                confirmed=False,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+
+        observed_at = T + timedelta(minutes=1)
+        async with sessionmaker() as session, session.begin():
+            observation_id = await _seed_confirmation_observation(
+                session,
+                event_id=event_id,
+                commitment_level=commitment_level,
+                transaction_succeeded=transaction_succeeded,
+                at=observed_at,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            updated = await revisit_pending_confirmations(session)
+        assert updated == []
+
+        async with sessionmaker() as session:
+            reloaded = await session.get(ProspectiveEvent, created[0].prospective_event_id)
+            assert reloaded.confirmation_time is None
+            assert reloaded.confirmation_observation_id is None
+            # The real observation is still there, unaltered -- this is
+            # never a deletion/hiding of evidence, only a correct
+            # non-promotion of it to "successful confirmation".
+            observation = await session.get(CommitmentObservation, observation_id)
+            assert observation.transaction_succeeded == transaction_succeeded
+            assert observation.commitment_level == commitment_level
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_delayed_confirmation_evidence_then_replay_is_idempotent(admin_engine) -> None:
+    """Delayed evidence (a real success arrives well after event
+    creation) is picked up on the first pass that can see it; an
+    identical replay afterward makes no further change and reports no
+    further updates."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            _wallet_id, _swap_id, event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+                confirmed=False,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+
+        # No evidence yet -- a pass finds nothing.
+        async with sessionmaker() as session, session.begin():
+            assert await revisit_pending_confirmations(session) == []
+
+        confirmed_at = T + timedelta(hours=3)
+        async with sessionmaker() as session, session.begin():
+            observation_id = await _seed_confirmation_observation(
+                session,
+                event_id=event_id,
+                commitment_level=COMMITMENT_CONFIRMED,
+                transaction_succeeded=True,
+                at=confirmed_at,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            first_pass = await revisit_pending_confirmations(session)
+        assert first_pass == [created[0].prospective_event_id]
+
+        async with sessionmaker() as session, session.begin():
+            replay = await revisit_pending_confirmations(session)
+        assert replay == []
+
+        async with sessionmaker() as session:
+            reloaded = await session.get(ProspectiveEvent, created[0].prospective_event_id)
+            assert reloaded.confirmation_time == confirmed_at
+            assert reloaded.confirmation_observation_id == observation_id
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_interleaved_monitor_passes_on_shared_and_independent_events(
+    admin_engine,
+) -> None:
+    """Two ordinary ``run_prospective_monitoring_pass`` calls, run
+    genuinely concurrently via ``asyncio.gather`` (each its own session/
+    transaction, exactly like two independent worker processes), BOTH scan
+    the SAME 3 eligible new swaps at once (there is no static partitioning
+    between callers -- any real concurrent pair of monitor invocations
+    would race over the exact same eligible candidate set). Exactly one
+    ProspectiveEvent must exist per swap afterward -- never a duplicate
+    for any of them, and never a lost one either: a losing SAVEPOINT on a
+    swap one call didn't win the race for is an idempotent no-op, never an
+    error that aborts that same call's OTHER, genuinely-unclaimed
+    candidates in the same batch."""
+    shared_address = _unique_wallet()
+    independent_a_address = _unique_wallet()
+    independent_b_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=shared_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=independent_a_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T + timedelta(seconds=1),
+            )
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=independent_b_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T + timedelta(seconds=2),
+            )
+
+        scan_time = T + timedelta(seconds=10)
+
+        async def _run_pass() -> Any:
+            return await run_prospective_monitoring_pass(
+                sessionmaker, config=config, now=scan_time, tier_allowed=["A", "S"]
+            )
+
+        result_a, result_b = await asyncio.gather(_run_pass(), _run_pass())
+
+        total_events_created = len(result_a.prospective_events) + len(result_b.prospective_events)
+        # Exactly 3 real prospective events must exist in total across
+        # BOTH calls combined -- the shared swap is claimed by exactly one
+        # of the two calls (the other's SAVEPOINT conflict is silently
+        # absorbed), and each call's own independent swap is never lost.
+        assert total_events_created == 3
+
+        async with sessionmaker() as session:
+            all_events = (
+                (
+                    await session.execute(
+                        select(ProspectiveEvent).where(
+                            ProspectiveEvent.wallet_id.in_(
+                                (
+                                    select(Wallet.wallet_id).where(
+                                        Wallet.wallet_address.in_(
+                                            (
+                                                shared_address,
+                                                independent_a_address,
+                                                independent_b_address,
+                                            )
+                                        )
+                                    )
+                                ).scalar_subquery()
+                            )
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert len(all_events) == 3
+        wallet_addresses_with_events = set()
+        async with sessionmaker() as session:
+            for event in all_events:
+                wallet = await session.get(Wallet, event.wallet_id)
+                wallet_addresses_with_events.add(wallet.wallet_address)
+        assert wallet_addresses_with_events == {
+            shared_address,
+            independent_a_address,
+            independent_b_address,
+        }
+    finally:
+        await _cleanup_wallet(admin_engine, shared_address)
+        await _cleanup_wallet(admin_engine, independent_a_address)
+        await _cleanup_wallet(admin_engine, independent_b_address)
         await engine.dispose()

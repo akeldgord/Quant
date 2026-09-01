@@ -49,7 +49,11 @@ from argus.providers.retry import RetryPolicy
 from argus.providers.scheduler import PriorityScheduler
 from argus.providers.usage import SqlUsageRecorder, UsageRecorder
 from argus.shadow.monitor import run_prospective_monitoring_pass
-from argus.shadow.quote_jobs import PRIORITY_CLASS_ENTRY_DELAY, run_due_entry_probes
+from argus.shadow.quote_jobs import (
+    PRIORITY_CLASS_ENTRY_DELAY,
+    _execute_and_record_probe,
+    run_due_entry_probes,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -297,10 +301,14 @@ def _jupiter_quote_body(
     price_impact_pct: str | None = "0.01",
     empty_route_plan: bool = False,
     omit_route_plan: bool = False,
+    platform_fee: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A genuine Jupiter v6 `/quote` 200 response shape. `empty_route_plan`/
     `omit_route_plan` produce the two malformed "positive outAmount, no
-    real route evidence" shapes P4-R4's `_classify_quote` must reject."""
+    real route evidence" shapes P4-R4's `_classify_quote` must reject.
+    `platform_fee`, when supplied, becomes the response's own
+    `platformFee` object (Jupiter's real structured fee-component
+    field)."""
     body: dict[str, Any] = {
         "inputMint": input_mint,
         "inAmount": str(in_amount),
@@ -314,6 +322,8 @@ def _jupiter_quote_body(
     }
     if price_impact_pct is not None:
         body["priceImpactPct"] = price_impact_pct
+    if platform_fee is not None:
+        body["platformFee"] = platform_fee
     if not omit_route_plan:
         body["routePlan"] = (
             []
@@ -527,10 +537,17 @@ async def test_real_jupiter_http_429_maps_to_provider_capacity_miss(admin_engine
             sessionmaker, provider, config=config, clock=Clock(), now=far_future, limit=1
         )
         assert len(processed) == 1
-        assert processed[0].outcome == OUTCOME_PROVIDER_CAPACITY_MISS
-        assert processed[0].expected_output_amount_raw is None
-        assert processed[0].route_present is False
+        probe = processed[0]
+        assert probe.outcome == OUTCOME_PROVIDER_CAPACITY_MISS
+        assert probe.expected_output_amount_raw is None
+        assert probe.route_present is False
         assert len(handler.calls) == 1  # type: ignore[attr-defined]
+        # HTTP 429 DID make a real request -- distinct from a scheduler-
+        # level drop, it keeps actual send/response evidence
+        # (P4-remediation-002 R4's own "HTTP429 is different" rule).
+        assert probe.requested_at is not None
+        assert probe.responded_at is not None
+        assert probe.terminal_at is not None
     finally:
         if http_client is not None:
             await http_client.aclose()
@@ -628,6 +645,64 @@ async def test_real_jupiter_positive_output_without_route_plan_is_no_route(
 
 
 # ---------------------------------------------------------------------
+# 6b. Malformed 200: a NONEMPTY routePlan whose own entries are not
+#     structurally valid (null / missing swapInfo) is equivalent to no
+#     route at all -- never trusted merely for being a nonempty list
+#     (P4-remediation-002 R4).
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "malformed_route_plan",
+    [
+        pytest.param([None], id="null-entry"),
+        pytest.param([{"percent": 100}], id="missing-swapinfo"),
+        pytest.param(["not-even-an-object"], id="non-dict-entry"),
+    ],
+)
+async def test_real_jupiter_malformed_route_plan_entries_are_no_route(
+    admin_engine, malformed_route_plan: list[Any]
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = f"P4RPMint{uuid.uuid4().hex[:30]}"
+    config, engine, sessionmaker = _sessionmaker()
+    http_client: httpx.AsyncClient | None = None
+    try:
+        intent = await _seed_intent_with_entry_probes(
+            sessionmaker, config, wallet_address=wallet_address, mint=mint
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            body = _jupiter_quote_body(
+                input_mint=intent.input_mint,
+                output_mint=intent.output_mint,
+                in_amount=intent.notional_input_amount_raw,
+                out_amount=500_000,  # positive -- must NOT be trusted alone
+                omit_route_plan=True,
+            )
+            body["routePlan"] = malformed_route_plan
+            return httpx.Response(200, json=body)
+
+        handler = _counting_handler(respond)
+        provider, http_client = _jupiter_client(handler)
+
+        far_future = _NOW + timedelta(seconds=400)
+        processed = await run_due_entry_probes(
+            sessionmaker, provider, config=config, clock=Clock(), now=far_future, limit=1
+        )
+        assert len(processed) == 1
+        probe = processed[0]
+        assert probe.outcome == OUTCOME_NO_ROUTE
+        assert probe.route_present is False
+        assert probe.expected_output_amount_raw is None
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
 # 7. Wrong quote notional (identity mismatch) -> honest QUOTE_FAILED,
 #    never trusted as a success regardless of outAmount/routePlan.
 # ---------------------------------------------------------------------
@@ -677,26 +752,127 @@ async def test_real_jupiter_in_amount_mismatch_is_quote_failed_not_trusted(admin
 
 
 # ---------------------------------------------------------------------
-# 8. Malformed/nonfinite price-impact data must be treated leniently
-#    (impact -> None, not automatically excessive) and must never crash
-#    the batch, per _classify_quote's own documented behavior.
+# 7b. Wrong quote MINT identity (raw provider fields, not the caller-
+#     echoed ExecutableQuote labels) -> honest QUOTE_FAILED, never
+#     trusted regardless of a well-formed amount/route
+#     (P4-remediation-002 R4 -- the round-1 fix only checked inAmount;
+#     a provider response for a genuinely different mint pair passed
+#     through unchallenged).
+# ---------------------------------------------------------------------
+
+
+async def test_real_jupiter_mint_identity_mismatch_is_quote_failed_not_trusted(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = f"P4RPMint{uuid.uuid4().hex[:30]}"
+    unrelated_mint = f"P4RPUnrelated{uuid.uuid4().hex[:26]}"
+    config, engine, sessionmaker = _sessionmaker()
+    http_client: httpx.AsyncClient | None = None
+    try:
+        intent = await _seed_intent_with_entry_probes(
+            sessionmaker, config, wallet_address=wallet_address, mint=mint
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            # A well-formed, positive, routed quote whose own raw
+            # outputMint disagrees with what this probe actually
+            # requested -- a response for an unrelated mint pair.
+            return httpx.Response(
+                200,
+                json=_jupiter_quote_body(
+                    input_mint=intent.input_mint,
+                    output_mint=unrelated_mint,
+                    in_amount=intent.notional_input_amount_raw,
+                    out_amount=500_000,
+                ),
+            )
+
+        handler = _counting_handler(respond)
+        provider, http_client = _jupiter_client(handler)
+
+        far_future = _NOW + timedelta(seconds=400)
+        processed = await run_due_entry_probes(
+            sessionmaker, provider, config=config, clock=Clock(), now=far_future, limit=1
+        )
+        assert len(processed) == 1
+        probe = processed[0]
+        assert probe.outcome == OUTCOME_QUOTE_FAILED
+        assert probe.route_present is False
+        assert probe.expected_output_amount_raw is None
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# 8. A genuinely MISSING price-impact field is honestly unknown and must
+#    never disqualify an otherwise valid quote (impact -> None); a
+#    SUPPLIED but malformed/nonfinite value is untrustworthy evidence and
+#    must produce an explicit QUOTE_FAILED, never silent leniency
+#    (P4-remediation-002 R4 -- a reversal of this file's own prior-round
+#    fix, which folded "supplied but garbage" into the same lenient path
+#    as "genuinely absent").
 #
 #    This test file originally found that a genuine literal-"NaN"
 #    priceImpactPct crashed with an uncaught decimal.InvalidOperation --
 #    Decimal("NaN") parses successfully (no exception at parse time) but
 #    the subsequent `price_impact > max_impact` comparison raises when
-#    comparing a nonfinite Decimal. Fixed directly in _classify_quote
-#    (src/argus/shadow/quote_jobs.py): a parsed-but-nonfinite
-#    (NaN/Infinity) price_impact is now folded into the same honest
-#    `None` leniency path as a genuinely unparseable string, immediately
-#    after the parse and before any comparison.
+#    comparing a nonfinite Decimal. The prior round fixed the crash by
+#    folding a parsed-but-nonfinite value into the same `None` leniency
+#    path as a missing field; P4-remediation-002 requires the crash stay
+#    fixed while a SUPPLIED nonfinite/unparseable value is now instead an
+#    honest QUOTE_FAILED.
 # ---------------------------------------------------------------------
+
+
+async def test_real_jupiter_missing_price_impact_is_lenient_not_a_crash(admin_engine) -> None:
+    wallet_address = _unique_wallet()
+    mint = f"P4RPMint{uuid.uuid4().hex[:30]}"
+    config, engine, sessionmaker = _sessionmaker()
+    http_client: httpx.AsyncClient | None = None
+    try:
+        intent = await _seed_intent_with_entry_probes(
+            sessionmaker, config, wallet_address=wallet_address, mint=mint
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            body = _jupiter_quote_body(
+                input_mint=intent.input_mint,
+                output_mint=intent.output_mint,
+                in_amount=intent.notional_input_amount_raw,
+                out_amount=500_000,
+            )
+            body.pop("priceImpactPct")
+            return httpx.Response(200, json=body)
+
+        handler = _counting_handler(respond)
+        provider, http_client = _jupiter_client(handler)
+
+        far_future = _NOW + timedelta(seconds=400)
+        processed = await run_due_entry_probes(
+            sessionmaker, provider, config=config, clock=Clock(), now=far_future, limit=1
+        )
+        assert len(processed) == 1
+        probe = processed[0]
+        # A genuinely absent impact field never disqualifies an otherwise
+        # valid, routed, identity-matched quote.
+        assert probe.outcome == OUTCOME_SUCCESS
+        assert probe.price_impact_pct is None
+        assert probe.route_present is True
+        assert probe.expected_output_amount_raw == 500_000
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
 
 
 @pytest.mark.parametrize(
     "mutate_body",
     [
-        pytest.param(lambda body: body.pop("priceImpactPct"), id="missing"),
         pytest.param(
             lambda body: body.__setitem__("priceImpactPct", "not-a-number"), id="unparseable"
         ),
@@ -706,7 +882,7 @@ async def test_real_jupiter_in_amount_mismatch_is_quote_failed_not_trusted(admin
         ),
     ],
 )
-async def test_real_jupiter_malformed_price_impact_is_lenient_not_a_crash(
+async def test_real_jupiter_supplied_malformed_price_impact_is_quote_failed_not_a_crash(
     admin_engine, mutate_body: Callable[[dict[str, Any]], None]
 ) -> None:
     wallet_address = _unique_wallet()
@@ -737,13 +913,213 @@ async def test_real_jupiter_malformed_price_impact_is_lenient_not_a_crash(
         )
         assert len(processed) == 1
         probe = processed[0]
-        # An honestly-unknown impact never disqualifies an otherwise
-        # valid, routed, identity-matched quote.
-        assert probe.outcome == OUTCOME_SUCCESS
+        # A SUPPLIED but garbage/nonfinite impact is untrustworthy
+        # evidence -- an honest QUOTE_FAILED, never a crash and never
+        # silently folded into the same leniency as a missing field.
+        assert probe.outcome == OUTCOME_QUOTE_FAILED
         assert probe.price_impact_pct is None
-        assert probe.route_present is True
-        assert probe.expected_output_amount_raw == 500_000
+        assert probe.route_present is False
+        assert probe.expected_output_amount_raw is None
     finally:
+        if http_client is not None:
+            await http_client.aclose()
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# 8b. Honest fee-component extraction: Jupiter's own structured
+#     `platformFee.amount` is parsed into `fee_estimate_raw` when
+#     present and well-formed, regardless of whether `feeMint` names the
+#     swap's own output mint ("same-asset") or an unrelated third mint
+#     ("mixed-asset") -- a single raw-units field is extracted honestly
+#     either way, never summed/converted across currencies. A missing or
+#     malformed platformFee stays honestly None, never fabricated
+#     (P4-remediation-002 R4).
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "platform_fee,expected_fee",
+    [
+        pytest.param({"amount": "1234", "feeMint": None}, 1234, id="same-asset-output-mint"),
+        pytest.param(
+            {"amount": "9999", "feeMint": "P4RPUnrelatedFeeMint000000000000000000000"},
+            9999,
+            id="mixed-asset-third-mint",
+        ),
+        pytest.param(None, None, id="missing-platform-fee"),
+        pytest.param({"amount": "not-a-number"}, None, id="malformed-amount"),
+        pytest.param({"amount": None}, None, id="null-amount"),
+    ],
+)
+async def test_real_jupiter_fee_estimate_extracted_honestly(
+    admin_engine, platform_fee: dict[str, Any] | None, expected_fee: int | None
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = f"P4RPMint{uuid.uuid4().hex[:30]}"
+    config, engine, sessionmaker = _sessionmaker()
+    http_client: httpx.AsyncClient | None = None
+    try:
+        intent = await _seed_intent_with_entry_probes(
+            sessionmaker, config, wallet_address=wallet_address, mint=mint
+        )
+        if platform_fee is not None and platform_fee.get("feeMint") is None:
+            platform_fee = {**platform_fee, "feeMint": intent.output_mint}
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_jupiter_quote_body(
+                    input_mint=intent.input_mint,
+                    output_mint=intent.output_mint,
+                    in_amount=intent.notional_input_amount_raw,
+                    out_amount=500_000,
+                    platform_fee=platform_fee,
+                ),
+            )
+
+        handler = _counting_handler(respond)
+        provider, http_client = _jupiter_client(handler)
+
+        far_future = _NOW + timedelta(seconds=400)
+        processed = await run_due_entry_probes(
+            sessionmaker, provider, config=config, clock=Clock(), now=far_future, limit=1
+        )
+        assert len(processed) == 1
+        probe = processed[0]
+        # A malformed/missing fee never disqualifies an otherwise valid
+        # quote.
+        assert probe.outcome == OUTCOME_SUCCESS
+        assert probe.fee_estimate_raw == expected_fee
+        # The full raw response (including feeMint) is always preserved
+        # regardless of whether fee_estimate_raw could be parsed.
+        assert probe.raw_quote is not None
+        assert probe.raw_quote.get("platformFee") == platform_fee
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+class _ScriptedClock(Clock):
+    """Returns each scripted instant in order, regardless of real
+    elapsed wall-clock time -- lets a test assert exact recorded values
+    while a REAL ``PriorityScheduler`` independently controls genuine
+    dispatch ordering/timing via asyncio synchronization."""
+
+    def __init__(self, times: list[datetime]) -> None:
+        super().__init__()
+        self._times = iter(times)
+
+    def utc_now(self) -> datetime:
+        return next(self._times)
+
+
+# ---------------------------------------------------------------------
+# 8c. Controlled REAL scheduler queue wait: requested_at/latency_ms
+#     reflect the actual DISPATCH instant, never the earlier submission
+#     instant -- a queue wait is scheduling delay, not provider latency
+#     (P4-remediation-002 R4's own worked example: enqueue T, dispatch
+#     T+60, response T+60.1 => request=T+60, latency=100ms). A REAL
+#     ``PriorityScheduler`` genuinely holds this probe's submission
+#     queued (behind a blocker occupying its only concurrency slot)
+#     until the test releases it; the scripted clock supplies the exact
+#     T+60/T+60.1 instants so the assertions are deterministic regardless
+#     of real wall-clock jitter around the release.
+# ---------------------------------------------------------------------
+
+
+async def test_real_scheduler_queue_wait_reflected_as_scheduling_delay_not_latency(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = f"P4RPMint{uuid.uuid4().hex[:30]}"
+    config, engine, sessionmaker = _sessionmaker()
+    http_client: httpx.AsyncClient | None = None
+    blocker_task: asyncio.Task | None = None
+    entry_task: asyncio.Task | None = None
+    try:
+        intent = await _seed_intent_with_entry_probes(
+            sessionmaker, config, wallet_address=wallet_address, mint=mint
+        )
+        # The "1s" probe's own due time -- T in the worked example.
+        target_due_at = _NOW + timedelta(seconds=1)
+        actual_requested_at = target_due_at + timedelta(seconds=60)
+        actual_responded_at = actual_requested_at + timedelta(milliseconds=100)
+        actual_terminal_at = actual_responded_at + timedelta(milliseconds=5)
+        clock = _ScriptedClock([actual_requested_at, actual_responded_at, actual_terminal_at])
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_jupiter_quote_body(
+                    input_mint=intent.input_mint,
+                    output_mint=intent.output_mint,
+                    in_amount=intent.notional_input_amount_raw,
+                    out_amount=500_000,
+                ),
+            )
+
+        handler = _counting_handler(respond)
+        provider, http_client = _jupiter_client(handler)
+
+        scheduler = PriorityScheduler(max_concurrency=1, max_queue_depth_per_droppable_class=1)
+        block_event = asyncio.Event()
+
+        async def _blocker() -> None:
+            await block_event.wait()
+
+        # Occupies the scheduler's only concurrency slot so the entry
+        # probe's own submission below stays genuinely queued (dispatch
+        # not yet started) until this test explicitly releases it.
+        blocker_task = asyncio.create_task(scheduler.submit(PRIORITY_CLASS_ENTRY_DELAY, _blocker))
+        await asyncio.sleep(0.05)
+
+        far_future = _NOW + timedelta(seconds=400)
+        entry_task = asyncio.create_task(
+            run_due_entry_probes(
+                sessionmaker,
+                provider,
+                config=config,
+                clock=clock,
+                now=far_future,
+                limit=1,
+                scheduler=scheduler,
+            )
+        )
+        # The entry probe's submission is now queued behind the blocker
+        # -- its callable has NOT dispatched (no clock.utc_now() call
+        # yet), proven below by the scripted clock never being consumed
+        # early.
+        await asyncio.sleep(0.1)
+        assert scheduler.pending_count(PRIORITY_CLASS_ENTRY_DELAY) == 1
+        block_event.set()
+        await asyncio.wait_for(blocker_task, timeout=5)
+        blocker_task = None
+        processed = await asyncio.wait_for(entry_task, timeout=5)
+        entry_task = None
+
+        assert len(processed) == 1
+        probe = processed[0]
+        assert probe.target_label == "1s"
+        assert probe.outcome == OUTCOME_SUCCESS
+        # request=T+60 (the real dispatch instant), never the earlier
+        # submission instant.
+        assert probe.requested_at == actual_requested_at
+        assert probe.responded_at == actual_responded_at
+        # latency=100ms -- only the provider round trip, never the 60s
+        # queue wait.
+        assert probe.latency_ms == 100
+        # Correct due-based delay: T+60 - T = 60s.
+        assert probe.scheduling_delay_seconds == Decimal("60")
+        assert len(handler.calls) == 1  # type: ignore[attr-defined]
+    finally:
+        if blocker_task is not None and not blocker_task.done():
+            blocker_task.cancel()
+        if entry_task is not None and not entry_task.done():
+            entry_task.cancel()
         if http_client is not None:
             await http_client.aclose()
         await _cleanup_wallet(admin_engine, wallet_address)
@@ -828,6 +1204,35 @@ async def test_real_scheduler_drop_never_reaches_network_accepted_request_still_
         assert probe.route_present is False
         # The critical assertion: a scheduler-level drop never reaches
         # the network at all.
+        assert len(handler.calls) == 0  # type: ignore[attr-defined]
+        # No genuine request/response ever happened -- both stay
+        # honestly None, never fabricated -- but the terminal decision
+        # itself is still recorded with its own real time
+        # (P4-remediation-002 R4).
+        assert probe.requested_at is None
+        assert probe.responded_at is None
+        assert probe.latency_ms is None
+        assert probe.scheduling_delay_seconds is None
+        assert probe.terminal_at is not None
+
+        # Exact replay: this probe is already terminal (R5's own
+        # generation/no-send guard) -- calling the execute step again
+        # with the SAME claim generation must make zero further HTTP
+        # calls and zero further clock consumption, never re-dispatching
+        # a probe whose terminal capacity-miss decision already stands.
+        replay_clock = _ScriptedClock([])
+        replayed = await _execute_and_record_probe(
+            sessionmaker,
+            probe_id=probe.probe_id,
+            provider=provider,
+            config=config,
+            clock=replay_clock,
+            _claim_generation=probe.claim_generation,
+        )
+        assert replayed.probe_id == probe.probe_id
+        assert replayed.outcome == OUTCOME_PROVIDER_CAPACITY_MISS
+        assert replayed.requested_at is None
+        assert replayed.responded_at is None
         assert len(handler.calls) == 0  # type: ignore[attr-defined]
 
         block_event.set()

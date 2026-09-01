@@ -32,6 +32,38 @@ after the report is fully built, using only its own already-committed
 figures -- disabled/no-op by default, ``FakeTelegramTransport`` in tests/
 the REPLAY demo, and a notification failure never affects the returned
 report.
+
+P4-remediation-002 R4: ``matured_executable_outcomes_in_window`` and
+``provider_gaps`` now window on ``ShadowQuoteProbe.terminal_at``, never
+``responded_at`` -- a genuine scheduler-level ``PROVIDER_CAPACITY_MISS``
+drop never sets ``responded_at`` at all (no real dispatch ever happened),
+so windowing on ``responded_at`` alone silently excluded every such row
+from both counts, permanently undercounting exactly the outcome
+``provider_gaps`` exists to surface.
+
+P4-remediation-002 R6: SHADOW's descriptive ``mfe_mae`` is now computed
+from this window's own real ``ShadowMarkOutcome`` returns (fixed-horizon
+point samples, reported as a sampled max/min with a count and an explicit
+sampled-not-continuous caveat), never the historical Phase 3
+``WalletPosition`` figures a prior round substituted in their place. Those
+historical figures, when retained, now live in RESEARCH's own separately
+labeled ``historical_backtest`` section, grouped by ``quote_asset_mint``
+(never averaged across e.g. SOL and USDC) and restricted to each wallet's
+CURRENT chosen history reconstruction, so a superseded/replayed
+reconstruction's positions never inflate the sample.
+``data_quality["low_completeness_wallets"]`` now counts distinct wallets
+by their CURRENT (latest) ``WalletHistoryQuality`` assessment only -- a
+wallet reassessed LOW -> LOW -> HIGH now counts 0, never every historical
+LOW row. The former single ``matured_executable_outcomes_in_window``
+count -- which mixed successful, unsellable, and missing-capacity
+REVERSE_EXECUTABLE outcomes together and invited being read as a usable
+executable sample size -- is replaced by
+``reverse_executable_outcomes_in_window``'s explicit successful/
+unsellable/missing_capacity breakdown, with ``usable_sample`` excluding
+missing-capacity terminal no-send records (R4's own outcome) and
+``reverse_executable_overdue_unattempted`` naming probes that are past due
+but have not yet reached ANY terminal decision at all, kept distinguishable
+from a terminal no-send capacity miss.
 """
 
 from __future__ import annotations
@@ -50,7 +82,9 @@ from argus.domain.shadow_mark_outcomes import OUTCOME_RECORDED, ShadowMarkOutcom
 from argus.domain.shadow_positions import ShadowPosition
 from argus.domain.shadow_quote_probes import (
     OUTCOME_PROVIDER_CAPACITY_MISS,
+    OUTCOME_SUCCESS,
     PROBE_KIND_REVERSE_EXECUTABLE,
+    UNSELLABLE_OUTCOMES,
     ShadowQuoteProbe,
 )
 from argus.domain.swaps import Swap
@@ -261,16 +295,55 @@ async def _build_shadow(session: AsyncSession, *, start: datetime, end: datetime
             ShadowIntent.status == STATUS_FILLED,
         ),
     )
-    matured_executable = await _count(
+
+    # P4-remediation-002 R6: a single "matured" count mixed SUCCESS,
+    # every unsellable/error outcome, and PROVIDER_CAPACITY_MISS
+    # together, then invited being read as a usable executable sample
+    # size. Break it into its real classes instead -- successful,
+    # unsellable (a real MASTER_SPEC section 48 outcome, never dropped),
+    # and missing_capacity (R4's own terminal no-send state: a genuine
+    # decision was recorded, but no request ever occurred). usable_sample
+    # excludes missing_capacity; total_attempts names it explicitly
+    # rather than silently folding it into the usable figure.
+    outcome_rows = (
+        await session.execute(
+            select(ShadowQuoteProbe.outcome, func.count())
+            .select_from(ShadowQuoteProbe)
+            .where(
+                ShadowQuoteProbe.probe_kind == PROBE_KIND_REVERSE_EXECUTABLE,
+                ShadowQuoteProbe.terminal_at >= start,
+                ShadowQuoteProbe.terminal_at < end,
+            )
+            .group_by(ShadowQuoteProbe.outcome)
+        )
+    ).all()
+    successful = 0
+    unsellable = 0
+    missing_capacity = 0
+    for outcome, count in outcome_rows:
+        if outcome == OUTCOME_SUCCESS:
+            successful = count
+        elif outcome == OUTCOME_PROVIDER_CAPACITY_MISS:
+            missing_capacity = count
+        elif outcome in UNSELLABLE_OUTCOMES:
+            unsellable += count
+    usable_sample = successful + unsellable
+
+    # Overdue-but-not-yet-terminal is a real, distinct state from a
+    # terminal no-send capacity miss -- this probe was due but never
+    # reached ANY terminal decision at all, never conflated with R4's
+    # honest "decided not to send" outcome above.
+    overdue_unattempted = await _count(
         session,
         select(func.count())
         .select_from(ShadowQuoteProbe)
         .where(
             ShadowQuoteProbe.probe_kind == PROBE_KIND_REVERSE_EXECUTABLE,
-            ShadowQuoteProbe.responded_at >= start,
-            ShadowQuoteProbe.responded_at < end,
+            ShadowQuoteProbe.target_due_at < end,
+            ShadowQuoteProbe.terminal_at.is_(None),
         ),
     )
+
     matured_mark = await _count(
         session,
         select(func.count())
@@ -283,29 +356,52 @@ async def _build_shadow(session: AsyncSession, *, start: datetime, end: datetime
     )
     open_positions = await _count(session, select(func.count()).select_from(ShadowPosition))
 
-    mfe_mae_rows = (
-        await session.execute(
-            select(WalletPosition.mfe_quote, WalletPosition.mae_quote).where(
-                WalletPosition.mfe_quote.is_not(None), WalletPosition.mae_quote.is_not(None)
+    # P4-remediation-002 R6: descriptive SHADOW mfe/mae now comes from
+    # this window's own real ShadowMarkOutcome returns -- fixed-horizon
+    # (5m/30m/1h/6h/24h/3d/7d) point samples, never the historical Phase
+    # 3 WalletPosition figures (moved to research's own separately
+    # labeled historical section below). A late/out-of-window mark
+    # (`actual_at` outside [start, end)) never changes an earlier
+    # report's already-generated scope. No marks in-window is an honest
+    # insufficient sample, never a fabricated zero.
+    sampled_returns = (
+        (
+            await session.execute(
+                select(ShadowMarkOutcome.mark_return_pct).where(
+                    ShadowMarkOutcome.outcome == OUTCOME_RECORDED,
+                    ShadowMarkOutcome.actual_at >= start,
+                    ShadowMarkOutcome.actual_at < end,
+                    ShadowMarkOutcome.mark_return_pct.is_not(None),
+                )
             )
         )
-    ).all()
-    if mfe_mae_rows:
-        sample_count = len(mfe_mae_rows)
-        avg_mfe = sum((r[0] for r in mfe_mae_rows), start=Decimal(0)) / sample_count
-        avg_mae = sum((r[1] for r in mfe_mae_rows), start=Decimal(0)) / sample_count
+        .scalars()
+        .all()
+    )
+    non_null_returns = [r for r in sampled_returns if r is not None]
+    if non_null_returns:
         mfe_mae: dict | str = {
-            "sample_count": sample_count,
-            "avg_mfe_quote": str(avg_mfe),
-            "avg_mae_quote": str(avg_mae),
-            "note": "descriptive, sampled Phase 3 position evidence -- not continuous market coverage",
+            "sample_count": len(non_null_returns),
+            "sampled_max_return_pct": str(max(non_null_returns)),
+            "sampled_min_return_pct": str(min(non_null_returns)),
+            "note": (
+                "descriptive, sampled mark-price returns at fixed horizons within "
+                "this report's window -- not a continuous MFE/MAE price path"
+            ),
         }
     else:
         mfe_mae = "INSUFFICIENT_SAMPLE"
 
     return {
         "shadow_trades_opened_in_window": trades,
-        "matured_executable_outcomes_in_window": matured_executable,
+        "reverse_executable_outcomes_in_window": {
+            "successful": successful,
+            "unsellable": unsellable,
+            "missing_capacity": missing_capacity,
+            "usable_sample": usable_sample,
+            "total_attempts_including_missing_capacity": usable_sample + missing_capacity,
+        },
+        "reverse_executable_overdue_unattempted": overdue_unattempted,
         "matured_mark_outcomes_in_window": matured_mark,
         "open_shadow_positions_total": open_positions,
         "mfe_mae": mfe_mae,
@@ -325,20 +421,73 @@ def _build_live() -> dict:
     }
 
 
+def _latest_history_id_per_wallet_subquery():
+    """WalletHistoryQuality is append-only and versioned (a later
+    reconstruction adds a new row rather than overwriting a prior
+    judgment) -- downstream code always reads the latest row per wallet.
+    Returns the ``history_id`` DISTINCT ON each wallet's own most recent
+    ``created_at``, so a repeated reconstruction never multiplies a
+    distinct-wallet or chosen-position sample (P4-remediation-002 R6)."""
+    return (
+        select(WalletHistoryQuality.history_id, WalletHistoryQuality.history_completeness)
+        .distinct(WalletHistoryQuality.wallet_id)
+        .order_by(WalletHistoryQuality.wallet_id, WalletHistoryQuality.created_at.desc())
+    ).subquery()
+
+
 async def _build_research(session: AsyncSession) -> dict:
-    closed_positions_with_mfe_mae = await _count(
-        session,
-        select(func.count())
-        .select_from(WalletPosition)
-        .where(WalletPosition.mfe_quote.is_not(None), WalletPosition.mae_quote.is_not(None)),
-    )
+    latest_history = _latest_history_id_per_wallet_subquery()
     wallet_history_rows = await _count(
         session, select(func.count()).select_from(WalletHistoryQuality)
     )
+
+    # P4-remediation-002 R6: historical Phase 3 WalletPosition mfe/mae,
+    # if retained, is a genuinely separate (backtest, not live-shadow)
+    # sample -- reported here, distinctly labeled, never folded into
+    # shadow["mfe_mae"]. Grouped by quote_asset_mint (never averaged
+    # across e.g. SOL and USDC -- an unlabeled cross-unit average is
+    # meaningless), and restricted to positions belonging to each
+    # wallet's CURRENT chosen (latest) history reconstruction, so a
+    # superseded/replayed reconstruction's positions never inflate the
+    # sample.
+    historical_rows = (
+        await session.execute(
+            select(
+                WalletPosition.quote_asset_mint, WalletPosition.mfe_quote, WalletPosition.mae_quote
+            ).where(
+                WalletPosition.history_id.in_(select(latest_history.c.history_id)),
+                WalletPosition.mfe_quote.is_not(None),
+                WalletPosition.mae_quote.is_not(None),
+            )
+        )
+    ).all()
+    by_quote_asset: dict[str, list[tuple[Decimal, Decimal]]] = {}
+    for quote_asset_mint, mfe, mae in historical_rows:
+        by_quote_asset.setdefault(quote_asset_mint, []).append((mfe, mae))
+    historical_mfe_mae: dict | str
+    if by_quote_asset:
+        historical_mfe_mae = {
+            quote_asset_mint: {
+                "sample_count": len(pairs),
+                "avg_mfe_quote": str(sum((p[0] for p in pairs), start=Decimal(0)) / len(pairs)),
+                "avg_mae_quote": str(sum((p[1] for p in pairs), start=Decimal(0)) / len(pairs)),
+            }
+            for quote_asset_mint, pairs in by_quote_asset.items()
+        }
+    else:
+        historical_mfe_mae = "INSUFFICIENT_SAMPLE"
+
     return {
         "sample_counts": {
-            "closed_positions_with_mfe_mae": closed_positions_with_mfe_mae,
             "wallet_history_rows": wallet_history_rows,
+        },
+        "historical_backtest": {
+            "note": (
+                "Phase 3 reconstructed-position backtest evidence, never live shadow "
+                "trading -- grouped by quote asset, never averaged across assets; only "
+                "each wallet's current chosen history reconstruction is included"
+            ),
+            "mfe_mae_by_quote_asset": historical_mfe_mae,
         },
         "hypothesis_changes": "NOT_IMPLEMENTED",
         "notable_anomalies": "NOT_IMPLEMENTED",
@@ -358,13 +507,17 @@ async def _build_data_quality(session: AsyncSession, *, start: datetime, end: da
         .select_from(ShadowMarkOutcome)
         .where(ShadowMarkOutcome.due_at < end, ShadowMarkOutcome.actual_at.is_(None)),
     )
+    # P4-remediation-002 R6: counts distinct WALLETS whose current
+    # (latest) history assessment is LOW/UNKNOWN -- a wallet reassessed
+    # LOW -> LOW -> HIGH now counts 0, never 2; every prior point-in-time
+    # row stays preserved, only the report's own current-state count
+    # reads just the latest one per wallet.
+    latest_history = _latest_history_id_per_wallet_subquery()
     low_completeness_wallets = await _count(
         session,
         select(func.count())
-        .select_from(WalletHistoryQuality)
-        .where(
-            WalletHistoryQuality.history_completeness.in_((COMPLETENESS_LOW, COMPLETENESS_UNKNOWN))
-        ),
+        .select_from(latest_history)
+        .where(latest_history.c.history_completeness.in_((COMPLETENESS_LOW, COMPLETENESS_UNKNOWN))),
     )
     provider_gaps = await _count(
         session,
@@ -372,8 +525,8 @@ async def _build_data_quality(session: AsyncSession, *, start: datetime, end: da
         .select_from(ShadowQuoteProbe)
         .where(
             ShadowQuoteProbe.outcome == OUTCOME_PROVIDER_CAPACITY_MISS,
-            ShadowQuoteProbe.responded_at >= start,
-            ShadowQuoteProbe.responded_at < end,
+            ShadowQuoteProbe.terminal_at >= start,
+            ShadowQuoteProbe.terminal_at < end,
         ),
     )
     return {

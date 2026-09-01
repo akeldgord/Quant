@@ -263,7 +263,9 @@ async def _seed_unrelated_wallet_with_due_queue(
     entry_due_at = _SEED_NOW + timedelta(seconds=1)  # the "1s" probe's due time
     actual_requested_at = entry_due_at + timedelta(seconds=2, milliseconds=700)
     actual_responded_at = actual_requested_at + timedelta(milliseconds=100)
-    clock = replay_demo._ScriptedClock([actual_requested_at, actual_responded_at])
+    clock = replay_demo._ScriptedClock(
+        [actual_requested_at, actual_responded_at, actual_responded_at + timedelta(milliseconds=5)]
+    )
     provider = replay_demo.QueuedExecutionProvider(
         queue=[
             replay_demo._quote(

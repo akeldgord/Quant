@@ -80,6 +80,15 @@ class ProspectiveEvent(Base):
     confirmation_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # P4-remediation-002 R3: the exact CommitmentObservation row (a real,
+    # immutable, CONFIRMED-or-FINALIZED, genuinely-succeeded observation)
+    # that justified ``confirmation_time`` -- so the cached timestamp
+    # above is independently checkable against its own cited evidence,
+    # the same provenance-binding pattern P4-R1 established for
+    # score_snapshot_id/tier_transition_id. Nullable: still pending.
+    confirmation_observation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("commitment_observations.observation_id"), nullable=True
+    )
 
     # Frozen wallet score/tier at observation time -- never updated to
     # reflect a later re-score (section 44's own explicit rule).
