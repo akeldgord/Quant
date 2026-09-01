@@ -2056,4 +2056,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   instruction's own E1 requirement; historical
   `orchestration/checkpoints/phase_3.md`/`phase_3_remediation.md` and
   their bundles are left byte-for-byte unmodified, preserved as evidence.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+- git_commit: 5735e0bd314314004add920fbb8cf6fd40d43db3

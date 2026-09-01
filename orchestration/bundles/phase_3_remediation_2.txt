@@ -22,7 +22,7 @@ STATUS: All 5 remaining findings named by `argus-phase-3-remediation-002`
   completion for independent audit, it does not and cannot itself apply
   approval.
 UTC_TIMESTAMP: 2026-09-01T08:10:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 5735e0bd314314004add920fbb8cf6fd40d43db3
 TARGET_COMMIT: 3fb7d5675bf4b6c1c497dad08eb319a0e349d188
 AUTHORIZED_PHASE: 3
 APPROVES_PHASE: NONE
@@ -335,7 +335,7 @@ two-commit convention, this checkpoint, the paired bundle,
 `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every
 commit-hash-bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+`5735e0bd314314004add920fbb8cf6fd40d43db3`, then a second, immediately
 following commit fills in that first commit's own real hash in every one
 of those fields -- both commits carry the sole terminal trailer
 `ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-002` with no paragraph
