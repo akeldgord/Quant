@@ -38,10 +38,25 @@ from . import (
     parse_attempts as parse_attempts,
 )
 from . import (
+    prospective_events as prospective_events,
+)
+from . import (
     provider_usage as provider_usage,
 )
 from . import (
     reference_asset_prices as reference_asset_prices,
+)
+from . import (
+    shadow_intents as shadow_intents,
+)
+from . import (
+    shadow_mark_outcomes as shadow_mark_outcomes,
+)
+from . import (
+    shadow_positions as shadow_positions,
+)
+from . import (
+    shadow_quote_probes as shadow_quote_probes,
 )
 from . import (
     swaps as swaps,

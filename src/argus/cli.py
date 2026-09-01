@@ -44,6 +44,16 @@ wallets_app = typer.Typer(
     add_completion=False, help="Wallet reconstruction + unbiased qualification (Phase 3)"
 )
 app.add_typer(wallets_app, name="wallets")
+prospective_app = typer.Typer(
+    add_completion=False, help="Prospective tracked-wallet monitoring (Phase 4)"
+)
+app.add_typer(prospective_app, name="prospective")
+shadow_app = typer.Typer(
+    add_completion=False, help="Shadow copy quote/mark probe execution (Phase 4)"
+)
+app.add_typer(shadow_app, name="shadow")
+report_app = typer.Typer(add_completion=False, help="Operator reports")
+app.add_typer(report_app, name="report")
 
 console = Console()
 
@@ -1479,6 +1489,225 @@ def wallets_reconstruct_and_score(
             console.print(f"tier_transition: -> {new_tier} ({reason})")
         else:
             console.print(f"tier_transition: none (current_tier={result.current_tier} unchanged)")
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@prospective_app.command("run")
+def prospective_run(
+    limit: int = typer.Option(
+        100, "--limit", help="Max new prospective events created in this one pass."
+    ),
+) -> None:
+    """Phase 4 (MASTER_SPEC.md sections 44-46): scans the real, already-
+    ingested ``swaps`` ledger for new trades from tracked (tier-allowed)
+    wallets, creates a point-in-time-frozen prospective event for each,
+    and creates a shadow intent (with its scheduled entry-delay probes)
+    for every one that passes the honest research-eligibility gate. Call
+    repeatedly -- a bounded loop, a cron tick, or alongside ``argus
+    ingest run``'s own cadence. Never live-arms, signs, or executes
+    anything."""
+    from datetime import UTC, datetime
+
+    from argus.shadow.monitor import run_prospective_monitoring_pass
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            result = await run_prospective_monitoring_pass(
+                sessionmaker, config=config, now=datetime.now(UTC), limit=limit
+            )
+        finally:
+            await engine.dispose()
+        console.print(
+            f"prospective_events_created={len(result.prospective_events)} "
+            f"shadow_intents_created={len(result.shadow_intents)}"
+        )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@shadow_app.command("run-entry-probes")
+def shadow_run_entry_probes(
+    limit: int = typer.Option(50, "--limit", help="Max due probes claimed in this one pass."),
+) -> None:
+    """Phase 4 (MASTER_SPEC.md section 46): claims and executes every
+    currently-due entry-delay quote probe via the public, credential-free
+    Jupiter quote endpoint, recording actual request/response timing and
+    creating a shadow position on the first successful entry. Call
+    repeatedly. Never signs or submits anything -- quote/inspection only
+    (``argus.providers.jupiter.JupiterClient``, the same Phase 1
+    prohibition-preserving adapter)."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from argus.clock import Clock
+    from argus.providers.dexscreener.client import DexScreenerClient
+    from argus.providers.jupiter.client import JupiterClient
+    from argus.providers.retry import retry_policy_from_config
+    from argus.providers.usage import SqlUsageRecorder
+    from argus.shadow.quote_jobs import run_due_entry_probes
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            retry_policy = retry_policy_from_config(config)
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                usage_recorder = SqlUsageRecorder(sessionmaker)
+                jupiter = JupiterClient(
+                    http_client=http_client,
+                    retry_policy=retry_policy,
+                    usage_recorder=usage_recorder,
+                )
+                market = DexScreenerClient(http_client=http_client, retry_policy=retry_policy)
+                results = await run_due_entry_probes(
+                    sessionmaker,
+                    jupiter,
+                    config=config,
+                    clock=Clock(),
+                    now=datetime.now(UTC),
+                    market_provider=market,
+                    limit=limit,
+                )
+        finally:
+            await engine.dispose()
+        console.print(f"entry_probes_processed={len(results)}")
+        for probe in results:
+            console.print(f"  probe_id={probe.probe_id} outcome={probe.outcome}")
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@shadow_app.command("run-reverse-probes")
+def shadow_run_reverse_probes(
+    limit: int = typer.Option(50, "--limit", help="Max due probes claimed in this one pass."),
+) -> None:
+    """Phase 4 (MASTER_SPEC.md section 47): claims and executes every
+    currently-due reverse-executable quote probe for an open shadow
+    position. Quote/inspection only, same Jupiter adapter as
+    'shadow run-entry-probes'."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from argus.clock import Clock
+    from argus.providers.jupiter.client import JupiterClient
+    from argus.providers.retry import retry_policy_from_config
+    from argus.providers.usage import SqlUsageRecorder
+    from argus.shadow.quote_jobs import run_due_reverse_probes
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            retry_policy = retry_policy_from_config(config)
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                usage_recorder = SqlUsageRecorder(sessionmaker)
+                jupiter = JupiterClient(
+                    http_client=http_client,
+                    retry_policy=retry_policy,
+                    usage_recorder=usage_recorder,
+                )
+                results = await run_due_reverse_probes(
+                    sessionmaker,
+                    jupiter,
+                    config=config,
+                    clock=Clock(),
+                    now=datetime.now(UTC),
+                    limit=limit,
+                )
+        finally:
+            await engine.dispose()
+        console.print(f"reverse_probes_processed={len(results)}")
+        for probe in results:
+            console.print(f"  probe_id={probe.probe_id} outcome={probe.outcome}")
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@shadow_app.command("run-mark-outcomes")
+def shadow_run_mark_outcomes(
+    limit: int = typer.Option(50, "--limit", help="Max due mark outcomes claimed in this pass."),
+) -> None:
+    """Phase 4 (MASTER_SPEC.md section 47): claims and executes every
+    currently-due mark-price outcome for an open shadow position via the
+    public, credential-free DexScreener token-snapshot endpoint.
+    Descriptive-only -- never the primary copyability outcome (see
+    'shadow run-reverse-probes')."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from argus.clock import Clock
+    from argus.providers.dexscreener.client import DexScreenerClient
+    from argus.providers.retry import retry_policy_from_config
+    from argus.shadow.mark_jobs import run_due_mark_outcomes
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            retry_policy = retry_policy_from_config(config)
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                market = DexScreenerClient(http_client=http_client, retry_policy=retry_policy)
+                results = await run_due_mark_outcomes(
+                    sessionmaker, market, clock=Clock(), now=datetime.now(UTC), limit=limit
+                )
+        finally:
+            await engine.dispose()
+        console.print(f"mark_outcomes_processed={len(results)}")
+        for row in results:
+            console.print(
+                f"  shadow_mark_outcome_id={row.shadow_mark_outcome_id} outcome={row.outcome}"
+            )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@report_app.command("daily")
+def report_daily() -> None:
+    """MASTER_SPEC.md section 93: prints the daily operator report --
+    every figure a real queried count over the trailing 24 hours, never a
+    fabricated value; sections this offline single-process report cannot
+    measure, or whose feature does not exist yet, are explicitly marked
+    UNAVAILABLE/NOT_IMPLEMENTED rather than invented."""
+    import json
+    from datetime import UTC, datetime
+
+    from argus.reports.daily import build_daily_report
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            tier_allowed = config.get("thresholds.wallet_tier_allowed") or []
+            report = await build_daily_report(
+                sessionmaker, now=datetime.now(UTC), tier_allowed=tier_allowed
+            )
+        finally:
+            await engine.dispose()
+        console.print(
+            json.dumps(
+                {
+                    "generated_at": report.generated_at.isoformat(),
+                    "window_start": report.window_start.isoformat(),
+                    "window_end": report.window_end.isoformat(),
+                    "system": report.system,
+                    "discovery": report.discovery,
+                    "tracking": report.tracking,
+                    "signals": report.signals,
+                    "shadow": report.shadow,
+                    "live": report.live,
+                    "research": report.research,
+                    "data_quality": report.data_quality,
+                },
+                indent=2,
+                default=str,
+            )
+        )
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))

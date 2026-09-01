@@ -1,0 +1,97 @@
+{
+  "replay_label": "REPLAY -- NOT PROSPECTIVE ALPHA EVIDENCE",
+  "real_fixture": "tests/golden/fixtures/real/real_mainnet_sol_to_token_swap.json",
+  "leader_executes": {
+    "wallet_address": "EfbbhahGNuhqEraRZXrwETfsaKxScngEttdQixWAW4WE",
+    "slot": 290506981,
+    "classification": "SWAP_SIMPLE",
+    "confidence": "1.000",
+    "input_mint": "SOL",
+    "input_amount_raw": 3072039280,
+    "output_mint": "D66sbPtYqLnwPYcUqjDktrQtb52CnfF77C3sdpNpR8Si",
+    "output_amount_raw": 56716561396327,
+    "parser_version": "generic_balance_delta_v3"
+  },
+  "argus_observes": {
+    "first_seen_at": "2024-09-18T09:22:19+00:00"
+  },
+  "source_tx_confirms": {
+    "commitment_level": "CONFIRMED",
+    "observed_at": "2024-09-18T09:22:21+00:00"
+  },
+  "shadow_signal": {
+    "prospective_event_id": "4e206686-945c-4c5d-963d-6e2862fcfd55",
+    "first_seen_at": "2024-09-18T09:22:19+00:00",
+    "shadow_intent_id": "b0009dea-5625-424a-8bea-36b8e16f0bfc",
+    "notional_input_amount_raw": 100000000,
+    "entry_probe_labels": [
+      "1s",
+      "5s",
+      "15s",
+      "30s",
+      "60s",
+      "300s"
+    ]
+  },
+  "entry_quote_and_fill": {
+    "probe_id": "c336bdcb-6dee-43ce-b78f-7f179b6d7d42",
+    "target_label": "1s",
+    "requested_at": "2024-09-18T09:22:23.700000+00:00",
+    "responded_at": "2024-09-18T09:22:23.800000+00:00",
+    "scheduling_delay_seconds": "0.7",
+    "latency_ms": 100,
+    "outcome": "SUCCESS",
+    "shadow_position_id": "57cd0e5a-00bb-4b1e-ada7-441d4e344a2a",
+    "entry_price_usd": "1.000000000000000000"
+  },
+  "mark_outcome": {
+    "shadow_mark_outcome_id": "c14af2e3-8dae-4786-9940-bceb79effce9",
+    "horizon_label": "5m",
+    "outcome": "RECORDED",
+    "mark_price_usd": "1.50",
+    "mark_return_pct_approx": "50.0"
+  },
+  "reverse_executable_quote": {
+    "shadow_quote_probe_id": "4323a813-3fdd-47a7-91f9-b2ba50038546",
+    "target_label": "5m",
+    "outcome": "NO_ROUTE"
+  },
+  "telegram_notification": {
+    "transport": "FakeTelegramTransport",
+    "sent": [
+      {
+        "chat_id": "replay-demo-chat",
+        "text": "REPLAY demo: shadow position 57cd0e5a-00bb-4b1e-ada7-441d4e344a2a opened, mark +50.0%, reverse-executable NO_ROUTE"
+      }
+    ]
+  },
+  "daily_report": {
+    "window_start": "2024-09-17T09:28:24.800000+00:00",
+    "window_end": "2024-09-18T09:28:24.800000+00:00",
+    "tracking": {
+      "tracked_wallets": 1,
+      "wallet_trades": 1,
+      "stream_gaps_degraded_wallets": 0,
+      "reconciliations_in_window": 0
+    },
+    "signals": {
+      "signals": 1,
+      "confirmations": 1,
+      "convergence_events": "NOT_IMPLEMENTED"
+    },
+    "shadow": {
+      "shadow_trades_opened_in_window": 1,
+      "matured_executable_outcomes_in_window": 1,
+      "matured_mark_outcomes_in_window": 1,
+      "open_shadow_positions_total": 1,
+      "mfe_mae": "NOT_IMPLEMENTED"
+    },
+    "data_quality": {
+      "ambiguous_swaps_in_window": 0,
+      "missing_mark_observations_overdue": 0,
+      "low_completeness_wallets": "NOT_IMPLEMENTED",
+      "provider_gaps": "NOT_IMPLEMENTED"
+    }
+  },
+  "status": "COMPLETE"
+}

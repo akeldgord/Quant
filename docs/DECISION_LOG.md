@@ -2288,3 +2288,98 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `phase_3_remediation_3.md` and their bundles are left byte-for-byte
   unmodified, preserved as evidence.
 - git_commit: 135eede039a67843a30b11f93c3ac08508c84f19
+
+### 2026-09-01 — Phase 3 orchestrator-approved; Phase 4 (PROSPECTIVE
+### MONITORING + SHADOW COPYING) authorized as one complete batch
+
+- requirement_id: MASTER_SPEC.md v2.0 Phase 3 STOP gate / Phase 4 build
+  list (sections 44-48, 84, 93-94), CORE-001/CORE-004.
+- decision: independent audit `argus-phase-3-remediation-audit-004`
+  (`DISPOSITION: PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`) found both
+  frozen findings from `argus-phase-3-remediation-audit-003` (P3-R2a,
+  P3-R2b) genuinely CLOSED at commit
+  `efb8837f01ab6aaa451c6ee3263e4effa389c4e6`, with every previously closed
+  Phase 3 finding (P3-R1, P3-R3, P3-R4, P3-R5, P3-R6a, P3-R6b, P3-R7, E1,
+  the string-boolean defect) still closed and no current SPEC_BLOCKING or
+  SAFETY_OR_INTEGRITY_BLOCKING finding remaining. Orchestrator instruction
+  `argus-phase-4-001` therefore applies `APPROVES_PHASE: 3` at that exact
+  commit and authorizes `AUTHORIZED_PHASE: 4`
+  (`AUTHORIZED_ACTION: IMPLEMENT_COMPLETE_PHASE_4_PROSPECTIVE_MONITORING_
+  AND_SHADOW_COPYING`) as ONE complete implementation batch, ending at its
+  own explicit STOP/checkpoint. Phase 5 remains unauthorized.
+- reason: this is a normal phase-gate approval, not a remediation --
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase`/
+  `approved_commit` are updated to `3`/
+  `efb8837f01ab6aaa451c6ee3263e4effa389c4e6` and `current_phase` moves to
+  `4`, per the instruction's own explicit application. The accepted
+  one-wallet `PHASE_3_CANDIDATE_SAMPLE_BLOCKED` outcome remains the
+  previously accepted, non-blocking limitation -- not reopened, not
+  treated as five-wallet evidence, and not authority to retune scores or
+  relax eligibility. `LIVE_HELIUS_RPC_VALIDATION`/`LIVE_HELIUS_WSS_
+  VALIDATION`/`PG17_COMPOSE_VALIDATION`/`BQ_PUBLIC_DATASET_ACCESS` remain
+  `DEFERRED_ENVIRONMENTAL_CHECK`, unchanged, not reopened as Phase 3
+  blockers; closure remains the human/operator's authorized environment
+  per the instruction's own explicit statement.
+- scope: Phase 4 builds tracked-wallet live monitoring wired to the real
+  Phase 1 fast/truth path, prospective-event creation with an immutable
+  point-in-time wallet score/tier/context snapshot, a shadow intent/
+  position lifecycle with scheduled entry-delay quote probes (1/5/15/30/
+  60/300s from ARGUS observation, per the existing
+  `config/signals_v1.yaml` `copyability_delay_probes_seconds`), mark and
+  reverse-executable outcome families (5m/30m/1h/6h/24h reverse-quote
+  horizons, 3d/7d optional mark horizons, per the existing
+  `executable_outcome_horizons`/`mark_outcome_horizons`), the five
+  unsellable-outcome reasons preserved as real rows, crash/restart
+  durability for the shadow lifecycle, a notification-only Telegram
+  integration (fake transport, no external send), and `argus report
+  daily`. No Phase 5 copyability/forward-information-value scoring, no
+  Phase 6 live execution, and no additional approval gate is added --
+  this instruction does not amend MASTER_SPEC.md, and required-versus-
+  optional language retains its original strength. Full detail recorded
+  in `orchestration/checkpoints/phase_4.md` once this batch completes.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT (this entry's own completion record)
+
+### 2026-09-01 — Phase 4 (PROSPECTIVE MONITORING + SHADOW COPYING) build complete, awaiting independent audit
+
+- decision: Implemented the complete Phase 4 authorized batch from
+  `argus-phase-4-001` in one session: schema (migration 0016, 5 new
+  tables), the prospective-event/shadow-intent/position/quote-probe/mark-
+  outcome service layer, CLI wiring (`argus prospective run`, `argus
+  shadow run-entry-probes`/`run-reverse-probes`/`run-mark-outcomes`,
+  `argus report daily`), notification-only Telegram integration, an
+  integrated production-entry-point REPLAY lifecycle demonstration
+  (`scripts/argus_phase4_replay_demo.py`,
+  `orchestration/phase_4/DEMONSTRATION.md`), and the full frozen
+  acceptance-gate test suite (`tests/integration/test_shadow_phase4.py`,
+  `tests/integration/test_daily_report.py`,
+  `tests/unit/test_telegram_notifier.py`; 16 new tests, 808 total up from
+  792). All 10 frozen acceptance gates from the instruction's own table
+  pass -- see `orchestration/checkpoints/phase_4.md` section D for the
+  full gate-to-test disposition.
+- rationale: The instruction authorized Phase 4 as one complete
+  implementation batch with no intermediate review gate; every ordered
+  implementation step (1-6) and every frozen acceptance-gate row was
+  implemented and independently tested before this completion entry was
+  written, following the same evidence discipline (real service
+  functions, deterministic injected providers/clocks at documented
+  dependency-injection seams, honest disclosure of every approximation)
+  established across Phases 1-3.
+- scope: Exactly the six ordered implementation steps and ten frozen
+  acceptance gates named in `argus-phase-4-001`. No Phase 5+ work
+  (COPYABILITY SCORE v1, INFORMATION HALF-LIFE, FORWARD INFORMATION
+  VALUE, RESEARCH HYPOTHESIS infra) was started. No live trade, signing,
+  credential entry/disclosure, paid-provider use/upgrade, live arming, or
+  threshold relaxation was performed or attempted.
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified. This
+  session does not and cannot self-approve Phase 4 --
+  `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` remains `3`.
+  Two disclosed design decisions, neither a defect: the prospective-event
+  "sufficiently interesting" gate is an honest approximation of
+  `ParsedTransaction.is_copy_eligible` since `matched_swap_program_id`/
+  `matched_semantic_label`/`matched_discriminator_hex` are never
+  persisted by Phase 1's `swaps` table; "buy" direction is inferred via a
+  quote-asset-mint-set heuristic since neither classification nor
+  persisted evidence records buy/sell directly. Both are documented in
+  the relevant module's own docstring and in the checkpoint's section H.
+- git_commit: (recorded in the second, hash-fill-in commit -- see
+  `orchestration/checkpoints/phase_4.md` GIT_COMMIT field)

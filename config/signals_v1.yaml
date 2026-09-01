@@ -33,3 +33,10 @@ mark_outcome_horizons: ["5m", "30m", "1h", "6h", "24h", "3d", "7d"]  # section 8
 
 allow_automatic_scale_in: false  # section 65 — must stay false until a
                                   # separately validated strategy is approved
+
+shadow_copy:  # section 45/46 — "V1 may begin with one configurable small
+              # notional." wrapped-SOL mint + lamports raw units, so the
+              # exact asset/precision is unambiguous and config-hash-bound.
+  notional_input_mint: "So11111111111111111111111111111111111111112"
+  notional_input_amount_raw: 100000000  # 0.1 SOL (9 decimals)
+  slippage_bps: 50
