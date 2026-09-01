@@ -1,406 +1,379 @@
 # ARGUS Orchestrator Instructions
 
 OWNER: ARGUS ORCHESTRATOR. The implementation agent must not modify this file.
-MASTER_SPEC.md remains authoritative. Execute only the ACTIVE instruction.
+MASTER_SPEC.md remains authoritative. No implementation is authorized below.
 
-INSTRUCTION_ID: argus-phase-4-remediation-002
-ISSUED_AT: 2026-09-01T17:22:28Z
-TARGET_COMMIT: 1d5cc5d93819cdeec050889a5b37c44d5b2f5c0b
-AUTHORIZED_ACTION: CLOSE_REMAINING_FROZEN_PHASE_4_FINDINGS
+INSTRUCTION_ID: argus-phase-4-failure-review-001
+ISSUED_AT: 2026-09-01T20:12:12Z
+TARGET_COMMIT: abb7df93fca33a9128095a56103c9bf80b9c3dd2
+AUTHORIZED_ACTION: NONE
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
-STATUS: ACTIVE
+STATUS: NO_INSTRUCTION
 
-## Disposition and frozen scope
+## STOP disposition and human change control
 
-AUDIT_ID: argus-phase-4-remediation-audit-001
-DISPOSITION: FAIL_REMEDIATION_REQUIRED
+AUDIT_ID: argus-phase-4-remediation-audit-002
+DISPOSITION: FAIL_STOP_ROOT_CAUSE_REVIEW
 
-Phase 4 remains unapproved; Phase 5 remains blocked. Execute the four remaining
-findings below as ONE batch, produce fresh evidence, then STOP. This is a
-justified second remediation of the SAME frozen requirements, not a new gate.
-P4-R2, P4-R5 and P4-R7 are CLOSED. Do not redesign or reopen them absent concrete
-regression evidence. Preserve their behavior while making necessary wiring changes.
-All Phase 0/1/1.5/2/3 approvals and closed findings remain unchanged.
+STOP implementation. This is an inert audit/root-cause-review record, NOT
+remediation-003, NOT permission to implement the recovery matrix, and NOT a
+request for another implementation submission. The previous ACTIVE remediation
+has been consumed by the handoff identified below. There is now no executable
+instruction. The existing protocol/parser treats NO_INSTRUCTION as no launch;
+the phase field preserves context, not authority to work.
 
-Authority: MASTER_SPEC.md as frozen by argus-phase-4-001 at
-379c5bc886abe7e99cdd3360fe3e71925ac932ce, its explicit pre-build decisions, and
-the already-frozen corrective behavior in argus-phase-4-remediation-001 at
-8b0e6dd52a37bbd517c97265d71fe8be381ea591. MASTER_SPEC SHA-256 is unchanged:
+Phase 4 remains unapproved; Phase 5 remains blocked. P4-R3 now closes. P4-R2,
+P4-R5's existing worker-ownership logic, and P4-R7 remain closed. Do not reopen
+those fixes or prior-phase findings. The new migration compatibility defect
+below is in R4's new terminal-state wiring, not a rejection of the already
+accepted worker-locking design. All Phase 0/1/1.5/2/3 approvals are unchanged.
+
+Human-approved process decision, September 1, 2026: one build plus at most one
+remediation. Phase 4 was already in remediation-002 when this rule was agreed;
+the human explicitly directed a root-cause review, not remediation-003, if this
+submission failed. The older seven-part exception does not override that STOP.
+This document completes the review and records a proposed recovery contract;
+resumption requires explicit human direction and a subsequent ACTIVE instruction.
+
+For Phase 5 onward, before implementation authorization, freeze an atomic
+requirement -> implementation evidence -> exact test -> pass condition matrix.
+The builder must self-audit every row before declaring READY_FOR_AUDIT. Missing
+rows or a green suite without the row-level proof are not completion. This is
+the approved process correction, not permission to add product requirements.
+
+## Audit identity and scope
+
+Repository: akeldgord/Quant. Branch: claude/argus-folder-setup-77ahrk.
+Audited remote HEAD: header target. Implementation/parent:
+9890802f91da02c51fc4a2f12715c821158dc53b, directly based on instruction commit
+3a16e150c5a9dd387f77d96e45a5e27f47a78182. Diff base is that instruction commit.
+Matching handoff: handoff-0027-phase-4-remediation-2, recorded 2026-09-01T19:35:00Z,
+LAST_ORCHESTRATOR_INSTRUCTION_ID exactly argus-phase-4-remediation-002.
+Evidence: orchestration/checkpoints/phase_4_remediation_2.md,
+orchestration/bundles/phase_4_remediation_2.txt,
+orchestration/phase_4_remediation_2/evidence/replay_demo_results.json.
+
+Frozen authority: MASTER_SPEC at Phase 4 authorization
+379c5bc886abe7e99cdd3360fe3e71925ac932ce, its pre-build decisions, remediation-001
+8b0e6dd52a37bbd517c97265d71fe8be381ea591, and the explicit remaining corrections
+in remediation-002. MASTER_SPEC SHA-256 is unchanged:
 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011.
-Relevant authority is CORE-001/002/003/004, sections 19-20, 44-48, 84, 93-94,
-the Phase 4 gate, and inherited provider priority/accounting and asset-unit rules.
-No Phase 5 scoring, forward-alpha model, graph, live execution or new data-source
-requirement is introduced. No SHOULD/MAY has been promoted to MUST.
+Relevant requirements: CORE-001/002/004, sections 44-48, 84, 93 and the Phase 4
+gate. Only R1/R3/R4/R6 and affected regressions were re-audited. No Phase 5 model,
+new provider, prospective alpha result, live-readiness or optional hardening gate.
 
-## Audit identity and independent work
+Fresh GitHub HEAD/control-file reads, exact-SHA local checkout, two terminal
+instruction-ID trailers, parent chain, canonical state/decision-log changes,
+unchanged spec/protocol/instruction, checkpoint/bundle and source/test deltas
+were checked. New evidence paths are new; old evidence remains unchanged in the
+committed diff. Build-state still names Phase 3 as last orchestrator approval.
+No actual deletion, live action, or secret exposure is alleged.
 
-Repository akeldgord/Quant; branch claude/argus-folder-setup-77ahrk.
-Audited remote HEAD is the header target; parent/implementation commit is
-285f5a9fe993ff72a02ef6470ea9627952389428, whose direct parent is the prior
-instruction commit 8b0e6dd52a37bbd517c97265d71fe8be381ea591. Diff base is that
-instruction commit. Handoff: handoff-0026-phase-4-remediation-1, exactly matching
-argus-phase-4-remediation-001. Referenced evidence:
-orchestration/checkpoints/phase_4_remediation_1.md,
-orchestration/bundles/phase_4_remediation_1.txt,
-orchestration/phase_4_remediation_1/evidence/replay_demo_results.json.
+## Independent evidence and environmental limits
 
-Fresh GitHub reads, exact-SHA fetch/clean detached checkout and both terminal
-commit trailers were verified. No protected spec/protocol/instruction changes,
-historical evidence replacement, phase skipping or self-approval was found.
-Canonical files were read in protocol order, followed by checkpoint/bundle,
-complete changed production service/CLI/domain/migration paths, focused test
-sources and affected predecessor interfaces. The audit-build-phase skill was
-used for requirement traceability, adversarial checks and audit-of-audit.
-
-Auditor-executed checks at this target:
+Auditor-executed at the audited target:
 
     uv run pytest tests/unit tests/golden tests/phase_1_5 -q
-    # 660 passed in 18.93s, exit 0
+    # 660 passed in 17.52s; exit 0
     uv run ruff check .
-    # All checks passed, exit 0
+    # All checks passed; exit 0
     uv run ruff format --check .
-    # 253 locally discoverable files already formatted, exit 0
+    # 256 locally discoverable files formatted; exit 0
     uv run mypy
-    # 128 source files clean, exit 0
-    uv run argus fixtures validate-real-chain
-    # all 12 authentic fixtures pass, exit 0
-    uv run pytest tests/integration/test_replay_demo_isolation.py -q -k refuse_unless
-    # 2 passed, 6 deselected in 0.49s, exit 0; deliberate guard-only selection
+    # 128 source files clean; exit 0
     uv run alembic heads
-    # 0018 (head), exit 0; repository migration graph, NOT a DB execution
+    # 0020 (head); exit 0; migration GRAPH, not DB execution
+    uv run argus fixtures validate-real-chain
+    # all 12 authentic fixtures pass; exit 0
+    uv run pytest tests/integration/test_replay_demo_isolation.py -q -k refuse_unless
+    # 2 passed, 6 deliberately deselected in 0.33s; exit 0
     uv run pytest tests/integration/test_shadow_phase4_remediation_observation.py -q -x
-    # setup blocked: MissingCredentialError, ARGUS_DB_ADMIN_PASSWORD; exit 1
+    # setup blocked by missing ARGUS_DB_ADMIN_PASSWORD; 1 setup error, exit 1
 
-No credential was requested/entered and no real database/provider was used by
-the auditor. The last result is an environmental limit, NOT a product failure.
-Builder evidence reports 859 full tests, 51 new tests, migration17, acquisition36,
-qualification17 and golden/replay/spike112. Their recorded result lines and test
-sources were inspected; PostgreSQL results are NOT claimed as independently
-rerun. Migration round-trip text includes a narrative summary rather than a
-full command transcript; retain honest provenance in the next bundle. Existing
-PG16 substitute / PG17 environmental deferral remains accepted.
+No credential was entered/requested; no external provider or database was used
+by the auditor. The setup error is an environmental deferral, not a product
+finding. Builder reports 890 passed with 33 warnings, focused82, predecessor80,
+migration17, golden/replay/spike112, and a PG16 round-trip. Recorded result lines
+and test sources were inspected; those PG executions are NOT independently
+rerun. The migration summary does not prove a populated Phase 4 upgrade. File
+format count differs locally by one; the check passed, not a product blocker.
 
-Independent temporary probes executed production functions. Temporal/report
-SELECTs were compiled from the actual SQLAlchemy statements and evaluated on
-controlled in-memory SQLite rows; this is a query-predicate oracle, not a claim
-of PostgreSQL concurrency or migration validation. Quote probes used the REAL
-JupiterClient, httpx.MockTransport, real PriorityScheduler and minimal in-memory
-session adapters. All final probe assertions completed, exit 0. Results:
+Read-only temporary probes ran actual production functions with real
+JupiterClient/httpx.MockTransport, the real PriorityScheduler, and minimal
+in-memory persistence adapters. Production SELECT predicates were compiled and
+executed against controlled SQLite rows, not a PostgreSQL concurrency claim.
+The report-end counterexample has only ONE history row, so PostgreSQL DISTINCT
+ON versus SQLite DISTINCT does not affect its result. The actual migration0020
+upgrade function was executed with a capturing operations adapter; its captured
+CHECK expression was evaluated against an old completed row. This proves the
+constraint contradiction, not an assertion that an actual shared DB failed.
+All probe assertions completed, exit 0. Results:
 
-1. Tier effective T but recorded T+1h is selected at cutoff T. Score created T
-   but as_of T+1h is selected at T. Without a pre-T market snapshot, token state
-   copies current_lifecycle_stage from a token first observed after T.
-2. Confirmation queue limit1, oldest event never confirmed, second event truly
-   confirmed: three repeated passes update zero events. A CONFIRMED observation
-   with transaction_succeeded=False is accepted without a success distinction.
-3. Real mocked Jupiter responses with NaN/Infinity impact, routePlan=[null], or
-   outputMint=UNRELATED all produce SUCCESS. A real-format supplied fee remains
-   fee_estimate_raw=None. Empty route is correctly NO_ROUTE (retain that fix).
-4. Real scheduler drop produces zero HTTP calls but persists non-null requested_at
-   and responded_at, with no retained rejection reason. A controlled queue wait
-   sends HTTP at T+60 but records requested_at=T, delay=0 and latency=60000ms.
-5. One SUCCESS, one NO_ROUTE and one capacity miss produce matured count3 without
-   a shadow-outcome breakdown. Actual shadow marks are ignored for extrema.
-   One wallet with two old LOW assessments and a later HIGH is counted as two
-   low-completeness wallets. 1 SOL and 100 USDC historical MFE are averaged into
-   an unidentified quote amount of 50.5 in the shadow report.
-6. R2 independently passes: first_seen T / creation T+60 gives +1s due T+1 and
-   created_at T+60. Production checkpoint/bundle validators pass, including
-   exact embedded checkpoint bytes. The new demo's due/request/response values
-   correctly yield 2.7s scheduling delay and 100ms response latency.
+1. Score/tier split-clock exclusions PASS. A token first observed after T is
+   unavailable; mutable lifecycle fallback is gone. But Token.first_observed_at
+   =T, created_at=T+1h remains available at T. An OPEN WalletPosition with
+   first_entry_at=T, created_at=T+1h under an eligible history is counted at T.
+2. Seven unresolvable events before a finalized-success eighth event, limit1:
+   the eighth is reached. False/unknown execution results are excluded, and
+   the selected successful observation ID is retained. R3 PASS.
+3. Real mocked Jupiter: wrong raw mint, NaN, Infinity and malformed impact are
+   QUOTE_FAILED; routePlan=[null] is NO_ROUTE. However routePlan=[{"swapInfo":{}}]
+   and [{"swapInfo":{"inputMint":42,"inAmount":"garbage"}}] both yield SUCCESS.
+4. Real HTTP400 COULD_NOT_FIND_ANY_ROUTE maps to NO_ROUTE; HTTP429 maps to
+   PROVIDER_CAPACITY_MISS. In both cases the supplied error code is discarded:
+   raw_quote=None, no structured error/status/reason written on the probe.
+   Scheduler rejection makes zero HTTP calls, has null call times and a genuine
+   terminal_at, and replay makes zero further calls (PASS). Its actual
+   RequestDropped.reason/priority class are nevertheless discarded (FAIL).
+5. Migration0020 adds nullable terminal_at with no default/compatibility step,
+   then adds validated CHECK (responded_at IS NULL OR terminal_at IS NOT NULL).
+   For every legacy completed probe: responded_at is non-null and the new
+   terminal_at is null; the actual CHECK evaluates FALSE. A populated upgrade
+   cannot satisfy that constraint. No historical evidence must be deleted or
+   invented to get past it.
+6. Shadow marks +0.5/-0.2 in-window, 99 out-of-window => extrema +0.5/-0.2/count2.
+   SUCCESS + NO_ROUTE + CAPACITY_MISS => separate counts, usable2. PASS.
+   But one LOW history created after the report end is counted as low1 in the
+   earlier report: latest-history selection has no report-end bound. FAIL.
+7. Production checkpoint/bundle validators pass, including exact embedded
+   checkpoint bytes. Replay remains explicitly NOT PROSPECTIVE ALPHA EVIDENCE.
 
-## Complete requirement-to-evidence matrix
+## Complete remaining-gate traceability matrix
 
-| Frozen obligation | Observed code/test/evidence | Disposition |
+| Frozen obligation | Code and meaningful evidence | Result |
 |---|---|---|
-| R1: evidence known at first_seen, both recorded/effective time | score lacks as_of bound; tier lacks created_at bound; market lacks created_at bound; token fallback uses mutable current state | FAIL, R1 continued |
-| R1: selection and context independent of later changes | scanner still prefilters Wallet.current_tier; later demotion can omit an earlier tracked trade; single-history position selection and cluster dual bounds improve context | FAIL selection; retain single-history/cluster fixes |
-| R2: probe origin/actual creation and due arithmetic | intents uses event.first_seen_at, separate created_at; worked-example test and corrected demo | CLOSED; queued actual-call timing remains R4, not a reopening of origin |
-| R3: drain new economic events; parser replay | NOT EXISTS before LIMIT and canonical event_id uniqueness; 7-row/limit3 and two-parser tests | PASS sequential new-event drain/dedup; retain |
-| R3: late confirmation/finality and repeat/concurrent passes | pending LIMIT applied before checking resolvable evidence; only CONFIRMED, no success distinction; concurrent new-event insert has no conflict recovery | FAIL, R3 continued |
-| R4: actual provider error and capacity paths | real no-route/429/drop mapped, CLI scheduler and usage recorder wired; rejection details lost; no-send and queued time mislabeled | Partial, R4 continued |
-| R4: valid quote identity, route, impact, fees | notional check and empty-route fix work; malformed nonempty route/wrong mint/nonfinite impact accepted; fee always None | FAIL, R4 continued |
-| R5: owned terminal writes for quote AND mark | generation passed from claim, FOR UPDATE terminal guard; terminal no-call; parent-intent lock serializes first position; crash/replay tests | CLOSED by code and inspected test evidence; DB rerun environmental |
-| R6: tier direction, new-wallet count, notifier integration | correct from/to rank, Wallet identity count, ordinary service/CLI callers, notification after commit with failure isolation | PASS, retain |
-| R6: available shadow/sample/data-quality facts | historical MFE substituted for shadow marks, cross-unit average, repeated history rows counted as wallets, no outcome/sample breakdown | FAIL, R6 continued |
-| R7: replay cannot delete/consume shared evidence | creates new scratch DB before writes; all service scans scoped there; no shared address cleanup; failure/success preservation tests | CLOSED; actual PG run is builder evidence |
-| Separate mark/executable, immutable first_seen, stream safety | distinct tables/outputs and Phase1 degraded-state mechanism retained; no live route added | PASS inherited structure; current data defects above remain blocking |
-| Evidence/trailers/phase and safety controls | new checkpoint/bundle/demo, correct chain and trailers, protected files unchanged; no new executor grants | PASS inspected; no actual loss or live action alleged |
+| R1 score effective AND recorded time <= first_seen | _score_snapshot_as_of; both split-clock tests and independent SELECT probe | PASS, retain |
+| R1 tier effective AND recorded time <= first_seen; retain IDs | _tier_transition_as_of, snapshot IDs; split-clock/equality tests and SELECT probe | PASS, retain |
+| R1 market dual-time bound; no current lifecycle fallback | _token_state_snapshot; market/fallback tests; direct probe | PASS, retain |
+| R1 token creation/first-observation bound | only first_observed_at checked; split creation-time probe | FAIL R1-T |
+| R1 single-history position context, represented recorded/economic bounds | chosen history and first_entry_at bound exist; WalletPosition.created_at bound absent | FAIL R1-T; single-history/entry-time fixes retained |
+| R1 cluster dual bound/source reference | existing as_of/created_at predicates and cluster context unchanged | PASS inherited |
+| R1 scanner tier-at-first_seen before LIMIT | correlated tier subquery, not current_tier; promotion/demotion and saturated-ineligible tests | PASS inspected, PG execution builder-only |
+| R3 confirmation resolvability before LIMIT | correlated successful CONFIRMED/FINALIZED EXISTS; independent seven-before-one probe | PASS |
+| R3 finality/success/source ID; initial and revisit same semantics | shared _confirmed_success_observation, FK0019, failed/unknown/finalized/delayed tests | PASS |
+| R3 duplicate scanner recovery and no lost unrelated batch | per-candidate SAVEPOINT, event identity unique, return only inserted rows; genuine gather test | PASS inspected; no auditor PG concurrency claim |
+| R4 returned top-level mint/notional identity | _classify_quote; real-adapter negative tests/probes | PASS |
+| R4 route entries include valid mint/amount evidence | validator checks only dict and swapInfo dict; empty/garbage nested objects yield SUCCESS | FAIL R4-V |
+| R4 invalid supplied impact vs honest missing; no-route/excessive remain | _classify_quote, real-adapter cases including NaN/Infinity | PASS |
+| R4 available fees/raw response retained without cross-unit sum | raw_quote preserves route feeMint/feeAmount and platformFee; no cross-mint sum introduced | PASS preservation; normalized fee-unit clarity is non-blocking debt |
+| R4 sanitized error/capacity reason and supplied status/code | exception handler retains only coarse outcome; real400/429/drop probes | FAIL R4-E |
+| R4 actual dispatch timing, separate queue delay | times inside dispatched callable; real scheduler T+60/T+60.1 test asserts100ms | PASS inspected |
+| R4 no-send null times, terminal time, replay no-call | new terminal_at guards; real scheduler drop/replay probe | PASS for newly created rows |
+| R4 legacy compatibility without evidence rewrite; R5 preservation | migration0020 CHECK rejects all preexisting completed rows | FAIL R4-M; worker-lock design stays closed |
+| R6 shadow sampled extrema/count/caveat vs historical | ShadowMarkOutcome query; independent .5/-.2/late99 probe | PASS |
+| R6 historical grouping by asset/chosen history, no repeated versions | _build_research groups quote_asset_mint and latest-history IDs; SOL/USDC and repeated-reconstruction tests | PASS inspected for stated current-history scope |
+| R6 distinct current wallet completeness at report end | DISTINCT ON deduplicates versions but lacks created_at<=end | FAIL R6-T |
+| R6 outcome/missing/overdue separation and no future models | explicit successful/unsellable/missing_capacity and pending counts; independent oracle | PASS |
+| R2 origin, R5 ownership guards, R7 isolated replay | unchanged origin/locking/isolation; only necessary terminal wiring; 7 concurrency/8 isolation builder tests, independent2 guards | Remain CLOSED except new R4 migration finding above |
+| Evidence, authentic fixture, phase and safety boundaries | clean diff, exact trailers/validators,12 fixtures, no protected edits or new live path | PASS |
 
-## Seven-part no-moving-goalposts justification for round 2
+## Remaining findings: exact scope, not a new repair instruction
 
-| 1. Exact remaining blocker | 2. Classification | 3. Frozen authority | 4. Concrete consequence | 5. Why round 1 did not close it | 6. Why not backlog/environment | 7. Bounded closure |
-|---|---|---|---|---|---|---|
-| P4-R1 temporal predicates/fallback/selection | SAFETY_OR_INTEGRITY_BLOCKING | section44/CORE-001; remediation001 R1 explicitly requires BOTH effective/as-of and recorded/observed cutoff, and first-seen selection | future knowledge or current tier changes alter old research observations | tests move all timestamps together and retain current A/S; no split-clock or post-T-token fallback/demotion case | demonstrated current query behavior, not provenance depth or unavailable provider | complete same cutoff across existing fields/selection; preserve no-evidence state and source refs |
-| P4-R3 confirmation starvation/finality/success and duplicate-pass recovery | SPEC_BLOCKING | sections19-20/44/84; remediation001 R3 explicitly requires repeated/concurrent bounded passes and processed->confirmed/finalized without promoting failed tx | real confirmations remain permanently unseen or indistinguishable from failed transactions; concurrent inserts can abort a pass | new-event pagination was fixed, same pre-filter-LIMIT bug copied to confirmation revisit; tests cover one successful CONFIRMED row and sequential scans | ordinary monitoring lifecycle, no external data needed | resolve evidence before limit, preserve source finality/success and immutable links; recover duplicate claim without rewriting snapshots |
-| P4-R4 quote validity and actual-call/missing evidence | SPEC_BLOCKING | sections45-48; remediation001 R4 explicitly forbids malformed/nonfinite SUCCESS, requires identity/fees/reason and no invented request | invalid quotes make fills; queue wait becomes fake call latency; a dropped call appears sent | tests explicitly assert lenient SUCCESS contrary to instruction, omit wrong mint/malformed nonempty route, and assert drop outcome without timestamp/reason | concrete contract failures with real adapter and scheduler, not more hypothetical hardening | reject demonstrated invalid inputs; capture dispatch timing and terminal no-send state; preserve fees/error reason within current quote path |
-| P4-R6 current-phase report accuracy | SPEC_BLOCKING | section93 and remediation001 R6 requires shadow sampled marks, current completeness, sample/missing classification; inherited asset-unit integrity | shadow report ignores its marks, counts versions as wallets, averages SOL with USDC | tests seed historical positions and duplicate production formulas instead of checking shadow data and independent unit/count oracles | materially false current report, not Phase5 scoring or sample thresholds | query existing shadow/history evidence with explicit units, unique current wallet state and outcome breakdown |
+All five entries below are SPEC_BLOCKING. No HARDENING_BACKLOG item blocks
+approval, and no additional blocking finding is being reserved for another round.
 
-These are incomplete executions of frozen corrections. No new provider,
-security feature, statistical threshold, identity attestation or operational
-readiness requirement is being added. Closed work stays closed. Round 3 would
-require a new explicit exact frozen/current-integrity justification; it is not
-pre-authorized by this instruction.
+### R1-T — Represented creation-time cutoffs remain incomplete
 
-## One ordered implementation batch
+Severity MEDIUM. Existing P4-R1, not a new gate. Remediation002 explicitly says
+a Token row created/first-observed after cutoff is unavailable, and position
+rows' represented recorded/economic times are bounded to that cutoff.
+prospective._token_state_snapshot omits Token.created_at; _position_size_context
+omits WalletPosition.created_at. The controlled probes above violate those
+exact frozen clauses. This is not a claim of observed production corruption:
+the ordinary token importer currently initializes both token clocks equally.
+That initialization does not prove the explicitly required dual-clock consumer
+contract. Other temporal subrequirements that passed stay closed.
+Root cause: the dual-clock rule was applied to score/tier/market, not all
+explicitly listed records. Affected surface: token/context snapshot helpers
+and their ordinary monitor caller. Required proof before any resumed handoff:
+split-clock token and position tests through the monitoring path, plus equality
+and existing single-history regressions. No Phase3 redesign is required.
 
-0. Start with git status, git pull --ff-only, git log -5. Read canonical files
-   in PROTOCOL order. Verify this instruction is one instruction-only commit
-   directly atop the header target. STOP on protected-file change, overlap,
-   unexpected branch movement or target mismatch. Never edit this file.
-   Read the four continuation sections and write their negative tests FIRST
-   or together with code. Do not merely rename existing passing assertions.
+### R4-V — A dictionary is still being treated as route evidence
 
-### 1. P4-R1 — Complete the existing first-seen knowledge boundary
+Severity HIGH. Existing R4 explicitly requires structurally valid route entries
+and their mint/amount evidence, not merely a nonempty routePlan. The new helper
+_is_structurally_valid_route_entry tests only two dictionary shapes. Its empty
+or nonsensical swapInfo still yields SUCCESS and positive expected output in
+the real-adapter path; the entry path consequently remains eligible to create
+a shadow fill. Same validator handles entry and reverse probes.
+Root cause: one more nesting level was checked, but required fields were not.
+Required proof: normal complete route passes; empty/missing/wrong-type route
+mint/amount evidence fails with no position/executable sample. No economic
+route attestation, new venue support, or deeper optional semantic gate.
 
-Severity HIGH. Classification SAFETY_OR_INTEGRITY_BLOCKING.
-Surface: shadow/prospective.py, its scanner and snapshot helpers/tests.
+### R4-E — Terminal outcome loses the supplied failure evidence
 
-- _score_snapshot_as_of: require BOTH created_at <= cutoff and as_of <= cutoff.
-- _tier_transition_as_of: require BOTH transitioned_at <= cutoff and created_at
-  <= cutoff. Preserve the exact chosen transition_id and score_id.
-- _token_state_snapshot: require observed_at AND created_at <= cutoff for
-  snapshots. A Token row created/first-observed after cutoff is unavailable at
-  that time. With an eligible token but no eligible market/lifecycle snapshot,
-  do not copy tokens.current_lifecycle_stage; return explicit unavailable
-  lifecycle/market state. Preserve immutable mint identity separately.
-- Keep position reconstruction restricted to one eligible history, never sum
-  duplicate historical versions. Bound the selected position rows' represented
-  recorded/economic times to the same cutoff. Keep existing dual-bound cluster
-  query and source references. No Phase3 reconstruction redesign is authorized.
-- Scanner eligibility must not depend on the wallet's later current_tier.
-  Evaluate the allowed tracked tier at each swap.first_seen_at from eligible
-  immutable tier history. Apply eligibility/exclusion before the batch LIMIT
-  so permanently ineligible old rows do not cause a new starvation bug. A later
-  promotion cannot qualify an old event; later demotion cannot erase an event
-  that actually qualified at T. Missing T state remains unavailable/ineligible,
-  not a reason to fabricate a qualifying score or tier. Preserve already-created
-  prospective snapshots; do not backfill new values into old decisions.
+Severity MEDIUM. Existing R4 requires sanitized error/capacity reason and supplied
+status/provider code, separately from terminal time. _execute_and_record_probe
+catches the exception and saves only _classify_provider_exception(exc); the
+error branch never populates raw_quote or a structured error record. Real
+HTTP400/429 and real scheduler-drop probes reproduce the loss. Global usage
+accounting is retained but is not the missing bound provider-code/drop-reason
+record. The coarse no-route/capacity classification itself is correct.
+Root cause: completion timing was repaired, while evidence preservation was
+omitted. Affected surface: shared entry/reverse exception seam, probe record,
+capacity terminal path and its tests. Required proof: exact sanitized known
+no-route/status/code and queue reason survive restart; unknown codes remain
+QUOTE_FAILED with preserved safe evidence; contract-supported restriction case
+must not depend exclusively on a fake-provider exception. No secret body or
+arbitrary URL/header logging, no guessed provider-code mapping.
 
-Required tests: split effective-vs-recorded timestamps in each represented
-family, inclusive equality, token first known after T, eligible token with only
-post-T lifecycle state, wallet A at T then WATCH before first scan, wallet WATCH
-at T then A before scan, and >limit permanently ineligible rows before eligible
-work. Assert selected IDs/values, no future input, no fabricated intent and
-deterministic drain/replay. Tests must run the ordinary monitor/scanner, not
-only helper predicates. Existing single-history and after-creation immutability
-tests remain passing.
+### R4-M — New terminal-state migration cannot accept old completed rows
 
-### 2. P4-R3 — Finish confirmation and repeated-pass lifecycle
+Severity HIGH. New current-phase regression of R4 compatibility/R5 preservation,
+not an optional future upgrade requirement. migration0020 adds terminal_at NULL,
+then CHECK responded_at IS NULL OR terminal_at IS NOT NULL, without first
+providing any truthful legacy representation. Every valid legacy completed row
+therefore violates the new constraint. Actual captured migration operations and
+CHECK truth evaluation prove it. The worker now also assumes terminal_at alone,
+so merely bypassing the CHECK would make old completions look unfinished.
+Root cause: a fresh-schema test was treated as upgrade compatibility proof;
+new terminal state was designed without the populated predecessor state.
+Affected surface: migration0020, terminal detection/claims/finalization/report
+consumers, compatibility tests. Required proof: populated0018 upgrade including
+completed success/error/capacity and pending rows; immutable old evidence/IDs
+preserved; completed rows never re-call providers, pending rows remain runnable;
+repeated startup stable. This report authorizes NO migration, backfill, downgrade,
+data deletion, or evidence rewrite on an existing database.
 
-Severity HIGH. Classification SPEC_BLOCKING.
-Surface: prospective.revisit_pending_confirmations, initial confirmation lookup,
-scan_for_new_prospective_events, monitor and narrowly necessary domain/schema.
+### R6-T — Current-history count ignores the stated report end
 
-- Build the eligible confirmation candidate set by joining/selecting resolvable
-  commitment evidence BEFORE applying LIMIT. Old events with no resolvable
-  evidence must not permanently occupy every batch slot.
-- Consume actual CONFIRMED or FINALIZED source evidence. Preserve observed
-  finality, transaction_succeeded (including unknown), source observation ID
-  and timestamp; never treat failed/unknown as successful confirmation. Initial
-  creation and late revisit must use the same semantics. A finalized-only
-  successful observation must not be missed solely because no intermediate
-  CONFIRMED record exists. Do not change live commitment policy or ban existing
-  processed-only research.
-- Use existing immutable CommitmentObservation rows as authority; persist a
-  linked immutable application record if needed to bind the prospective event
-  to its selected observation. confirmation_time may remain a cache only when
-  it is reproducible from that preserved link. Do not replace first_seen, score
-  or context. Preserve repeated/finalized observations as evidence rather than
-  overwriting the original selection. No deletion of historical rows.
-- Concurrent scanners must resolve a competing canonical-event insert as an
-  idempotent already-consumed result, not abort unrelated batch work or create
-  a second intent. Use database conflict handling scoped to the existing
-  canonical identity and return only genuinely newly created events for intent
-  creation. Preserve sequential dedup/NOT EXISTS fixes and R5 worker locking.
+Severity MEDIUM. Existing R6 explicitly says relevant latest known history at
+report end. _latest_history_id_per_wallet_subquery takes no cutoff and has no
+time predicate; _build_data_quality supplies start/end but does not use them for
+history selection. A single LOW history created after end counts1 in the older
+report. Deduplication itself passes and must not be redesigned.
+Root cause: 'latest' was implemented as latest in the database, not latest known
+at the named cutoff. Required proof: at end E, only a post-E history contributes
+no pre-E history; pre-E LOW plus post-E HIGH remains LOW at E and HIGH after the
+new assessment; same cutoff produces stable counts, equality explicit; state
+the treatment of no known history. No retroactive database edits.
 
-Required tests: >2*limit unconfirmed events preceding a later successfully
-confirmed event; repeated passes must reach it. Finalized-only success, failed
-confirmed, failed finalized, unknown success, delayed evidence and replay must
-retain truthful status/source IDs. Two ordinary monitor passes interleaved on
-the same new event plus independent events must complete without duplicate
-trade, evidence replacement or lost batch progress. The former one-row positive
-confirmation test is necessary but insufficient. Keep migrations additive and
-role grants least-privilege; do not reset shared history to make them pass.
+## Phase Failure Root-Cause Review — four required answers
 
-### 3. P4-R4 — Finish honest provider evidence at the existing seam
+### 1. Was the frozen gate unclear?
 
-Severity HIGH. Classification SPEC_BLOCKING.
-Surface: quote_jobs classification/call/record, Jupiter response validation,
-probe/position evidence and report consumers of terminal state. Existing P4/P5
-scheduler wiring and market/quote usage recorders must remain in place.
+Partly at the process level, not as a reason to invent new product rules.
+The remaining obligations were expressly written before this remediation:
+dual clocks, route mint/amount evidence, error details, truthful old-state
+compatibility and latest-known-at-report-end. However the architect grouped
+many independent obligations into four large finding packets and supplied
+worked examples rather than one executable/atomic acceptance row per clause.
+No populated Phase4 migration fixture was supplied with the state change.
+That made omission easy and verification expensive. Architect/process ownership:
+replace broad 'finding fixed' signoff with atomic coverage frozen BEFORE work.
 
-- Validate actual returned inputMint/outputMint and amount against the request;
-  JupiterClient currently labels the returned object with caller mints, hiding
-  raw mint disagreement. Check the raw provider fields, not just those labels.
-- Nonempty list is not route validation: routePlan=[null] or invalid route
-  members cannot assert a route/fill. Require structurally valid provider route
-  entries and their mint/amount evidence under the existing quote contract.
-  Do not demand new economic/semantic proof beyond that contract.
-- Nonfinite or malformed supplied priceImpactPct must produce explicit
-  QUOTE_FAILED/unusable evidence and no fill, not SUCCESS with None. Missing
-  impact must remain explicit; never silently assert a known-safe value.
-  Preserve genuine PRICE_IMPACT_EXCESSIVE and empty/no-route classifications.
-- Retain available provider fee components with their actual feeMint and raw
-  units. Do not always clear fee_estimate_raw, and never add heterogeneous
-  currencies. A structured fee-component field is sufficient; unsupported
-  aggregate stays unavailable with reason. Preserve the original raw response.
-- Preserve sanitized structured error/capacity reason and actual HTTP status/
-  provider code when supplied. Retain existing known no-route/429 mappings;
-  recognized restriction/liquidity errors must not collapse into an invented
-  success. Unknown provider codes remain QUOTE_FAILED, never guessed. Cover
-  the frozen restricted-token real-adapter test; only contract-supported error
-  codes may receive specific classifications.
-- Capture provider requested_at INSIDE the scheduler's dispatched callable,
-  immediately before the actual provider call; response time immediately after.
-  Queue time is scheduling delay, not provider latency. Preserve retry/usage
-  evidence honestly; do not relabel enqueue time as network send time.
-- A scheduler drop before dispatch has no request/response timestamps or call
-  latency. Persist its terminal decision time/reason separately. Therefore use
-  explicit terminal state/time for claim, no-op, intent-finalization and report
-  logic instead of assuming responded_at non-null is the only completion proof.
-  HTTP429 is different: it DID make a request and keeps actual send/response
-  evidence. Both remain missing capacity, not usable/failed trade performance.
-- Adapt R5 generation-and-lock guards to terminal no-send states without
-  weakening them. Preserve no-provider-call on any terminal replay. Legacy
-  records must not have missing timing/reason fabricated or evidence rewritten.
+### 2. Was a clear requirement implemented incorrectly?
 
-Required tests through real JupiterClient + httpx.MockTransport: normal route,
-empty route, [null]/malformed route, mismatched raw mints/notional, nonfinite and
-malformed impact, known no-route/restriction, unknown error, supplied same-asset
-and mixed-asset fees. Assert no position for unusable quote and exact preserved
-raw/error evidence. Replace the current lenient-SUCCESS test oracle, which
-contradicts remediation001. Controlled real scheduler: enqueue T, dispatch T+60,
-response T+60.1 => request T+60, latency100ms, correct due-based delay. Queue
-rejection => zero HTTP calls, null call times, terminal capacity reason, and
-exact replay with zero further calls. HTTP429 => actual HTTP call/times retained.
-Keep usage accounting and all closed stale-worker/position-race regressions.
+Yes. The source omits explicit recorded-time predicates, accepts empty route
+evidence, drops explicit error details, and fails to bound history by report
+end. New migration logic rejects the predecessor's completed-row shape. The
+checkpoint's four-row matrix declares whole findings FIXED after proving only
+subsets. It even calls scanner tier selection/concurrent inserts 'additional'
+discoveries although both were already explicit instruction clauses. This is
+observable incomplete contract coverage, not an accusation about intent.
+Builder ownership: self-audit every frozen clause against production wiring,
+including negative and predecessor-state cases, before another readiness claim.
 
-### 4. P4-R6 — Correct current-phase report data, not future models
+### 3. Did the audit introduce a new requirement?
 
-Severity MEDIUM. Classification SPEC_BLOCKING.
-Surface: reports/daily.py and its focused tests; no Phase5 models required.
+No for the five findings retained above: R1-T/R4-V/R4-E/R6-T cite explicit
+remediation002 clauses; R4-M is a direct regression caused by the new migration
+under the existing preservation/restart contract. Its discovery after coding
+does not create a new product requirement. Conversely, deeper route economics,
+an extra normalized fee schema, real-provider validation, or a populated live
+alpha sample are NOT required here. Fee components already preserved in raw
+JSON are accepted; further fee-unit presentation is HARDENING_BACKLOG only.
+No genuine observed data loss is alleged. Existing accepted replay/environment
+limitations and closed subrequirements remain accepted.
 
-- Keep corrected promotions/demotions, new-wallet identities and best-effort
-  notification wiring. Do not replace or broaden those completed fixes.
-- Compute descriptive SHADOW sampled MFE/MAE from existing ShadowMarkOutcome
-  returns for the corresponding ShadowPosition, using actual observation times
-  within the stated reporting scope. Report sampled maxima/minima with counts
-  and explicit sampled-not-continuous caveat. No marks means insufficient
-  sample, not zero. Historical WalletPosition metrics, if retained, belong in
-  a separately labeled historical section and must be grouped by quote asset
-  and chosen history identity, never averaged across SOL/USDC or replays.
-- low_completeness_wallets counts distinct wallets by the relevant latest
-  known history at report end, not every historical LOW row. A current HIGH
-  supersedes old LOW assessments for that current-state count; preserve all
-  history rows. State scope and missing-history treatment explicitly.
-- Report current-phase sample/outcome counts from actual prospective/shadow
-  evidence: successful executable observations, unsellable/error observations,
-  terminal missing-capacity observations and overdue unattempted observations
-  separately. A total-attempt count may include missing attempts if explicitly
-  named and broken down; never present it as usable executable sample size.
-  Link terminal no-send capacity records from R4 without pretending a request
-  occurred. Future hypothesis/graph/live fields remain NOT_IMPLEMENTED.
+### 4. Why did the tests miss it?
 
-Required tests with hand-computed oracles: one shadow position with observed
-returns +0.5/-0.2 => sampled max +0.5/min -0.2 and count2; no historical position
-rows needed. Late/out-of-window marks cannot change an earlier report scope.
-One wallet LOW->LOW->HIGH => current low count0, not2; a second current UNKNOWN
-wallet counts1. Repeated reconstruction must not multiply distinct-wallet or
-chosen-position samples. SOL/USDC historical amounts must never yield an
-unlabeled 50.5 quote average. SUCCESS + NO_ROUTE + CAPACITY_MISS => explicit
-three-class breakdown with usable sample excluding missing capacity; terminal
-no-send vs overdue pending remain distinguishable. Preserve notifier failure
-isolation and no external delivery during tests.
+The new tests are meaningful but not a complete contract harness:
+
+- score/tier clocks split; token tests change first-observation with creation,
+  and position creation-after-cutoff is absent;
+- malformed routes cover null/missing swapInfo/non-object, not an empty or
+  malformed swapInfo dictionary;
+- error tests assert coarse outcome, not preserved code/status/reason;
+- migration tests updated head assertions to0020 but do not seed completed
+  Phase4 rows before the0018->0020 transition;
+- report tests independently verify version deduplication, but omit post-end
+  histories, reproducing 'latest now' in their expected-state scope.
+
+The independently executing probes now reproduce those omissions. Before
+implementation resumes, these cases must become named, independently derived
+regression tests in the agreed recovery harness. The recovery matrix below is
+a proposed contract, not authority to start that work. The orchestrator also
+owns the process failure of allowing repeated repair chains; a fourth patch
+cycle disguised as 'review follow-up' is not permitted.
+
+## Proposed recovery acceptance matrix — INERT, approval required
+
+| Frozen requirement | Implementation evidence to inspect | Exact proposed test | Independent pass condition |
+|---|---|---|---|
+| R1-T token recorded cutoff | token snapshot ordinary monitor path | test_token_recorded_after_cutoff_unavailable | first_observed=T, created=T+1 => unavailable at T; equality available |
+| R1-T position recorded cutoff | selected history/context ordinary monitor path | test_position_recorded_after_cutoff_not_counted | eligible history, position first_entry=T/created=T+1 => not counted at T; unchanged existing history rows |
+| R4-V route field evidence | real Jupiter -> shared classifier -> entry/reverse persistence | test_route_nested_mint_amount_evidence_required | valid complete route succeeds; empty/invalid swapInfo mints/amounts never fill or become usable quote |
+| R4-E durable sanitized failure facts | real HTTP and scheduler exception -> terminal record -> reread | test_terminal_error_and_capacity_details_survive_replay | exact safe status/code/reason retained; unknown stays failure; zero further calls for terminal replay |
+| R4-M predecessor compatibility | actual migration + all terminal consumers | test_populated_0018_upgrade_preserves_completed_probes | success/error/capacity/pending fixture upgrades; old byte evidence/IDs retained; complete rows no-call; pending still eligible |
+| R6-T report knowledge cutoff | latest-history query in daily report | test_completeness_latest_known_at_report_end | LOW pre-E/HIGH post-E => low1 at E, low0 later; only post-E row is not a known low wallet at E; absence stated |
+
+Recovery approval must identify the frozen harness and implementation scope
+before any code changes. Preserve all already-passing cases and rerun affected
+Phase4 tests, predecessor tests, migrations, full suite, lint/type/fixtures and
+evidence validation in the authorized environment. An allowed environmental
+deferral remains a deferral, never grounds for another speculative repair loop.
+The auditor's temporary in-memory probes are not a substitute for the populated
+PostgreSQL migration acceptance test on resumption.
 
 ## Adversarial coverage and claim ledger
 
-| Failure class | Audit method/result | Residual action |
+| Failure class | Method | Result |
 |---|---|---|
-| Split clocks, late initial scan, unavailable state | Actual SELECT oracle + production fallback: TESTED_FAIL; current-tier prefilter INSPECTED | R1 |
-| Batch saturation, late/failed/finalized confirmation | Actual SELECT oracle TESTED_FAIL; finality filter/concurrent insert path INSPECTED | R3 |
-| Malformed/nonfinite/wrong identity, provider errors | Real adapter/mock HTTP TESTED_FAIL; ordinary success/empty route confirmed | R4 |
-| Queue wait/drop vs actual send | Real scheduler/control clock TESTED_FAIL | R4 |
-| Worker stale lease/terminal concurrency/crash replay | Lock/generation/parent-serialization source and test assertions INSPECTED; PG execution BLOCKED locally | R5 closed, preserve |
-| Duplicate history/mixed units/missing shadow samples | Actual report SELECT oracle TESTED_FAIL | R6 |
-| Shared cleanup/failed setup/unrelated jobs | Isolated script/source and preservation tests INSPECTED; guard tests TESTED_PASS; PG execution builder-only | R7 closed, preserve |
-| Instruction identity/evidence replay/phase limits | Fresh exact-SHA chain/diff and validators TESTED_PASS | Retain; refetch before write |
-| Live/canary/paid/key operations, future scoring | NOT_APPLICABLE to authorized build; no such operation performed | Still prohibited |
+| Split effective/recorded clocks | actual SELECT/helpers, controlled rows; tests inspected | mixed PASS/FAIL R1-T |
+| Saturated confirmation queue/finality/false/unknown | actual SELECT/helper; shared semantics/source FK | PASS R3 |
+| New-event duplicate/concurrent insert | SAVEPOINT/unique identity and gather test inspection | PASS; PG runtime auditor-deferred |
+| Malformed quote identity/impact/route | real adapter + MockTransport | identity/impact PASS; nested route FAIL R4-V |
+| HTTP/drop details versus no-send timing/replay | real adapter/scheduler/recording path | timing/replay PASS; details FAIL R4-E |
+| Populated predecessor schema transition | actual upgrade operations captured, CHECK evaluated | FAIL R4-M; no shared DB touched |
+| Report shadow extrema/missing units/history time | real report SELECTs, hand-computed values | samples/units PASS; end cutoff FAIL R6-T |
+| Worker locks/isolated replay | source/tests,2 isolated guard tests | CLOSED preserved; populated-state issue separately R4-M |
+| Phase skipping/spec drift/secret/live/paid changes | exact commit diff, trailers, control checks | no such change found; all prohibited |
 
-| Builder claim | Independent conclusion | Effect |
-|---|---|---|
-| All seven findings fixed/all gates PASS/no limitations | FALSE for R1/R3/R4/R6 based on concrete probes above | Phase4 FAIL |
-| All point-in-time fields bounded | NARROWER_THAN_CLAIMED: some bounds/refs correct, split clocks and fallback fail | R1 |
-| Scanner drains and confirmation is complete | New-event sequential drain confirmed; confirmation/concurrent coverage incomplete | R3 |
-| Strict quote identity and malformed-data handling | Notional/empty-route fixed; tests enshrine invalid-impact SUCCESS | R4 |
-| Real scheduler and provider usage wired | CONFIRMED code; timestamp/reason semantics still false | R4 |
-| Both competing terminal reads occur before either commit | NARROWER_THAN_CLAIMED: stale test releases A after B commits; source lock still prevents lost terminal writes; two-entry test genuinely races | R5 accepted, correct wording only |
-| Report available facts now correct | Tier/new-wallet/notifier confirmed; shadow/history/unit/sample claims false | R6 |
-| Demo isolated and old evidence preserved | CONFIRMED source, diff and meaningful builder tests; no auditor PG run | R7 accepted |
-| 859 full tests/migration pass | Builder-recorded evidence, not independently rerun; offline660/type/lint/fixtures independently confirmed | Allowed environmental distinction |
+| Material builder claim | Independent disposition |
+|---|---|
+| All four continued findings FIXED | FALSE: R3 closes; R1/R4/R6 retain only the listed deficiencies |
+| Full point-in-time boundary implemented | NARROWER_THAN_CLAIMED: score/tier/market/scanner pass; token/position recorded bounds missing |
+| Confirmation finality/success/batch/race fixed | CONFIRMED by query probes and meaningful source/test evidence; actual PG concurrency not rerun |
+| Honest route/fee/error/terminal evidence complete | NARROWER_THAN_CLAIMED: outer identity/impact/timing/raw fee retention pass; nested route/error facts/legacy transition fail |
+| Report data now correct | NARROWER_THAN_CLAIMED: shadow extrema, asset grouping/dedup, class breakdown pass; report-end history fails |
+| All regression/migration commands pass | Builder-reported890/33warnings; independently660/type/lint/fixtures pass. Existing migration tests do not prove populated Phase4 upgrade |
+| No substantive deviations, no new known bugs | Incorrect as completeness claim given demonstrated omissions/regression; not evidence of deliberate deception |
+| Replay isolated, old evidence preserved, no self-approval | CONFIRMED committed diff/source/guard tests; demo labels/cost limitations accepted |
 
-Audit-of-audit completed: every prior finding and affected gate has a disposition;
-PASS entries have direct source/test/probe support; all demonstrated blocker
-families are included here; optional depth and future work are excluded. No
-additional known blocker is being held for a later instruction.
+Audit-of-audit: every remaining clause is mapped; failures cite frozen text or
+current migration regression; accepted fixes remain closed; optional depth is
+not blocking; environmental inability is not conflated with a defect. The full
+known blocker list is above. No further implementation packet is authorized.
 
-## Validation, evidence and STOP
+## Environmental deferrals and safety remain unchanged
 
-Run all newly added focused negative/positive tests, then:
+LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION,
+PG17_COMPOSE_VALIDATION and BQ_PUBLIC_DATASET_ACCESS remain deferred under the
+previously approved closure procedures and gates. PG16 is only the accepted
+functional substitute; no PG17 PASS is implied. Real Jupiter/DexScreener/
+Telegram access is not required for this replay-allowed phase. The accepted
+Phase3 one-wallet sample outcome is unchanged. These deferrals block live
+readiness as previously specified, not Phase4 solely by their existence.
 
-    uv run pytest tests/integration/test_shadow_phase4_remediation_observation.py tests/integration/test_shadow_quote_jobs_provider_remediation.py tests/integration/test_shadow_phase4_concurrency_remediation.py tests/integration/test_daily_report_remediation.py tests/integration/test_replay_demo_isolation.py -q
-    uv run pytest tests/unit/test_phase3_wallet_qualification.py tests/integration/test_wallet_acquisition.py tests/integration/test_phase3_wallet_qualification.py -q
-    uv run pytest tests/integration/test_shadow_phase4.py tests/integration/test_daily_report.py tests/unit/test_telegram_notifier.py -q
-    uv run pytest tests/integration/test_migrations.py -q
-    uv run pytest tests/golden tests/replay tests/phase_1_5 -q
-    uv run pytest -q
-    uv run ruff check .
-    uv run ruff format --check .
-    uv run mypy
-    uv run alembic heads
-    uv run argus fixtures validate-real-chain
+No mainnet trade, canary, signing/private-key/seed access, credential entry or
+disclosure, paid-provider use/upgrade, live arming, threshold relaxation,
+evidence rewrite, or phase skip is authorized. Do not run migration0020 against
+an existing populated database to 'see if it works.' Do not clear/drop existing
+history to satisfy it. Do not edit canonical history or this instruction.
 
-Exercise any new migration on owned disposable databases using existing
-approved test access; preserve populated history and replay terminal outcomes.
-Do not reset/downgrade a shared database or request new credentials. Capture
-actual commands, outputs, counts, warnings/skips, environment and final head.
-Run a secret scan without printing secret values. Do not substitute prose
-such as '(clean round-trip)' for captured migration output.
-
-Create NEW evidence only:
-
-- orchestration/checkpoints/phase_4_remediation_2.md
-- orchestration/bundles/phase_4_remediation_2.txt
-- Any regenerated demo output under orchestration/phase_4_remediation_2/;
-  keep phase_4 and phase_4_remediation_1 artifacts unchanged. Adjust the demo's
-  destination for this new run before invoking it; never overwrite old evidence.
-
-Checkpoint must include R1/R3/R4/R6 requirement-to-evidence closure rows, retained
-R2/R5/R7 regression status, precise limitation/deferral statements, test oracles,
-security state, actual UTC timestamp, exact opening/ending markers and STOP.
-Bundle embeds its exact bytes and full command evidence. Update BUILD_STATE
-and DECISION_LOG truthfully without self-approval; last approved phase stays3.
-Handoff must identify a new ID, this exact instruction ID and real run commit.
-Every builder commit, including evidence/hash-fill, MUST end in the sole exact
-terminal trailer below with nothing after it:
-
-    ARGUS-INSTRUCTION-ID: argus-phase-4-remediation-002
-
-Environmental deferrals remain LIVE_HELIUS_RPC_VALIDATION,
-LIVE_HELIUS_WSS_VALIDATION, PG17_COMPOSE_VALIDATION, BQ_PUBLIC_DATASET_ACCESS.
-Human/operator owns provision of an approved environment; builder captures the
-documented real RPC/WSS checks and PG17 make bootstrap && make up / migrations /
-tests there when separately authorized. Closure requires recorded actual
-environment/results and orchestrator review before live readiness, not before
-this code remediation can pass. No real Jupiter/DexScreener/Telegram call is
-required here. Replay injection remains allowed; accepted one-wallet Phase3
-sample limitation remains non-blocking. Honest environment limits never justify
-fabricated PASS and never create a new software acceptance gate.
-
-No threshold relaxation, retuning, mainnet trade, canary, signing/key/seed access,
-credential entry/disclosure, paid-provider upgrade/use, live arming, evidence
-rewrite or phase skip. No external Telegram send during this work. Additive
-schema changes are authorized only for these frozen corrections; no deletion
-of existing evidence. STOP after one consolidated submission. Only independent
-orchestrator approval may authorize Phase 5.
+STOP. Await explicit human direction on the root-cause review and a new ACTIVE
+authorization. No remediation-003, Phase5 work, or autonomous recovery run.
