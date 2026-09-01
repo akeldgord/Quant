@@ -1,7 +1,7 @@
 ARGUS ORCHESTRATOR REVIEW BUNDLE
 instruction_id: argus-phase-2-001
 STATUS: PHASE_2_BUILD_COMPLETE_AWAITING_ORCHESTRATOR_REVIEW
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: bd35f3a7a95d6c6b977be9e421c5ea16779e472c
 TEST_STATUS: 40/40 focused Phase 2 tests passed; 8/8 migration tests
   passed (head now 0008); 102/102 parser/golden + Phase 1.5 regression
   tests passed; 58/58 integration tests passed; full repository suite
@@ -48,8 +48,8 @@ SCOPE: Phase 2 -- TOKEN + WALLET DISCOVERY, per orchestrator instruction
   (`PASS_WITH_LIMITATIONS`) -- see `docs/BUILD_STATE.md` for that approval
   applied and `docs/DECISION_LOG.md` for the decision record.
 STATUS: PHASE_2_BUILD_COMPLETE_AWAITING_ORCHESTRATOR_REVIEW
-UTC_TIMESTAMP: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+UTC_TIMESTAMP: 2026-09-01T00:54:28Z
+GIT_COMMIT: bd35f3a7a95d6c6b977be9e421c5ea16779e472c
 TARGET_COMMIT: c3148cc191de58ecab9b11cd05291cc8ffe45455
 AUTHORIZED_PHASE: 2
 APPROVES_PHASE: 1.5 (applied to `docs/BUILD_STATE.md`; Phase 2 itself is

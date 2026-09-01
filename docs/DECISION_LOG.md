@@ -1646,4 +1646,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/checkpoints/phase_2.md` for the full 14-item
   disposition and `orchestration/phase_2/DEMONSTRATION.md` for the
   required real historical-token demonstration report.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+- git_commit: bd35f3a7a95d6c6b977be9e421c5ea16779e472c
