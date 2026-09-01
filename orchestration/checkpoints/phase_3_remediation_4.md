@@ -21,7 +21,7 @@ STATUS: Both named manifestations (P3-R2a: reconstruction was not
   orchestrator-approved -- this checkpoint reports remediation completion
   for independent audit, it does not and cannot itself apply approval.
 UTC_TIMESTAMP: 2026-09-01T11:45:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 135eede039a67843a30b11f93c3ac08508c84f19
 TARGET_COMMIT: fb2a3f7d2b75c526d06568ab3708ff85e1c1448d
 AUTHORIZED_PHASE: 3
 APPROVES_PHASE: NONE
@@ -192,7 +192,7 @@ two-commit convention, this checkpoint, the paired bundle,
 `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every
 commit-hash-bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+`135eede039a67843a30b11f93c3ac08508c84f19`, then a second, immediately
 following commit fills in that first commit's own real hash in every one
 of those fields -- both commits carry the sole terminal trailer
 `ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-004` with no paragraph
