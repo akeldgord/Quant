@@ -7,167 +7,50 @@ approval, clarification, or change-control decision.
 
 ---
 
-INSTRUCTION_ID: argus-phase-2-001
-ISSUED_AT: 2026-08-31T23:50:40Z
-TARGET_COMMIT: c3148cc191de58ecab9b11cd05291cc8ffe45455
-AUTHORIZED_ACTION: EXECUTE_PHASE_2_TOKEN_AND_WALLET_DISCOVERY_ONLY
+INSTRUCTION_ID: argus-phase-2-remediation-001
+ISSUED_AT: 2026-09-01T01:03:18Z
+TARGET_COMMIT: 6bde9fdf6d56c38517854700e8863d9103e831aa
+AUTHORIZED_ACTION: REMEDIATE_FROZEN_PHASE_2_BLOCKERS_ONLY
 AUTHORIZED_PHASE: 2
-APPROVES_PHASE: 1.5
+APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
 ## Independent audit disposition
 
-### Phase 0
+Phase 0 remains approved as `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`.
+Phase 1 remains approved at `2fbc566af74832bc6523648f60ba8cb60d98eb31`
+as `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`. Phase 1.5 remains approved at
+`c3148cc191de58ecab9b11cd05291cc8ffe45455` as `PASS_WITH_LIMITATIONS`.
 
-Phase 0 remains orchestrator-approved:
+Phase 2 at exact audited remote commit
+`6bde9fdf6d56c38517854700e8863d9103e831aa` is **not approved**. Phase 3 and
+all later phases remain blocked.
 
-`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`
+The audit accepted the Phase 2 schema breadth, point-in-time append model,
+reference-price ledger, versioned winner thresholds, discovery-contamination
+field, negative-control schema, CLI entry points, real fixture provenance,
+explicit replay labeling, role grants, and custody/live-trading prohibitions.
+Do not redesign those accepted areas unless a change is strictly required by
+the blockers below.
 
-### Phase 1
+## Frozen audit findings
 
-Phase 1 remains orchestrator-approved at
-`2fbc566af74832bc6523648f60ba8cb60d98eb31`:
+These are violations of the Phase 2 gate frozen in `argus-phase-2-001`; they
+are not new product requirements.
 
-`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`
+| ID | Classification | Frozen requirement | Independently verified defect |
+|---|---|---|---|
+| P2-R1 | SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING | P2-T1; authentic on-chain mint validation must reject a valid-shaped non-mint | `validate_from_account_info()` accepts a 165-byte legacy SPL token-account payload as `VALID` whenever bytes 44/45 resemble mint decimals/initialized state. The submitted test describes a 165-byte account but only supplies 70 bytes, so it never exercises the false-positive path. |
+| P2-R2 | SPEC_BLOCKING | Required implementation 4 and P2-T8 | No Phase 2 historical provider adapter/acquisition path was implemented. The CLI accepts already-collected files only. The claimed P2-T8 tests do not exercise pagination, cursor cycles, duplicate pages, premature empty pages, caps, timeout, rate limit, or provider usage accounting. |
+| P2-R3 | SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING | Required implementation 5, MASTER_SPEC section 33, P2-T5 | Early-buyer ordering is not deterministic across processes: candidates tied on `(slot, signature)` retain iteration order from a Python `set`; varying `PYTHONHASHSEED` reverses the submitted real fixture's sequence. The same extractor promotes the known pump.fun bonding-curve reserve PDA into `wallets`, `early_buyers`, and discovery events even though it is not a meaningful buyer wallet. “Tag, do not delete” applies to actual wallets with risk tags, not program reserve/state accounts. |
+| P2-R4 | SPEC_BLOCKING + SAFETY_OR_INTEGRITY_BLOCKING | Required implementation 6 and P2-T7 | Winner evaluation discards `market_state_confidence`; LOW/UNKNOWN/incomplete snapshots can create a winner milestone and archaeology trigger. An independent 12x probe produced `MAJOR_WINNER` even though the evaluation surface had no confidence field. |
+| P2-R5 | SPEC_BLOCKING | Required implementation 6 and P2-T7 | The prospective watcher creates a trigger row, but there is no wired automatic trigger consumer/executor. The demonstration manually passes the trigger ID to a second CLI command. The frozen instruction defined automatic archaeology as creation **and execution** of the bounded research job inside Phase 2. |
+| P2-R6 | SPEC_BLOCKING | P2-T10 | The submitted tests cover duplicate trigger delivery and transaction rollback, but do not cover crash/restart around durable run creation or output commit. `run_archaeology()` creates RUNNING state and all outputs in one caller transaction; a process crash rolls the whole attempt away, losing the required attempt provenance rather than leaving a recoverable/terminal state. |
+| P2-R7 | SPEC_BLOCKING | CORE financial arithmetic and Phase 2 persistence | New Phase 2 `supply_raw` and `amount_raw` columns use signed PostgreSQL `BIGINT`, which cannot represent the full Solana/SPL unsigned 64-bit range. Exact raw integer persistence must accept at least `2^64 - 1` without overflow or float conversion. |
+| P2-R8 | SPEC_BLOCKING | Required implementation 2 and P2-T1 | Mint-validation evidence handling does not fail closed on conflicting matching token-balance entries and persists `chain_time=None` and `commitment=None` even when the committed transaction evidence contains usable block/slot/time provenance. |
 
-The following checks remain open and must be closed before live readiness, but
-do not block Phase 2 research work:
-
-- `LIVE_HELIUS_RPC_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
-- `LIVE_HELIUS_WSS_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
-- `PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`
-- `BQ_PUBLIC_DATASET_ACCESS = DEFERRED_ENVIRONMENTAL_CHECK`
-
-### Phase 1.5
-
-Phase 1.5 is independently approved at exact audited remote commit
-`c3148cc191de58ecab9b11cd05291cc8ffe45455` with disposition:
-
-`PASS_WITH_LIMITATIONS`
-
-The historical-data conclusion remains exactly:
-
-`HISTORICAL_DATA_PATH = PASS_WITH_LIMITATIONS`
-
-The Phase 1.5 remediation-round-2 semantic gate passed independent audit. The
-parser now requires an exact program-and-instruction-discriminator pair from
-the same canonical instruction object; missing, malformed, cross-program,
-non-swap, or log-only evidence fails closed. Independent adversarial probes
-confirmed the old code fails open and the submitted code fails closed. The
-auditor independently observed 102/102 scoped parser and Phase 1.5 tests pass,
-Ruff clean, mypy clean, and all 12 real-chain fixtures validate. The auditor's
-full suite produced 572 passes, 8 permitted environment skips, and 33 setup
-errors solely because `ARGUS_DB_ADMIN_PASSWORD` is intentionally unavailable
-in the audit environment; this matches the previously disclosed environmental
-limitation and is not a code failure.
-
-No `SPEC_BLOCKING` or `SAFETY_OR_INTEGRITY_BLOCKING` finding remains for Phase
-1.5. Existing limitations remain non-blocking: incomplete historical
-acquisition breadth, the disclosed 43-percent UNKNOWN rate for position events
-that already fail closed, missing live-provider measurements, and incomplete
-protocol/discriminator coverage. A minor evidence-formatting debt also remains:
-the generated Phase 1.5 JSON exposes matched program, semantic label, and
-discriminator but not the oracle's source-instruction location; the immutable
-checkpoint and independent oracle do record those locations. This does not
-alter the original Phase 1.5 gate or the independently proven safety behavior.
-
-Phase 2 is authorized. Phase 3 and later phases remain blocked.
-
-## Frozen Phase 2 gate
-
-The canonical gate is MASTER_SPEC.md Phase 2 — TOKEN + WALLET DISCOVERY, plus
-the already-applicable requirements listed below. This instruction clarifies
-how to prove those existing requirements; it does not add a later-phase
-production pipeline or live-readiness gate.
-
-Phase 2 goal: create historical and prospective candidate-wallet discovery.
-
-Required Phase 2 build surface:
-
-1. token model;
-2. token market snapshots;
-3. point-in-time reference prices;
-4. token lifecycle metadata;
-5. bootstrap-token importer;
-6. free-first historical provider adapters;
-7. early-buyer extraction;
-8. wallet discovery provenance;
-9. prospective winner watcher;
-10. winner milestone events;
-11. automatic archaeology trigger;
-12. wallet candidate creation;
-13. negative-control schema support;
-14. on-chain mint validation.
-
-Required demonstration: at least one verified historical token, reporting its
-mint, winner category, versioned baseline methodology, recovered early buyers,
-data source, history limitations, and sanitized sample rows.
-
-Required acceptance outcomes:
-
-- token mint validated;
-- lifecycle stage persisted;
-- discovery provenance persisted;
-- at least one historical archaeology run works;
-- early-wallet extraction reproducible;
-- source limitations explicit;
-- discovery-trigger observations identifiable for later exclusion.
-
-## Authority and inherited invariants
-
-Implement the Phase 2 gate exactly. Preserve these existing requirements:
-
-1. **Point-in-time truth and immutable raw evidence.** Store chain/provider
-   observation time separately from chain time. Raw observations remain
-   append-only. Never use future token outcomes, present-day supply, or revised
-   market data to rewrite what was knowable at discovery time.
-2. **Determinism and reproducibility.** Every meaningful discovery decision
-   records algorithm version, config version/hash, git commit, input evidence
-   references, timestamp, reason codes, and result. Stable ordering and
-   idempotency are required for repeated archaeology and trigger delivery.
-3. **Financial arithmetic.** Use raw integers for on-chain quantities and
-   `Decimal` for canonical prices and USD values. Do not introduce binary-float
-   canonical accounting.
-4. **Token lifecycle.** Distinguish where observable: `TOKEN_CREATION`,
-   `BONDING_CURVE`, `LAUNCHPAD_TRADING`, `MIGRATION`, `AMM_POOL`, and
-   `MULTIPLE_POOLS`. Persist venue, venue program, pool/curve address, and
-   lifecycle stage. Unknown or unrecoverable values remain explicit, not
-   fabricated.
-5. **Reference prices.** Persist at minimum SOL/USD and USDC/USD with source,
-   observed_at, and confidence. Do not permanently assume USDC equals exactly
-   USD 1. Historical calculations use point-in-time prices where practical.
-6. **Historical market state.** Persist confidence for historical price,
-   supply, liquidity, FDV, market cap, and pool state. Use `NULL` instead of
-   false precision when contemporaneous evidence cannot be recovered.
-7. **Winner definitions.** Initial research labels are `MAJOR_WINNER >= 10x`,
-   `MONSTER >= 20x`, and `EXTREME >= 50x`. They are research labels, not trade
-   signals. Persist winner-definition version, baseline timestamp/price/
-   liquidity, peak price, and peak timestamp. The baseline methodology must use
-   the earliest reliably tradable market state, not an untradeable zero-
-   liquidity launch price.
-8. **Discovery provenance.** Every `wallet_discovery_event` records wallet,
-   discovered_at, discovery channel, nullable trigger token/wallet/event,
-   trigger reason, and algorithm version. Historical winner archaeology and
-   prospective winner archaeology must remain distinguishable.
-9. **Anti-survivorship support.** Discovery-triggering token/event rows must be
-   retained and mechanically identifiable for later qualification exclusion as
-   `DISCOVERY_CONTAMINATION`; Phase 2 does not implement Phase 3 scoring. The
-   schema must also support negative-control archaeology without claiming that
-   full negative-control research is complete in Phase 2.
-10. **Early buyers.** Attempt to recover the first 100 distinct meaningful net
-    buyers and preserve at least the earliest 50 useful candidates if
-    recoverable. Do not invent unavailable buyers. Record the fields required
-    by MASTER_SPEC section 33, including ordering, venue, lifecycle stage,
-    point-in-time entry state/confidence, token age, raw amount, and USD
-    estimate where supportable. Tag possible deployer/insider/bundler/funder-
-    related/bot status; do not automatically delete such wallets.
-11. **Provider boundaries and cost.** Reuse typed provider interfaces and the
-    central priority/cost accounting already built. Begin with free sources.
-    No paid archival path may be enabled silently. Provider gaps, truncation,
-    pagination limits, and completeness limits must be explicit.
-12. **Research/custody separation.** No research process may access signing
-    material. This phase creates no trade intent, order, transaction, or live
-    execution path.
+No additional hardening idea may be made blocking in this remediation. Fix and
+prove exactly P2-R1 through P2-R8, then stop.
 
 ## Mandatory session start and change control
 
@@ -175,290 +58,179 @@ Before changing code:
 
 1. Run `git status --porcelain`, `git pull --ff-only`, and
    `git log -5 --oneline`.
-2. Read, in exact order:
-   - `MASTER_SPEC.md`
-   - `docs/BUILD_STATE.md`
-   - `docs/DECISION_LOG.md`
-   - `orchestration/PROTOCOL.md`
-   - `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
-   - `orchestration/AGENT_HANDOFF.md`
-   - `orchestration/checkpoints/phase_1_5_remediation_2.md`
-   - `orchestration/bundles/phase_1_5_remediation_2.txt`
-3. Verify the current instruction commit changes only
-   `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` and its parent is exactly
-   TARGET_COMMIT `c3148cc191de58ecab9b11cd05291cc8ffe45455`.
-4. Verify the worktree is clean and local HEAD equals a freshly fetched remote
-   branch HEAD.
-5. Verify `current_phase: 1.5`, `last_completed_phase: 1.5`,
-   `last_orchestrator_approved_phase: 1`, and
-   `awaiting_orchestrator_review: true` before applying this explicit approval.
-6. If any target, ancestry, phase, instruction-ID, branch, or trust-state check
-   fails, fail closed and STOP.
+2. Read, in exact order: `MASTER_SPEC.md`, `docs/BUILD_STATE.md`,
+   `docs/DECISION_LOG.md`, `orchestration/PROTOCOL.md`, this file,
+   `orchestration/AGENT_HANDOFF.md`, `orchestration/checkpoints/phase_2.md`,
+   and `orchestration/bundles/phase_2.txt`.
+3. Verify the instruction-only commit containing this file has parent exactly
+   `TARGET_COMMIT`, changes only this file, and local HEAD equals the freshly
+   fetched remote branch HEAD.
+4. Verify Phase 2 is awaiting orchestrator review and Phase 2 is not marked
+   orchestrator-approved. On any mismatch, fail closed and STOP.
 
-## Required implementation
+## Required remediation
 
-### 1. Persistence and migrations
+### 1. Correct mint-account discrimination and evidence provenance
 
-Add the minimum normalized PostgreSQL 17-compatible schema needed for the
-Phase 2 build surface. Preserve existing append-only chain/provider evidence
-and existing role separation. Migrations must work from zero and from current
-head, downgrade safely where the repository contract requires it, and be
-restart/idempotency tested.
+- Use exact, vetted SPL Token and Token-2022 account-type discrimination. A
+  legacy 165-byte token account, multisig account, malformed extension layout,
+  uninitialized mint, wrong owner, and valid-shaped arbitrary payload must not
+  validate as a mint. Do not infer account type merely from “length >= 82” and
+  bytes 44/45.
+- For token-balance evidence, evaluate every matching pre/post entry. Conflicting
+  decimals, program IDs, malformed values, failed/unsupported evidence, or
+  other contradictions must return a non-VALID result with a reason.
+- Persist chain time/slot reference and commitment/finality semantics whenever
+  the evidence supports them. Preserve the distinct validation source; do not
+  relabel fixture evidence as a live account-info call.
+- Add adversarial tests containing a genuine 165-byte legacy token-account
+  shape with byte 45 set to 1, valid legacy and Token-2022 mint shapes, malformed
+  Token-2022 extensions, and conflicting pre/post token-balance entries.
 
-At minimum, persist the responsibilities required by MASTER_SPEC sections
-24-33: tokens, token market snapshots, token discovery/outcomes or equivalent
-normalized records, reference asset prices, wallet candidates/wallets, wallet
-discovery events, winner milestone events, archaeology runs, and negative-
-control linkage/support. Modest SQL normalization is implementation discretion;
-do not remove required history or provenance.
+### 2. Add the actual historical acquisition/provider boundary
 
-Use uniqueness/idempotency keys that prevent duplicate token, milestone,
-archaeology-trigger, early-buyer, wallet-candidate, and discovery-provenance
-rows when the same source observation is replayed. Do not overwrite a prior
-point-in-time belief with a later observation.
+- Implement a typed, provider-neutral Phase 2 historical acquisition service
+  over the existing Phase 1 `ChainProvider`/provider contracts. It must acquire
+  address signatures and transactions through bounded pagination, normalize
+  them into the archaeology input type, and feed the existing archaeology
+  service. Keep the offline evidence-file path for deterministic demonstrations.
+- Explicitly handle and persist: multiple pages, duplicate item/page,
+  immediately repeated cursor, multi-step cursor cycle, premature empty/short
+  page before an expected boundary, maximum-page/cap exhaustion, timeout, rate
+  limit, malformed response, transaction-fetch failure, and partial success.
+  None may be reported complete without direct completion evidence.
+- Real provider calls must flow through existing provider usage/cost accounting.
+  Tests may use a deterministic fake provider and fake usage recorder; no live
+  credential and no paid provider is authorized.
+- Wire this acquisition service through an ordinary CLI/service command, not a
+  test-only helper.
 
-### 2. Token import and on-chain mint validation
+### 3. Make early-buyer output deterministic and semantically meaningful
 
-Implement a deterministic bootstrap-token importer. It must reject malformed
-addresses and must not treat address shape alone as on-chain mint validation.
-Validation must use committed chain/provider evidence to establish that the
-address is a token mint and record validation source, observation/chain time,
-commitment where available, evidence reference, and result.
+- Define a total stable ordering including an explicit final wallet-address (or
+  other immutable evidence-derived) tie-breaker. Results must be identical
+  across separate processes with different `PYTHONHASHSEED` values, input/page
+  permutations, and replay.
+- Separate raw net-positive token-account observations from qualified buyer
+  wallets. Use transaction signer/account metadata and canonical instruction
+  roles or an equivalent evidence-grounded classifier so a known pool, curve,
+  reserve, vault, or program-state account does not become a wallet candidate.
+  Unknown/unresolved ownership must remain explicit and fail closed for wallet
+  candidacy; do not erase its raw evidence.
+- Preserve the rule that a genuine wallet tagged possible deployer, insider,
+  bundler, funder-related, or bot is tagged rather than deleted.
+- Re-run the real pump.fun fixture: the signer/dev-buy may remain a tagged buyer;
+  the known bonding-curve reserve PDA must not be inserted as a buyer wallet or
+  discovery candidate. Update the demonstration honestly.
 
-Malformed, missing, conflicting, unresolvable, wrong-owner, or non-mint account
-evidence fails closed. A provider-capacity or environmental miss is recorded as
-missing/limited evidence, never converted to a validated mint.
+### 4. Enforce confidence and complete the automatic trigger loop
 
-### 3. Token lifecycle and market-state ledger
+- Carry snapshot confidence/completeness into winner evaluation. LOW, UNKNOWN,
+  NULL-confidence, incomplete, missing-price, missing-liquidity, zero-liquidity,
+  stale, or otherwise non-reliably-tradable observations must not create a
+  milestone or trigger. Persist explicit reason/status for ignored observations
+  where the existing schema permits; do not silently reinterpret them.
+- Preserve the versioned baseline and no-rewrite behavior for already-recorded
+  milestones.
+- Add a bounded, restart-safe production service/CLI path that claims pending
+  archaeology triggers and executes the corresponding archaeology run without
+  a human manually copying a trigger ID into another command. Exactly-once
+  canonical output must be enforced by database identities; duplicate delivery
+  is expected and safe.
+- A deterministic replay test must cross a milestone, create a trigger, invoke
+  the normal trigger processor, and produce/terminalize the linked archaeology
+  run automatically. Assert zero trade, signal, order, signer, broadcast, paid-
+  provider, and phase-advance side effects.
 
-Persist lifecycle observations, venue/program/pool identifiers, market
-snapshots, and point-in-time reference prices. Preserve source, observed_at,
-chain timestamp where available, confidence, algorithm/config version, and raw
-evidence reference. Repeated observations append or deduplicate by canonical
-source identity; they do not rewrite older beliefs.
+### 5. Make archaeology durable across crashes and preserve exact raw integers
 
-Compute winner labels only from a versioned baseline methodology and observed
-peak evidence. Make winner labels research-only. Missing contemporaneous
-supply/liquidity/reference-price data yields explicit `NULL`/low-confidence
-fields, not today's values backfilled into historical state.
+- Refactor the archaeology state machine so run/claim provenance is durably
+  visible before output work, terminalization is durable, and restart can
+  deterministically recover or fail-and-retry a stale RUNNING/CLAIMED attempt.
+  Do not leave a silent wedge and do not lose the attempt merely because the
+  worker process exits.
+- Test injected crash/failure at least: after durable run creation/claim, during
+  extraction, after output insertion but before terminalization, and during
+  terminal commit. After restart, assert one terminal canonical result, no
+  duplicated buyer/discovery output, preserved failed/stale attempt evidence,
+  and correct trigger consumption.
+- Add a forward migration from current head (do not rewrite accepted history)
+  so every Phase 2 raw on-chain quantity can represent the full unsigned 64-bit
+  domain. Use an exact integer-capable PostgreSQL type such as `NUMERIC(20,0)`
+  with range/integrality checks, and keep Python values as `int`. Add boundary
+  round-trip tests for 0/1, `2^63`, and `2^64 - 1`, plus rejection of negative,
+  fractional, and `2^64` values where the field is u64.
 
-### 4. Historical provider adapters and archaeology service
+## Frozen remediation acceptance tests
 
-Implement provider-neutral historical adapters over the already-approved
-free-first sources and Phase 1 provider contracts. Pagination, repeated cursor,
-truncation, empty-page, rate-limit, and partial-response behavior must be
-explicit and fail closed for completeness claims. Record provider usage through
-the existing accounting path.
+The new submission must include and pass, at minimum:
 
-Implement one deterministic historical archaeology run for a verified token.
-The run must persist its token, input evidence set, provider/source, time range,
-algorithm/config/git identity, known gaps, completeness statement, winner
-definition/baseline version, output candidate rows, and terminal status.
-Retries or replay must not duplicate outputs or erase a failed/partial prior
-attempt.
+1. **R1 mint discriminator:** the independent 165-byte token-account false
+   positive now fails closed; valid legacy/Token-2022 mints pass; malformed,
+   wrong-owner, non-mint, conflicting-entry, unavailable, and missing evidence
+   never persist `mint_validated=True`; available chain/commitment provenance is
+   stored.
+2. **R2 provider matrix:** one deterministic contract suite covers every P2-T8
+   case listed above and asserts exact terminal completeness/status, evidence
+   references, and usage records. A source-text assertion or caller-supplied
+   `--partial` flag alone is not proof.
+3. **R3 deterministic meaningful buyers:** subprocess/hash-seed tests prove
+   byte-identical ordering. The real fixture produces no reserve-PDA wallet
+   candidate while preserving the raw observation and genuine signer/dev-buy.
+4. **R4 confidence:** a 100x LOW/UNKNOWN/incomplete peak creates no milestone or
+   trigger; an otherwise identical accepted-confidence observation produces the
+   expected one-time milestone and trigger; replay/restart stays idempotent.
+5. **R5 automatic execution:** normal production wiring consumes a newly
+   generated trigger into one linked terminal archaeology run without manual
+   trigger-ID transport.
+6. **R6 crash matrix:** injected crashes at all required boundaries recover
+   deterministically with preserved attempt provenance and no duplicate output.
+7. **R7 u64 persistence:** migration from 0008/current head, zero-to-head,
+   downgrade/re-upgrade per repository convention, and exact u64 boundary
+   round trips pass on the available PostgreSQL substitute.
+8. **Regression:** all original P2-T1 through P2-T11 tests remain, are corrected
+   where they overstated coverage, and pass; Phase 1.5 semantic/golden tests,
+   full repository suite, Ruff lint/format, mypy, secret scan, and real-chain
+   fixture validation pass or carry only previously approved environmental
+   deferrals.
 
-### 5. Early-buyer extraction and wallet candidates
+The audit environment lacked `ARGUS_DB_ADMIN_PASSWORD`, so its independent
+integration rerun could not start; this is not a new deferral for the builder.
+The builder must run the database tests in its already-demonstrated local
+PostgreSQL environment and report exact commands/counts.
 
-Extract distinct meaningful net buyers using deterministic net-flow semantics,
-stable ordering, and explicit tie-breaking. Record all MASTER_SPEC section 33
-fields that evidence can support. Keep raw amounts and Decimal conversions
-separate. Exclude no address merely because a tag suggests deployer, insider,
-bundler, related funder, or bot; persist those as tags with evidence and
-confidence.
+## Evidence and handoff
 
-Create wallet candidates and a `wallet_discovery_event` for each discovery.
-Persist exact discovery channel and trigger linkage. The observation that
-caused discovery must be permanently queryable as discovery-contaminated for
-Phase 3 qualification exclusion. Do not implement or claim Phase 3 wallet
-scoring.
+Create fresh immutable files (do not overwrite Phase 2 evidence):
 
-### 6. Prospective winner watcher and automatic trigger
+- `orchestration/checkpoints/phase_2_remediation.md`
+- `orchestration/bundles/phase_2_remediation.txt`
 
-Implement the deterministic prospective discovery path. A token crossing a
-versioned winner milestone from point-in-time market observations creates one
-idempotent winner-milestone event and one bounded archaeology trigger. Duplicate
-or replayed observations must not create duplicate milestone or trigger rows.
-Out-of-order, stale, low-confidence, or incomplete observations must not
-silently rewrite an earlier milestone decision.
-
-The watcher may be demonstrated with deterministic REPLAY data when live
-provider access remains environmentally unavailable. A replay is not live
-Helius validation and must be labeled as replay. Automatic archaeology here
-means automatic creation/execution of the research job within the Phase 2
-system; it does not mean a trade, quote, order, or live execution action.
-
-### 7. Negative-control schema support
-
-Persist enough structure to associate winner-token archaeology with control
-tokens and the matching dimensions named by MASTER_SPEC section 31: launch
-period, venue, early liquidity, early market cap, and early transaction
-activity. Phase 2 acceptance requires schema and deterministic round-trip
-support, not completion of a full negative-control study.
-
-### 8. CLI/runtime wiring and reports
-
-Wire the production code through ordinary ARGUS CLI/service entry points. At
-minimum provide reproducible commands to import/validate a token, run historical
-archaeology, and run/replay the prospective winner watcher. Tests that call an
-unwired helper do not prove this requirement.
-
-Produce the MASTER_SPEC Phase 2 demonstration for at least one verified real
-historical token. Reusing the verified Phase 1.5 token is allowed if provenance
-and validation remain authentic. Report mint, winner category, baseline method,
-early buyers, data source, history limitations, and sanitized sample rows.
-
-## Prospective acceptance tests
-
-Write tests before or with implementation. Each test must assert durable state
-and forbidden side effects, not only that no exception occurred.
-
-### P2-T1 — mint validation fails closed
-
-Cover valid committed mint evidence plus malformed address, valid-shaped
-non-mint account, wrong owner, missing account, malformed provider response,
-and unavailable provider. Only authentic mint evidence may persist a validated
-status. No credential or live call is required for the deterministic fixture
-test.
-
-### P2-T2 — lifecycle and market snapshots preserve point-in-time truth
-
-Persist multiple lifecycle/market observations for one token. Assert older
-rows remain unchanged, observed_at differs from chain time, confidence/source/
-evidence references persist, and unavailable historical fields remain NULL.
-
-### P2-T3 — winner baseline is tradable and versioned
-
-Use a fixture containing a zero-liquidity launch observation followed by a
-reliably tradable observation. Assert the zero-liquidity point is not used to
-inflate the winner multiple; persist baseline version, timestamp, price,
-liquidity, peak, category, and reason codes. Assert winner labels cannot create
-trade intents or signals.
-
-### P2-T4 — historical archaeology works on real evidence
-
-Run the production CLI/service path for at least one verified historical token
-using committed real evidence. Assert an archaeology run, source/time range,
-gaps/completeness, input references, early buyers, wallet candidates, and
-discovery events persist. Mocks may test errors but cannot satisfy this real-
-evidence demonstration.
-
-### P2-T5 — early-buyer extraction is reproducible
-
-Replay identical evidence twice and in different page/delivery order. Assert
-the same distinct-buyer set, stable sequence/tie-break order, raw amounts,
-supported Decimal USD estimates, lifecycle/venue fields, tags, and no duplicate
-rows. Explicitly assert unavailable buyers are not invented.
-
-### P2-T6 — discovery contamination remains identifiable
-
-For every candidate created by archaeology, assert the exact trigger token/
-event/reason/channel/algorithm version is persisted and queryable. Assert the
-trigger observation is marked for later `DISCOVERY_CONTAMINATION` exclusion
-without deleting it. Do not calculate Phase 3 qualification scores.
-
-### P2-T7 — prospective milestone trigger is idempotent
-
-Replay below-threshold, threshold-crossing, duplicate, stale, out-of-order, and
-restarted-worker observations. Assert exactly one milestone and one archaeology
-trigger for each first valid crossing; no phase skip, signal, trade intent,
-order, or execution side effect may occur.
-
-### P2-T8 — historical provider failure matrix
-
-Cover pagination, repeated cursor/cycle, duplicate page, empty page before
-completion, truncation/cap, timeout, rate limit, malformed response, and partial
-success. Assert source limitations and terminal run status are explicit and no
-partial response is reported as complete.
-
-### P2-T9 — negative-control schema round trip
-
-Persist a winner token, a matched control token, matching dimensions, method/
-version, and evidence references. Assert the control is not mislabeled a
-winner and no live eligibility is derived from either label.
-
-### P2-T10 — migration, restart, and concurrency safety
-
-Test migration from zero and current head, role grants, duplicate concurrent
-trigger delivery, crash/restart around archaeology-run creation and output
-commit, and rollback on persistence failure. Assert no lost provenance,
-partially claimed success, or duplicate canonical output.
-
-### P2-T11 — predecessor regression and safety
-
-Replay all historical golden parser fixtures and the Phase 1.5 semantic-gate
-tests. Assert no unexpected classification/eligibility change, all ambiguous
-and unsupported semantics remain ineligible, and no signer/private-key/
-broadcast/live-arm/paid-provider path is introduced.
-
-## Mandatory validation and evidence
-
-Before handoff, run and record:
-
-1. focused Phase 2 unit, contract, and property tests;
-2. real-evidence historical archaeology demonstration;
-3. deterministic prospective-watcher replay;
-4. migration-from-zero and upgrade-from-current-head checks against the
-   available local PostgreSQL substitute, labeled accurately;
-5. parser/golden and Phase 1.5 regression tests;
-6. all affected integration and restart/concurrency tests;
-7. full repository test suite;
-8. Ruff lint and format checks;
-9. mypy;
-10. tracked-file secret scan;
-11. `argus fixtures validate-real-chain`;
-12. generated demonstration/report reproducibility check.
-
-Report exact commands, counts, failures, skips, and environment. If a check is
-environmentally unavailable, classify it honestly and cite the already-
-approved deferral or stop for orchestrator review; do not invent a pass. PG16
-must never be described as PG17 validation.
-
-Create fresh immutable evidence:
-
-- `orchestration/checkpoints/phase_2.md`
-- `orchestration/bundles/phase_2.txt`
-
-The checkpoint must include:
-
-1. instruction/target/result commit identities and changed files;
-2. requirement-to-code/test/evidence matrix for every Phase 2 acceptance item;
-3. schema/migration and role-grant summary;
-4. the verified historical-token demonstration and sanitized sample rows;
-5. source/provider/time-range/gap/completeness details;
-6. early-buyer reproducibility and idempotency results;
-7. discovery provenance and contamination-exclusion proof;
-8. prospective milestone/replay and restart proof;
-9. negative-control schema proof;
-10. all commands and exact results;
-11. environmental deferrals and non-blocking debt;
-12. security, credential, paid-provider, and live-state confirmation;
-13. deviations;
-14. explicit STOP pending independent Phase 2 audit.
+The checkpoint must map P2-R1 through P2-R8 to exact code, tests, and fresh
+command output; include adversarial before/after proofs, migration and crash
+matrices, provider failure matrix, updated real-token demonstration, all test
+counts/skips/failures, environmental limits, security/cost confirmation, and an
+explicit STOP. The bundle must contain the checkpoint bytes verbatim and the
+review evidence required by PROTOCOL.md.
 
 Update `docs/BUILD_STATE.md`, append `docs/DECISION_LOG.md`, and replace
-`orchestration/AGENT_HANDOFF.md` with a new handoff. Apply this instruction's
-explicit approval by setting `last_orchestrator_approved_phase: 1.5` and
-`approved_commit: c3148cc191de58ecab9b11cd05291cc8ffe45455`. Do not mark
-Phase 2 approved.
+`orchestration/AGENT_HANDOFF.md` with a new matching handoff. Do not mark Phase
+2 orchestrator-approved. Use a new `HANDOFF_ID` and exactly:
 
-Use a new `HANDOFF_ID` and exactly:
+`LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-2-remediation-001`
 
-`LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-2-001`
+Every implementation-agent commit must end with exactly one real terminal Git
+trailer:
 
-Every implementation-agent commit in this run must use exactly one real
-terminal Git trailer recognized by `git interpret-trailers --parse`, as the sole
-final paragraph:
+`ARGUS-INSTRUCTION-ID: argus-phase-2-remediation-001`
 
-`ARGUS-INSTRUCTION-ID: argus-phase-2-001`
-
-Push all authorized work, verify clean worktree and local/remote HEAD equality,
-then STOP. Do not modify this instruction file, self-authorize Phase 2, begin
-Phase 3, or perform any later-phase work.
+Push, verify clean worktree and exact local/remote HEAD equality, then STOP.
 
 ## Prohibitions preserved
 
-This instruction does not authorize any mainnet trade, canary, transaction
-broadcast, quote intended for execution, signer/private-key/seed access,
-credential entry or disclosure, paid-provider upgrade or usage, live arming,
-threshold relaxation, evidence rewrite, phase skip, or work outside Phase 2.
-
+This instruction does not authorize Phase 3, a phase skip, mainnet trade,
+canary, quote intended for execution, transaction signing or broadcast,
+signer/private-key/seed access, credential entry/disclosure, paid-provider
+upgrade or use, live arming, threshold relaxation, evidence rewrite, or any
+work outside the frozen Phase 2 remediation above. Claude must not modify this
+instruction file or self-authorize Phase 2 or any later phase.
