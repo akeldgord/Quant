@@ -1282,17 +1282,27 @@ def wallets_acquire_history(
         50, "--max-pages", help="Safety ceiling per address walked (wallet + each token account)."
     ),
     page_size: int = typer.Option(1000, "--page-size", help="Signatures requested per page."),
+    expected_oldest_slot: int | None = typer.Option(
+        None,
+        "--expected-oldest-slot",
+        help="Optional independently known boundary (e.g. this wallet's first-observed slot "
+        "from other evidence) for the wallet-address walk only -- a premature short/empty "
+        "page before this slot is reported PARTIAL with the boundary named, rather than "
+        "trusted as genuine completion. Omit for the exact unbounded no-boundary behavior.",
+    ),
 ) -> None:
-    """P3-R1/P3-R2 remediation round 2: the real, live acquisition path
-    for a wallet -- opens a Helius RPC client (same credential/usage-
-    recorder wiring as 'argus ingest run'), walks the wallet address's
-    own signature history, enumerates its associated SPL token accounts,
-    walks each of those too, feeds every uniquely-signed transaction
-    through the real chain_events/swaps parser/persistence path, and
-    persists one immutable wallet_acquisition_runs manifest row. Prints
-    the resulting run_id -- pass it to 'wallets reconstruct-and-score
-    --acquisition-run-id' as LIVE_ACQUISITION_WALK evidence. There is no
-    remaining path from a caller-supplied file to a completeness claim."""
+    """P3-R1/P3-R2 remediation rounds 2-3: the real, live acquisition
+    path for a wallet -- opens a Helius RPC client (same credential/
+    usage-recorder wiring as 'argus ingest run'), walks the wallet
+    address's own signature history, enumerates its associated SPL token
+    accounts, walks each of those too, feeds every uniquely-signed
+    transaction through the real chain_events/swaps parser/persistence
+    path, and persists one immutable wallet_acquisition_runs manifest row
+    naming the run's own exact acquired-evidence set (not merely a
+    summary claim). Prints the resulting run_id -- pass it to 'wallets
+    reconstruct-and-score --acquisition-run-id' as LIVE_ACQUISITION_WALK
+    evidence. There is no remaining path from a caller-supplied file to a
+    completeness claim."""
     from datetime import UTC, datetime
 
     import httpx
@@ -1347,6 +1357,7 @@ def wallets_acquire_history(
                         provider_name="helius_live_acquisition",
                         max_pages=max_pages,
                         page_size=page_size,
+                        expected_oldest_slot=expected_oldest_slot,
                         now=now,
                     )
         finally:

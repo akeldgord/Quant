@@ -88,6 +88,15 @@ class AcquisitionResult:
     pages_fetched: int
     signatures_seen: int
     transaction_fetch_failures: int
+    # P3-R2 remediation round 3 (`argus-phase-3-remediation-003`): the
+    # exact caller-supplied boundary and whether THIS walk actually
+    # observed it, as real typed fields -- never re-derived from
+    # ``known_gaps`` prose by a downstream persistence layer.
+    # ``boundary_satisfied`` is ``None`` only when no boundary was
+    # supplied at all (nothing to satisfy), matching
+    # ``expected_oldest_slot is None``.
+    expected_oldest_slot: int | None
+    boundary_satisfied: bool | None
 
 
 async def acquire_historical_transactions(
@@ -260,4 +269,6 @@ async def acquire_historical_transactions(
         pages_fetched=page_number,
         signatures_seen=len(all_signatures),
         transaction_fetch_failures=fetch_failures,
+        expected_oldest_slot=expected_oldest_slot,
+        boundary_satisfied=(None if expected_oldest_slot is None else boundary_satisfied),
     )

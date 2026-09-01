@@ -2057,3 +2057,127 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/checkpoints/phase_3.md`/`phase_3_remediation.md` and
   their bundles are left byte-for-byte unmodified, preserved as evidence.
 - git_commit: 5735e0bd314314004add920fbb8cf6fd40d43db3
+
+### 2026-09-01 — Phase 3 third remediation (P3-R2 final: real acquired-
+### evidence binding + fail-closed manifest decoding)
+
+- requirement_id: MASTER_SPEC.md v2.0 Phase 3, section 34 (evidence-
+  derived history completeness), CORE-001/CORE-004.
+- decision: implemented the one remaining finding named by independent
+  focused re-audit `argus-phase-3-remediation-audit-002`
+  (`FAIL_NARROW_REMEDIATION_REQUIRED` on round 2's remediation at
+  `ad21304a2f9fedd3c11a39a8d840ce577e0afe58`), per orchestrator
+  instruction `argus-phase-3-remediation-003`
+  (`AUTHORIZED_ACTION: CLOSE_FINAL_FROZEN_PHASE_3_ACQUISITION_EVIDENCE_
+  DEFECT`, `APPROVES_PHASE: NONE`). Narrowly scoped: amended only the
+  existing P3-R2 acquisition evidence path and the minimal append-only
+  schema/model/CLI wiring the instruction itself named -- no
+  previously-closed finding was reopened or reworked, no
+  `HARDENING_BACKLOG` item pulled into scope.
+- reason: the re-audit found the persisted acquisition manifest was
+  still only a trusted summary assertion -- it stored status,
+  enumeration, account pubkey/mint/owner, provider, gaps, and a
+  synthetic `evidence_reference` string, but no run/as-of identity
+  inside the manifest itself, no per-address page/transaction counts, no
+  transaction signatures, no chain-event/payload hashes, no parser
+  outcomes, no swap/event references, no expected-boundary state, and no
+  exact raw/parser input set; `load_verified_acquisition_manifest`
+  verified only row existence/`wallet_id`/`observation_cutoff` and then
+  trusted the JSONB blindly, meaning a successful address walk could be
+  marked COMPLETE/HIGH even when an acquired transaction raised in
+  parsing or an already-known chain event was skipped without proving it
+  supplied the required parsed input -- the exact frozen prohibition on
+  using a successful walk to bless an unrelated/incomplete swaps
+  fragment. Separately, `manifest_from_dict` used
+  `bool(data["token_accounts_enumerated"])`; the audit reproduced
+  directly that `bool("false")` is `True` in Python, so a persisted JSON
+  string `"false"` was silently accepted as `True`, directly failing
+  round 2's own explicit acceptance sentence "string false is not
+  accepted as true."
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-3-remediation-003` (`STATUS: ACTIVE`, `TARGET_COMMIT:
+  ad21304a2f9fedd3c11a39a8d840ce577e0afe58`, `AUTHORIZED_PHASE: 3`,
+  `APPROVES_PHASE: NONE`; all mandatory session-start preconditions --
+  single instruction-only commit whose parent exactly matches
+  `TARGET_COMMIT`, changing only
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`, Phase 3 awaiting review
+  and not yet orchestrator-approved, clean/synced worktree, local HEAD
+  equal to freshly-fetched remote HEAD -- independently verified before
+  this task began).
+- impact: `src/argus/wallets/history_reconstruction.py`:
+  `AcquisitionManifest` gains its own bound `run_id`/`wallet_id`/
+  `wallet_address`/`observation_cutoff`/`algorithm_version` identity, a
+  new `WalkStats` type (status/known_gaps/pages_fetched/signatures_seen/
+  transaction_fetch_failures/expected_oldest_slot/boundary_satisfied)
+  attached to the wallet-address walk and every associated-token-account
+  walk, and a new `acquired_evidence: tuple[AcquiredEvidenceRecord, ...]`
+  naming the exact signature/slot/chain_event_id/payload_hash/
+  parser_outcome/parser_version/build_hash/derived_swap_id for every
+  signature the run touched; `manifest_from_dict` now requires
+  `token_accounts_enumerated` to be a genuine `isinstance(..., bool)`
+  JSON boolean (never `bool(...)`-coerced), validates every status/
+  outcome literal against a recognized-constant set, and rejects
+  duplicate account pubkeys or duplicate evidence signatures within one
+  manifest outright, raising a new `ManifestDecodeError` rather than
+  coercing anything malformed. `src/argus/wallets/acquisition.py`:
+  `run_wallet_acquisition` generates `run_id` before building the
+  manifest, verifies each enumerated token account's on-chain `owner`
+  actually matches the wallet being acquired (excluding any mismatch
+  from coverage entirely, its transactions never walked), and treats a
+  parse exception, a payload-hash mismatch against a pre-existing event,
+  or an already-known event with no derived swap evidence as an
+  explicit, honestly-named `acquired_evidence` gap outcome (`PARSE_
+  FAILED`/`PAYLOAD_HASH_MISMATCH`) rather than silently trusting mere
+  event existence -- an already-known event with no prior derived
+  evidence is instead parsed now through the normal path, becoming
+  genuine `PARSED` evidence on success; `load_verified_acquisition_
+  manifest` now independently re-verifies every `PARSED`/`ALREADY_
+  KNOWN_VERIFIED` entry against the real, current `chain_events`/
+  `swaps` rows (exact id/signature/wallet_address/payload_hash match,
+  and `derived_swap_id` resolving to a real row for that same event)
+  before ever returning the manifest, and additionally rejects a
+  manifest whose own `run_id`/`wallet_id` disagrees with the row it was
+  persisted under, or whose associated-account `owner` disagrees with
+  its own `wallet_address`. `src/argus/wallets/history_reconstruction.py`'s
+  `assess_wallet_history` gains a gap-evidence check: even a wallet walk
+  reporting COMPLETE with fully-enumerated, fully-complete accounts is
+  capped at MEDIUM if any acquired signature never became verified
+  usable evidence. `src/argus/tokens/historical_acquisition.py`'s
+  `AcquisitionResult` gains matching `expected_oldest_slot`/
+  `boundary_satisfied` fields, populated from the walk's own already-
+  computed boundary state rather than re-derived from `known_gaps`
+  prose by a downstream persistence layer; `src/argus/cli.py`'s `argus
+  wallets acquire-history` gains a matching `--expected-oldest-slot`
+  option, mirroring Phase 2's own `acquire-and-run-archaeology` flag.
+  18 new focused integration tests in
+  `tests/integration/test_wallet_acquisition.py` (6 -> 24): fail-closed
+  manifest decoding (the reproduced `bool("false")` defect, numeric
+  truthy values, missing required fields, unrecognized status literals,
+  duplicate account/evidence identities), exact evidence binding and
+  independent verification-on-load for both an empty and a populated
+  acquisition, every non-HIGH-blessing gap scenario (parser exception,
+  transaction fetch failure, pre-existing-event reparse success,
+  pre-existing-event-with-existing-evidence, payload-hash mismatch),
+  account-owner-mismatch exclusion, load-time rejection of an unresolved
+  chain-event reference/payload-hash mismatch/account-owner mismatch,
+  and the full expected-oldest-slot boundary-supplied-unsatisfied/
+  satisfied/no-boundary-regression matrix. No new migration this round
+  (alembic head unchanged at `0015`); the existing migration-preservation
+  regression tests were re-run and confirmed passing unchanged.
+  `docs/BUILD_STATE.md` gained a new "3 (remediation round 3)"
+  phase-history row; `last_orchestrator_approved_phase`/`approved_commit`
+  remain `2`/`a13ba2ab8729a08de3c571b7b12c32cc3f14c56b` -- this
+  instruction approves no phase. 777 tests passing (up from 759),
+  ruff+mypy+format clean, 12/12 real-chain fixtures ok, secret scan
+  clean on this round's 7 changed files. The accepted
+  `PHASE_3_CANDIDATE_SAMPLE_BLOCKED` result is unchanged, per this
+  instruction's own explicit statement that it "remains accepted." See
+  `orchestration/checkpoints/phase_3_remediation_3.md` for the full
+  disposition; the paired bundle
+  (`orchestration/bundles/phase_3_remediation_3.txt`) embeds the raw
+  stdout and exit status of every required command verbatim; historical
+  `orchestration/checkpoints/phase_3.md`/`phase_3_remediation.md`/
+  `phase_3_remediation_2.md` and their bundles are left byte-for-byte
+  unmodified, preserved as evidence.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT

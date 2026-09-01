@@ -43,6 +43,7 @@ honest completeness judgment itself).
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -55,7 +56,7 @@ from argus.domain.wallet_history_quality import (
     COMPLETENESS_MEDIUM,
     COMPLETENESS_UNKNOWN,
 )
-from argus.tokens.historical_acquisition import STATUS_COMPLETE, STATUS_PARTIAL
+from argus.tokens.historical_acquisition import STATUS_COMPLETE, STATUS_FAILED, STATUS_PARTIAL
 
 ALGORITHM_VERSION: Final[str] = "history_reconstruction_v2"
 
@@ -63,6 +64,65 @@ EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK: Final[str] = "LIVE_ACQUISITION_WALK"
 EVIDENCE_SOURCE_STREAM_FORWARD_ONLY: Final[str] = "STREAM_FORWARD_ONLY"
 
 EvidenceSource = Literal["LIVE_ACQUISITION_WALK", "STREAM_FORWARD_ONLY"]
+
+_VALID_WALK_STATUSES: Final[frozenset[str]] = frozenset(
+    {STATUS_COMPLETE, STATUS_PARTIAL, STATUS_FAILED}
+)
+
+# P3-R2 remediation round 3 (`argus-phase-3-remediation-003`): the exact
+# fate of one acquired-or-already-known transaction, per signature --
+# never inferred from "a chain_events row with this signature exists,"
+# which the round-2 audit proved lets a successful address walk bless an
+# unrelated/incomplete swaps fragment. Only PARSED/ALREADY_KNOWN_VERIFIED
+# entries count as genuine usable evidence; any other outcome is an
+# explicit, honestly-named gap that caps completeness below HIGH.
+EVIDENCE_OUTCOME_PARSED: Final[str] = "PARSED"
+EVIDENCE_OUTCOME_PARSE_FAILED: Final[str] = "PARSE_FAILED"
+EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED: Final[str] = "ALREADY_KNOWN_VERIFIED"
+EVIDENCE_OUTCOME_PAYLOAD_HASH_MISMATCH: Final[str] = "PAYLOAD_HASH_MISMATCH"
+
+_VALID_EVIDENCE_OUTCOMES: Final[frozenset[str]] = frozenset(
+    {
+        EVIDENCE_OUTCOME_PARSED,
+        EVIDENCE_OUTCOME_PARSE_FAILED,
+        EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED,
+        EVIDENCE_OUTCOME_PAYLOAD_HASH_MISMATCH,
+    }
+)
+
+_GENUINE_EVIDENCE_OUTCOMES: Final[frozenset[str]] = frozenset(
+    {EVIDENCE_OUTCOME_PARSED, EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED}
+)
+
+
+class ManifestDecodeError(ValueError):
+    """A persisted acquisition-run manifest failed strict, fail-closed
+    decoding (P3-R2 remediation round 3) -- a non-boolean
+    ``token_accounts_enumerated`` (the round-2-audit-reproduced
+    ``bool("false") is True`` defect), an unrecognized status/outcome
+    literal, or a duplicate account/evidence identity within one
+    manifest. Never silently coerced or dropped -- a malformed manifest
+    can never be used as scoring evidence at all."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class WalkStats:
+    """The real, machine-checkable outcome of one paginated address walk
+    (the wallet address itself, or one associated token account) --
+    P3-R2 remediation round 3's own explicit requirement: "pages fetched,
+    signatures seen and transaction-fetch failures," plus the optional
+    caller-supplied boundary and whether it was actually satisfied,
+    exactly as :func:`argus.tokens.historical_acquisition.
+    acquire_historical_transactions` itself observed -- never re-derived
+    from prose in ``known_gaps``."""
+
+    status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED
+    known_gaps: str | None
+    pages_fetched: int
+    signatures_seen: int
+    transaction_fetch_failures: int
+    expected_oldest_slot: int | None
+    boundary_satisfied: bool | None  # None only when no boundary was supplied
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -75,12 +135,39 @@ class TokenAccountCoverage:
     identity -- a wallet can hold multiple distinct token accounts for
     the same mint, and ``owner`` is the on-chain proof this account
     genuinely belongs to the wallet being assessed, not merely
-    coincidentally sharing a mint."""
+    coincidentally sharing a mint. ``walk`` (round 3) carries this
+    account's own page/signature/failure counts, never merely a terminal
+    status string."""
 
     pubkey: str
     mint: str
     owner: str
-    status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED
+    status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED -- mirrors walk.status
+    walk: WalkStats
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AcquiredEvidenceRecord:
+    """One signature's exact, machine-resolvable fate within an
+    acquisition run (P3-R2 remediation round 3) -- the precise "raw/
+    parser input set used for reconstruction" the round-2 audit found
+    entirely unrepresented. ``chain_event_id``/``payload_hash`` are
+    verified against the real ``chain_events`` row on load (see
+    ``argus.wallets.acquisition.load_verified_acquisition_manifest``),
+    never trusted from the JSONB alone; ``derived_swap_id`` is likewise
+    verified to be a real ``swaps`` row for that exact event when
+    ``parser_outcome`` claims genuine evidence
+    (``PARSED``/``ALREADY_KNOWN_VERIFIED``)."""
+
+    address: str  # which walk this signature was observed under
+    signature: str
+    slot: int
+    chain_event_id: str
+    payload_hash: str
+    parser_outcome: str  # one of the EVIDENCE_OUTCOME_* constants
+    parser_version: str | None
+    build_hash: str | None
+    derived_swap_id: str | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -91,11 +178,28 @@ class AcquisitionManifest:
     enumeration call was made and found this exact set of accounts"
     (even if that set is empty) from "no enumeration was ever
     attempted" -- the latter can never support ``HIGH``, no matter how
-    complete the wallet-address walk itself was."""
+    complete the wallet-address walk itself was.
 
+    P3-R2 remediation round 3 (`argus-phase-3-remediation-002`'s own
+    round-2 audit): a manifest is no longer a trusted summary assertion.
+    ``run_id``/``wallet_id``/``wallet_address``/``observation_cutoff``
+    bind this manifest's own identity (never merely the row it happens
+    to be stored in); ``wallet_walk`` carries the wallet-address walk's
+    real page/signature/failure/boundary evidence; and
+    ``acquired_evidence`` names the EXACT raw/parser input set this run
+    is built from, each entry independently verified against real
+    ``chain_events``/``swaps`` rows on load."""
+
+    run_id: uuid.UUID
+    wallet_id: uuid.UUID
+    wallet_address: str
+    observation_cutoff: datetime
+    algorithm_version: str
     wallet_walk_status: str  # STATUS_COMPLETE / STATUS_PARTIAL / STATUS_FAILED
+    wallet_walk: WalkStats
     token_accounts_enumerated: bool
     associated_token_accounts: tuple[TokenAccountCoverage, ...]
+    acquired_evidence: tuple[AcquiredEvidenceRecord, ...]
     provider_set: str
     known_gaps: str | None
     evidence_reference: str
@@ -134,13 +238,84 @@ class HistoryAssessment:
         self.acquisition_manifest = acquisition_manifest
 
 
+def _walk_stats_as_dict(walk: WalkStats) -> dict:
+    return {
+        "status": walk.status,
+        "known_gaps": walk.known_gaps,
+        "pages_fetched": walk.pages_fetched,
+        "signatures_seen": walk.signatures_seen,
+        "transaction_fetch_failures": walk.transaction_fetch_failures,
+        "expected_oldest_slot": walk.expected_oldest_slot,
+        "boundary_satisfied": walk.boundary_satisfied,
+    }
+
+
+def _walk_stats_from_dict(data: dict, *, context: str) -> WalkStats:
+    status = data.get("status")
+    if status not in _VALID_WALK_STATUSES:
+        raise ManifestDecodeError(f"{context}: status {status!r} is not a recognized walk status")
+    boundary_satisfied = data.get("boundary_satisfied")
+    if boundary_satisfied is not None and not isinstance(boundary_satisfied, bool):
+        raise ManifestDecodeError(
+            f"{context}: boundary_satisfied must be a real JSON boolean or null, got "
+            f"{boundary_satisfied!r}"
+        )
+    for int_field in ("pages_fetched", "signatures_seen", "transaction_fetch_failures"):
+        value = data.get(int_field)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ManifestDecodeError(f"{context}: {int_field} must be an integer, got {value!r}")
+    expected_oldest_slot = data.get("expected_oldest_slot")
+    if expected_oldest_slot is not None and (
+        not isinstance(expected_oldest_slot, int) or isinstance(expected_oldest_slot, bool)
+    ):
+        raise ManifestDecodeError(
+            f"{context}: expected_oldest_slot must be an integer or null, got "
+            f"{expected_oldest_slot!r}"
+        )
+    return WalkStats(
+        status=status,
+        known_gaps=data.get("known_gaps"),
+        pages_fetched=data["pages_fetched"],
+        signatures_seen=data["signatures_seen"],
+        transaction_fetch_failures=data["transaction_fetch_failures"],
+        expected_oldest_slot=expected_oldest_slot,
+        boundary_satisfied=boundary_satisfied,
+    )
+
+
 def manifest_as_dict(manifest: AcquisitionManifest) -> dict:
     return {
+        "run_id": str(manifest.run_id),
+        "wallet_id": str(manifest.wallet_id),
+        "wallet_address": manifest.wallet_address,
+        "observation_cutoff": manifest.observation_cutoff.isoformat(),
+        "algorithm_version": manifest.algorithm_version,
         "wallet_walk_status": manifest.wallet_walk_status,
+        "wallet_walk": _walk_stats_as_dict(manifest.wallet_walk),
         "token_accounts_enumerated": manifest.token_accounts_enumerated,
         "associated_token_accounts": [
-            {"pubkey": tac.pubkey, "mint": tac.mint, "owner": tac.owner, "status": tac.status}
+            {
+                "pubkey": tac.pubkey,
+                "mint": tac.mint,
+                "owner": tac.owner,
+                "status": tac.status,
+                "walk": _walk_stats_as_dict(tac.walk),
+            }
             for tac in manifest.associated_token_accounts
+        ],
+        "acquired_evidence": [
+            {
+                "address": ev.address,
+                "signature": ev.signature,
+                "slot": ev.slot,
+                "chain_event_id": ev.chain_event_id,
+                "payload_hash": ev.payload_hash,
+                "parser_outcome": ev.parser_outcome,
+                "parser_version": ev.parser_version,
+                "build_hash": ev.build_hash,
+                "derived_swap_id": ev.derived_swap_id,
+            }
+            for ev in manifest.acquired_evidence
         ],
         "provider_set": manifest.provider_set,
         "known_gaps": manifest.known_gaps,
@@ -154,16 +329,106 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
     load a verified, immutable acquisition-run record back into the same
     typed shape :func:`assess_wallet_history` requires, never to accept
     an arbitrary caller-supplied shape (see
-    ``argus.wallets.acquisition.load_verified_acquisition_manifest``)."""
-    return AcquisitionManifest(
-        wallet_walk_status=data["wallet_walk_status"],
-        token_accounts_enumerated=bool(data["token_accounts_enumerated"]),
-        associated_token_accounts=tuple(
-            TokenAccountCoverage(
-                pubkey=tac["pubkey"], mint=tac["mint"], owner=tac["owner"], status=tac["status"]
+    ``argus.wallets.acquisition.load_verified_acquisition_manifest``).
+
+    P3-R2 remediation round 3: fails closed (raises
+    :class:`ManifestDecodeError`) on anything malformed rather than
+    coercing it -- ``token_accounts_enumerated`` must be a genuine JSON
+    boolean (``bool("false")`` evaluating to ``True`` in Python is the
+    exact reproduced round-2-audit defect this replaces), every status/
+    outcome literal must be one of the recognized constants, and no
+    account pubkey or evidence signature may repeat within one manifest
+    (a duplicate is itself malformed/conflicting data, never silently
+    deduplicated here)."""
+    enumerated = data.get("token_accounts_enumerated")
+    if not isinstance(enumerated, bool):
+        raise ManifestDecodeError(
+            f"token_accounts_enumerated must be a real JSON boolean, got {enumerated!r} "
+            f"(type {type(enumerated).__name__}) -- never coerced via bool(...)"
+        )
+    wallet_walk_status = data.get("wallet_walk_status")
+    if wallet_walk_status not in _VALID_WALK_STATUSES:
+        raise ManifestDecodeError(
+            f"wallet_walk_status {wallet_walk_status!r} is not a recognized walk status"
+        )
+
+    seen_pubkeys: set[str] = set()
+    accounts: list[TokenAccountCoverage] = []
+    for tac in data.get("associated_token_accounts", []):
+        pubkey = tac.get("pubkey")
+        if not pubkey or not isinstance(pubkey, str):
+            raise ManifestDecodeError(f"associated token account missing a valid pubkey: {tac!r}")
+        if pubkey in seen_pubkeys:
+            raise ManifestDecodeError(
+                f"duplicate associated_token_accounts pubkey {pubkey!r} within one manifest -- "
+                "conflicting evidence, never silently deduplicated"
             )
-            for tac in data.get("associated_token_accounts", [])
-        ),
+        seen_pubkeys.add(pubkey)
+        status = tac.get("status")
+        if status not in _VALID_WALK_STATUSES:
+            raise ManifestDecodeError(
+                f"associated token account {pubkey!r}: status {status!r} is not recognized"
+            )
+        accounts.append(
+            TokenAccountCoverage(
+                pubkey=pubkey,
+                mint=tac["mint"],
+                owner=tac["owner"],
+                status=status,
+                walk=_walk_stats_from_dict(tac["walk"], context=f"account {pubkey!r}"),
+            )
+        )
+
+    seen_signatures: set[str] = set()
+    evidence: list[AcquiredEvidenceRecord] = []
+    for ev in data.get("acquired_evidence", []):
+        signature = ev.get("signature")
+        if not signature or not isinstance(signature, str):
+            raise ManifestDecodeError(f"acquired evidence entry missing a valid signature: {ev!r}")
+        if signature in seen_signatures:
+            raise ManifestDecodeError(
+                f"duplicate acquired_evidence signature {signature!r} within one manifest -- "
+                "conflicting evidence, never silently deduplicated"
+            )
+        seen_signatures.add(signature)
+        outcome = ev.get("parser_outcome")
+        if outcome not in _VALID_EVIDENCE_OUTCOMES:
+            raise ManifestDecodeError(
+                f"acquired evidence {signature!r}: parser_outcome {outcome!r} is not recognized"
+            )
+        chain_event_id = ev.get("chain_event_id")
+        if not chain_event_id or not isinstance(chain_event_id, str):
+            raise ManifestDecodeError(
+                f"acquired evidence {signature!r}: missing a resolvable chain_event_id"
+            )
+        payload_hash_value = ev.get("payload_hash")
+        if not payload_hash_value or not isinstance(payload_hash_value, str):
+            raise ManifestDecodeError(f"acquired evidence {signature!r}: missing a payload_hash")
+        evidence.append(
+            AcquiredEvidenceRecord(
+                address=ev["address"],
+                signature=signature,
+                slot=ev["slot"],
+                chain_event_id=chain_event_id,
+                payload_hash=payload_hash_value,
+                parser_outcome=outcome,
+                parser_version=ev.get("parser_version"),
+                build_hash=ev.get("build_hash"),
+                derived_swap_id=ev.get("derived_swap_id"),
+            )
+        )
+
+    return AcquisitionManifest(
+        run_id=uuid.UUID(data["run_id"]),
+        wallet_id=uuid.UUID(data["wallet_id"]),
+        wallet_address=data["wallet_address"],
+        observation_cutoff=datetime.fromisoformat(data["observation_cutoff"]),
+        algorithm_version=data["algorithm_version"],
+        wallet_walk_status=wallet_walk_status,
+        wallet_walk=_walk_stats_from_dict(data["wallet_walk"], context="wallet walk"),
+        token_accounts_enumerated=enumerated,
+        associated_token_accounts=tuple(accounts),
+        acquired_evidence=tuple(evidence),
         provider_set=data["provider_set"],
         known_gaps=data.get("known_gaps"),
         evidence_reference=data["evidence_reference"],
@@ -250,11 +515,35 @@ def assess_wallet_history(
                     f"{incomplete}"
                 )
             else:
-                completeness = COMPLETENESS_HIGH
-                reason = (
-                    "wallet-address walk complete and every known associated "
-                    "token-account history is complete through the stated boundary"
-                )
+                # P3-R2 remediation round 3: a COMPLETE walk status alone
+                # never proves every acquired signature actually supplied
+                # usable, verified parser evidence -- a parse exception,
+                # a payload-hash mismatch against a pre-existing event, or
+                # any other non-genuine acquired_evidence outcome is an
+                # explicit gap that caps this below HIGH, exactly the
+                # "successful walk blessing an unrelated/incomplete swaps
+                # fragment" scenario the round-2 audit named.
+                gap_evidence = [
+                    ev
+                    for ev in acquisition_manifest.acquired_evidence
+                    if ev.parser_outcome not in _GENUINE_EVIDENCE_OUTCOMES
+                ]
+                if gap_evidence:
+                    completeness = COMPLETENESS_MEDIUM
+                    outcomes = sorted({ev.parser_outcome for ev in gap_evidence})
+                    reason = (
+                        f"wallet-address walk complete and token accounts enumerated, but "
+                        f"{len(gap_evidence)} acquired signature(s) never became verified "
+                        f"usable evidence ({', '.join(outcomes)}) -- a successful address "
+                        "walk alone never blesses an unparsed/mismatched fragment"
+                    )
+                else:
+                    completeness = COMPLETENESS_HIGH
+                    reason = (
+                        "wallet-address walk complete, every known associated "
+                        "token-account history is complete through the stated boundary, "
+                        "and every acquired signature resolved to verified parser evidence"
+                    )
 
         return HistoryAssessment(
             history_start=history_start,

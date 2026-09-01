@@ -55,6 +55,7 @@ from argus.wallets.history_reconstruction import (
     EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
     EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
     AcquisitionManifest,
+    WalkStats,
     manifest_as_dict,
 )
 from argus.wallets.qualification_service import reconstruct_and_score_wallet
@@ -134,6 +135,50 @@ async def _cleanup_token(admin_engine: Any, mint: str) -> None:
         await conn.commit()
 
 
+def _complete_walk() -> WalkStats:
+    return WalkStats(
+        status=STATUS_COMPLETE,
+        known_gaps=None,
+        pages_fetched=1,
+        signatures_seen=0,
+        transaction_fetch_failures=0,
+        expected_oldest_slot=None,
+        boundary_satisfied=None,
+    )
+
+
+def _test_manifest(
+    *,
+    wallet_id: uuid.UUID,
+    wallet_address: str,
+    observation_cutoff: datetime,
+    provider_set: str = "test-fake-acquisition",
+    evidence_reference: str = "test",
+) -> AcquisitionManifest:
+    """A real, structured, HIGH-completeness acquisition manifest -- never
+    a bare caller-typed status string (P3-R2) -- with a genuinely empty
+    but real ``acquired_evidence`` set (this fixture's positions come
+    from directly-inserted swaps, not from a real acquisition walk, so
+    there is honestly no acquired-evidence set to name; the wallet-walk/
+    account-enumeration completeness fields alone are what these tests
+    exercise)."""
+    return AcquisitionManifest(
+        run_id=uuid.uuid4(),
+        wallet_id=wallet_id,
+        wallet_address=wallet_address,
+        observation_cutoff=observation_cutoff,
+        algorithm_version="test-acquisition-v1",
+        wallet_walk_status=STATUS_COMPLETE,
+        wallet_walk=_complete_walk(),
+        token_accounts_enumerated=True,
+        associated_token_accounts=(),
+        acquired_evidence=(),
+        provider_set=provider_set,
+        known_gaps=None,
+        evidence_reference=evidence_reference,
+    )
+
+
 async def _insert_acquisition_run(
     session, *, wallet_id: uuid.UUID, manifest: AcquisitionManifest, observation_cutoff: datetime
 ) -> uuid.UUID:
@@ -141,11 +186,16 @@ async def _insert_acquisition_run(
     via the ORM (P3-R2 remediation round 2) -- the DB-level equivalent of
     this project's other tests constructing a typed fixture directly
     rather than driving a live provider; production code always produces
-    this row via ``argus.wallets.acquisition.run_wallet_acquisition``."""
-    run_id = uuid.uuid4()
+    this row via ``argus.wallets.acquisition.run_wallet_acquisition``.
+    Uses ``manifest.run_id``/``manifest.wallet_id`` (round 3: the
+    manifest's own bound identity) as the row's own identity, never a
+    second, independently generated id -- ``load_verified_acquisition_
+    manifest`` now rejects a manifest whose own identity disagrees with
+    the row it was persisted under."""
+    assert manifest.wallet_id == wallet_id
     session.add(
         WalletAcquisitionRun(
-            run_id=run_id,
+            run_id=manifest.run_id,
             wallet_id=wallet_id,
             observation_cutoff=observation_cutoff,
             manifest=manifest_as_dict(manifest),
@@ -154,7 +204,7 @@ async def _insert_acquisition_run(
         )
     )
     await session.flush()
-    return run_id
+    return manifest.run_id
 
 
 async def _make_token(sessionmaker, config, mint: str, now: datetime) -> None:
@@ -940,13 +990,10 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
         # A real, structured, HIGH-completeness acquisition manifest --
         # never a bare caller-typed status string (P3-R2) -- persisted as
         # a real, verified WalletAcquisitionRun row, loaded by run_id.
-        manifest = AcquisitionManifest(
-            wallet_walk_status=STATUS_COMPLETE,
-            token_accounts_enumerated=True,
-            associated_token_accounts=(),
-            provider_set="test-fake-acquisition",
-            known_gaps=None,
-            evidence_reference="test",
+        manifest = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=1),
         )
         async with sessionmaker() as session, session.begin():
             run_id = await _insert_acquisition_run(
@@ -1069,13 +1116,10 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
         for mint in mints:
             await _make_token(sessionmaker, config, mint, now)
 
-        manifest = AcquisitionManifest(
-            wallet_walk_status=STATUS_COMPLETE,
-            token_accounts_enumerated=True,
-            associated_token_accounts=(),
-            provider_set="test-fake-acquisition",
-            known_gaps=None,
-            evidence_reference="test",
+        manifest = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=1),
         )
         async with sessionmaker() as session, session.begin():
             run_id = await _insert_acquisition_run(
@@ -1849,20 +1893,18 @@ async def test_p3r6b_changed_acquisition_manifest_forces_new_score_row_despite_e
         for mint in mints:
             await _make_token(sessionmaker, config, mint, now)
 
-        manifest_a = AcquisitionManifest(
-            wallet_walk_status=STATUS_COMPLETE,
-            token_accounts_enumerated=True,
-            associated_token_accounts=(),
+        manifest_a = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=2),
             provider_set="test-fake-acquisition-A",
-            known_gaps=None,
             evidence_reference="test: manifest A",
         )
-        manifest_b = AcquisitionManifest(
-            wallet_walk_status=STATUS_COMPLETE,
-            token_accounts_enumerated=True,
-            associated_token_accounts=(),
+        manifest_b = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=1),
             provider_set="test-fake-acquisition-B",
-            known_gaps=None,
             evidence_reference="test: manifest B, otherwise equivalent",
         )
         async with sessionmaker() as session, session.begin():

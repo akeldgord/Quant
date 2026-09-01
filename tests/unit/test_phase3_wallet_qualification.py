@@ -11,6 +11,7 @@ of superficial tests" guidance.
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -20,8 +21,10 @@ from argus.tokens.historical_acquisition import STATUS_COMPLETE, STATUS_PARTIAL
 from argus.wallets.history_reconstruction import (
     EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
     EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+    AcquiredEvidenceRecord,
     AcquisitionManifest,
     TokenAccountCoverage,
+    WalkStats,
     assess_wallet_history,
 )
 from argus.wallets.position_reconstruction import (
@@ -358,17 +361,43 @@ def test_p3_low_unknown_history_completeness_blocks_eligibility_identical_positi
 # ---------------------------------------------------------------------
 
 
+def _walk(status: str, *, known_gaps: str | None = None) -> WalkStats:
+    return WalkStats(
+        status=status,
+        known_gaps=known_gaps,
+        pages_fetched=1,
+        signatures_seen=1,
+        transaction_fetch_failures=0,
+        expected_oldest_slot=None,
+        boundary_satisfied=None,
+    )
+
+
+def _tac(*, pubkey: str, mint: str, owner: str, status: str) -> TokenAccountCoverage:
+    return TokenAccountCoverage(
+        pubkey=pubkey, mint=mint, owner=owner, status=status, walk=_walk(status)
+    )
+
+
 def _manifest(
     *,
     wallet_walk_status: str,
     token_accounts_enumerated: bool = False,
     associated_token_accounts: tuple[TokenAccountCoverage, ...] = (),
+    acquired_evidence: tuple[AcquiredEvidenceRecord, ...] = (),
     known_gaps: str | None = None,
 ) -> AcquisitionManifest:
     return AcquisitionManifest(
+        run_id=uuid.uuid4(),
+        wallet_id=uuid.uuid4(),
+        wallet_address=WALLET,
+        observation_cutoff=datetime(2026, 1, 1, tzinfo=UTC),
+        algorithm_version="test-acquisition-v1",
         wallet_walk_status=wallet_walk_status,
+        wallet_walk=_walk(wallet_walk_status, known_gaps=known_gaps),
         token_accounts_enumerated=token_accounts_enumerated,
         associated_token_accounts=associated_token_accounts,
+        acquired_evidence=acquired_evidence,
         provider_set="test-fake-provider",
         known_gaps=known_gaps,
         evidence_reference="test-evidence",
@@ -405,12 +434,8 @@ def test_p3_history_assessment_derives_from_real_acquisition_manifest_not_a_clai
             wallet_walk_status=STATUS_COMPLETE,
             token_accounts_enumerated=True,
             associated_token_accounts=(
-                TokenAccountCoverage(
-                    pubkey="pubkey-acct-1", mint="acct-1", owner=WALLET, status=STATUS_COMPLETE
-                ),
-                TokenAccountCoverage(
-                    pubkey="pubkey-acct-2", mint="acct-2", owner=WALLET, status=STATUS_COMPLETE
-                ),
+                _tac(pubkey="pubkey-acct-1", mint="acct-1", owner=WALLET, status=STATUS_COMPLETE),
+                _tac(pubkey="pubkey-acct-2", mint="acct-2", owner=WALLET, status=STATUS_COMPLETE),
             ),
         ),
     )
@@ -426,12 +451,8 @@ def test_p3_history_assessment_derives_from_real_acquisition_manifest_not_a_clai
             wallet_walk_status=STATUS_COMPLETE,
             token_accounts_enumerated=True,
             associated_token_accounts=(
-                TokenAccountCoverage(
-                    pubkey="pubkey-acct-1", mint="acct-1", owner=WALLET, status=STATUS_COMPLETE
-                ),
-                TokenAccountCoverage(
-                    pubkey="pubkey-acct-2", mint="acct-2", owner=WALLET, status=STATUS_PARTIAL
-                ),
+                _tac(pubkey="pubkey-acct-1", mint="acct-1", owner=WALLET, status=STATUS_COMPLETE),
+                _tac(pubkey="pubkey-acct-2", mint="acct-2", owner=WALLET, status=STATUS_PARTIAL),
             ),
         ),
     )
