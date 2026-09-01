@@ -1719,4 +1719,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md` for the fresh,
   from-clean-database, real end-to-end CLI re-run confirming the
   corrected behavior directly via Postgres queries.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+- git_commit: 16737ca851ec51a528f4251fa94be3ef8ae84fc9

@@ -18,7 +18,7 @@ STATUS: All 8 findings (P2-R1 through P2-R8) remediated with real,
   (R1-R7 plus the regression item) pass. Phase 2 remains NOT
   orchestrator-approved.
 UTC_TIMESTAMP: 2026-09-01T02:17:23Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 16737ca851ec51a528f4251fa94be3ef8ae84fc9
 TARGET_COMMIT: 6bde9fdf6d56c38517854700e8863d9103e831aa
 AUTHORIZED_PHASE: 2
 APPROVES_PHASE: NONE
@@ -648,7 +648,7 @@ and their own follow-up "fill in commit hash" commit), this checkpoint,
 the paired bundle, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every
 commit-hash-bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+`16737ca851ec51a528f4251fa94be3ef8ae84fc9`, then a second, immediately
 following commit fills in that first commit's own real hash in every one
 of those fields -- both commits carry the sole terminal trailer
 `ARGUS-INSTRUCTION-ID: argus-phase-2-remediation-001`, verified via
