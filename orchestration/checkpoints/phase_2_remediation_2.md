@@ -14,7 +14,7 @@ STATUS: The single named defect is fixed with real, tested code. All 4
   frozen remediation-002 acceptance tests pass. Phase 2 remains NOT
   orchestrator-approved.
 UTC_TIMESTAMP: 2026-09-01T02:53:11Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: da7d09ec8d78f38906e69e7353db39ea8d18e8e7
 TARGET_COMMIT: c99341a9c767c006cfe96fa4948dd54a9efe712b
 AUTHORIZED_PHASE: 2
 APPROVES_PHASE: NONE
@@ -275,7 +275,7 @@ self-approve Phase 2. Per this project's established two-commit
 convention, this checkpoint, the paired bundle, `docs/BUILD_STATE.md`,
 `docs/DECISION_LOG.md`, and `orchestration/AGENT_HANDOFF.md` are
 committed once with every commit-hash-bearing field set to the literal
-placeholder `PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second,
+placeholder `da7d09ec8d78f38906e69e7353db39ea8d18e8e7`, then a second,
 immediately following commit fills in that first commit's own real hash
 in every one of those fields -- both commits carry the sole terminal
 trailer `ARGUS-INSTRUCTION-ID: argus-phase-2-remediation-002` with no
