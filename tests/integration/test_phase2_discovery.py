@@ -82,6 +82,9 @@ async def _cleanup_token(admin_engine: Any, mint: str) -> None:
         if row is not None:
             token_id = row[0]
             for table, col in (
+                # Phase 3 (migration 0010): wallet_positions FK-references
+                # tokens too.
+                ("wallet_positions", "token_id"),
                 ("early_buyers", "token_id"),
                 ("wallet_discovery_events", "trigger_token_id"),
                 ("archaeology_runs", "token_id"),
@@ -107,6 +110,27 @@ async def _cleanup_wallets(admin_engine: Any, wallet_addresses: list[str]) -> No
             ).fetchone()
             if row is not None:
                 wid = row[0]
+                # Phase 3 (migration 0010) added child tables that FK-
+                # reference wallets -- clean those up too, or a wallet
+                # this test's own real-evidence run also fed through
+                # `argus wallets reconstruct-and-score` cannot be deleted.
+                for table in (
+                    "wallet_tier_history",
+                    "wallet_score_snapshots",
+                    "wallet_metrics_snapshots",
+                    "wallet_positions",
+                    "wallet_history_quality",
+                ):
+                    await conn.execute(
+                        text(f"DELETE FROM {table} WHERE wallet_id = :w"), {"w": wid}
+                    )
+                await conn.execute(
+                    text(
+                        "DELETE FROM wallet_cluster_links WHERE wallet_a_id = :w "
+                        "OR wallet_b_id = :w"
+                    ),
+                    {"w": wid},
+                )
                 await conn.execute(
                     text("DELETE FROM early_buyers WHERE wallet_id = :w"), {"w": wid}
                 )
@@ -1375,13 +1399,19 @@ async def test_p2t10_phase2_tables_have_role_grants_matching_immutability_conven
     """Direct proof (not just code review) that argus_ingest can insert
     into every Phase 2 append-only table but cannot delete from it, and
     argus_research can read but not write -- the same DB-enforced
-    immutability convention as parse_attempts/commitment_observations."""
+    immutability convention as parse_attempts/commitment_observations.
+
+    ``tokens``/``wallets`` are deliberately excluded here: both carry a
+    denormalized "current stage/tier" cache column
+    (``tokens.current_lifecycle_stage``, and since migration 0010
+    ``wallets.current_tier``) that legitimate application code must
+    update in place, so argus_ingest genuinely needs UPDATE on them --
+    covered instead by each phase's own tests for that column."""
     append_only_tables = [
         "token_mint_validations",
         "reference_asset_prices",
         "token_market_snapshots",
         "token_winner_milestones",
-        "wallets",
         "wallet_discovery_events",
         "early_buyers",
         "token_negative_controls",

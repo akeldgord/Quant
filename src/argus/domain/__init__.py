@@ -62,10 +62,28 @@ from . import (
     tokens as tokens,
 )
 from . import (
+    wallet_cluster_links as wallet_cluster_links,
+)
+from . import (
     wallet_discovery_events as wallet_discovery_events,
 )
 from . import (
+    wallet_history_quality as wallet_history_quality,
+)
+from . import (
+    wallet_metrics_snapshots as wallet_metrics_snapshots,
+)
+from . import (
+    wallet_positions as wallet_positions,
+)
+from . import (
+    wallet_score_snapshots as wallet_score_snapshots,
+)
+from . import (
     wallet_stream_state as wallet_stream_state,
+)
+from . import (
+    wallet_tier_history as wallet_tier_history,
 )
 from . import (
     wallets as wallets,

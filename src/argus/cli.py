@@ -40,6 +40,10 @@ discover_app = typer.Typer(
     add_completion=False, help="Historical/prospective wallet discovery archaeology (Phase 2)"
 )
 app.add_typer(discover_app, name="discover")
+wallets_app = typer.Typer(
+    add_completion=False, help="Wallet reconstruction + unbiased qualification (Phase 3)"
+)
+app.add_typer(wallets_app, name="wallets")
 
 console = Console()
 
@@ -1264,6 +1268,105 @@ def discover_acquire_and_run_archaeology(
             f"wallets_discovered={result.wallets_discovered} "
             f"unresolved_ownership_count={result.unresolved_ownership_count}"
         )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@wallets_app.command("reconstruct-and-score")
+def wallets_reconstruct_and_score(
+    wallet: str = typer.Option(
+        ..., "--wallet", help="Must already be a discovered wallet (Phase 2 'wallets' row)."
+    ),
+    evidence_source: str = typer.Option(
+        "STREAM_FORWARD_ONLY",
+        "--evidence-source",
+        help="'LIVE_ACQUISITION_WALK' (this wallet's own history was walked via "
+        "'argus discover acquire-and-run-archaeology'-style pagination -- requires "
+        "--acquisition-status) or 'STREAM_FORWARD_ONLY' (evidence is only from Phase 1 live "
+        "ingestion, forward-only from whenever tracking began).",
+    ),
+    acquisition_status: str = typer.Option(
+        "",
+        "--acquisition-status",
+        help="Required when --evidence-source=LIVE_ACQUISITION_WALK: the real terminal "
+        "AcquisitionResult.status ('COMPLETE'/'PARTIAL'/'FAILED') from the walk that "
+        "actually produced this wallet's evidence -- never a bare assertion.",
+    ),
+    acquisition_known_gaps: str = typer.Option(
+        "", "--acquisition-known-gaps", help="The walk's own known_gaps disclosure, if any."
+    ),
+) -> None:
+    """Phase 3 (MASTER_SPEC.md sections 34-43): reconstructs this
+    wallet's weighted-average-cost positions from the existing ``swaps``
+    ledger, derives an honest history-completeness judgment, computes
+    the discovery-contamination-firewalled qualification score and the
+    (potentially contaminated) descriptive score separately, and applies
+    a deterministic tier-lifecycle transition. Never live-arms, signs, or
+    executes anything -- research/scoring only (MASTER_SPEC.md section
+    108). Idempotent: re-running against identical evidence writes no
+    duplicate position/score/tier row."""
+    from datetime import UTC, datetime
+
+    from argus.config import resolve_production_git_commit
+    from argus.wallets.history_reconstruction import (
+        EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+        EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+    )
+    from argus.wallets.qualification_service import reconstruct_and_score_wallet
+
+    if evidence_source not in (
+        EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+        EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+    ):
+        console.print(
+            "[red]--evidence-source must be LIVE_ACQUISITION_WALK or STREAM_FORWARD_ONLY[/red]"
+        )
+        raise typer.Exit(code=1)
+    if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK and not acquisition_status:
+        console.print(
+            "[red]--acquisition-status is required when --evidence-source=LIVE_ACQUISITION_WALK[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            try:
+                result = await reconstruct_and_score_wallet(
+                    sessionmaker,
+                    wallet_address=wallet,
+                    evidence_source=evidence_source,  # type: ignore[arg-type]
+                    acquisition_status=acquisition_status or None,
+                    acquisition_known_gaps=acquisition_known_gaps or None,
+                    config=config,
+                    git_commit=git_commit,
+                    now=datetime.now(UTC),
+                )
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+                return 1
+        finally:
+            await engine.dispose()
+        console.print(
+            f"wallet_id={result.wallet_id} history_completeness={result.history_completeness} "
+            f"positions_reconstructed={result.positions_reconstructed} "
+            f"positions_written={result.positions_written} "
+            f"positions_unchanged={result.positions_unchanged} "
+            f"positions_skipped_untracked_token={result.positions_skipped_untracked_token}"
+        )
+        console.print(
+            f"qualification_score={result.qualification_score} "
+            f"descriptive_score={result.descriptive_score} "
+            f"eligible_for_qualification={result.eligible_for_qualification} "
+            f"score_written={result.score_written}"
+        )
+        if result.tier_transition is not None:
+            new_tier, reason = result.tier_transition
+            console.print(f"tier_transition: -> {new_tier} ({reason})")
+        else:
+            console.print(f"tier_transition: none (current_tier={result.current_tier} unchanged)")
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
