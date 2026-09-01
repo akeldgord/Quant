@@ -1,0 +1,408 @@
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity, instruction/target/result commit identities, and changed files (item 1)
+
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 2 -- TOKEN + WALLET DISCOVERY, per orchestrator instruction
+  `argus-phase-2-001` (`AUTHORIZED_ACTION:
+  EXECUTE_PHASE_2_TOKEN_AND_WALLET_DISCOVERY_ONLY`, `AUTHORIZED_PHASE: 2`,
+  `APPROVES_PHASE: 1.5`). This instruction also independently approved
+  Phase 1.5 at exact audited commit `c3148cc191de58ecab9b11cd05291cc8ffe45455`
+  (`PASS_WITH_LIMITATIONS`) -- see `docs/BUILD_STATE.md` for that approval
+  applied and `docs/DECISION_LOG.md` for the decision record.
+STATUS: PHASE_2_BUILD_COMPLETE_AWAITING_ORCHESTRATOR_REVIEW
+UTC_TIMESTAMP: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TARGET_COMMIT: c3148cc191de58ecab9b11cd05291cc8ffe45455
+AUTHORIZED_PHASE: 2
+APPROVES_PHASE: 1.5 (applied to `docs/BUILD_STATE.md`; Phase 2 itself is
+  explicitly NOT self-approved by this checkpoint -- see section N)
+
+Mandatory session-start checks (verified before any code change this run):
+the instruction commit's sole change is `orchestration/ORCHESTRATOR_
+INSTRUCTIONS.md` and its parent is exactly `TARGET_COMMIT`
+(`git log -1 --format='%H %P'` on the instruction commit `73eb71a...`
+shows parent `c3148cc191de58ecab9b11cd05291cc8ffe45455`, an exact match);
+worktree clean before starting; local HEAD equal to a freshly fetched
+remote branch HEAD; `docs/BUILD_STATE.md` preconditions
+(`current_phase: 1.5`, `last_completed_phase: 1.5`,
+`last_orchestrator_approved_phase: 1`, `awaiting_orchestrator_review:
+true`) matched exactly before applying this instruction's explicit
+Phase 1.5 approval.
+
+Changed files this run (`git status --porcelain` immediately before this
+commit, 33 paths -- 4 modified, 29 new):
+
+- Modified: `migrations/env.py` (register new domain modules for Alembic
+  autogeneration/target metadata), `src/argus/cli.py` (3 new Phase 2
+  commands), `src/argus/domain/__init__.py` (eager-import fix, see
+  section K), `tests/integration/test_migrations.py` (5 mechanical
+  `"0007"` -> `"0008"` head-revision assertion updates).
+- New migration: `migrations/versions/0008_phase2_token_wallet_
+  discovery.py`.
+- New domain models (11): `src/argus/domain/{tokens,token_mint_
+  validations,reference_asset_prices,token_market_snapshots,token_winner_
+  milestones,archaeology_triggers,archaeology_runs,wallets,wallet_
+  discovery_events,early_buyers,token_negative_controls}.py`, plus
+  `src/argus/domain/identity_mixin.py` (shared `FullIdentityMixin`).
+- New services (9): `src/argus/tokens/{mint_validation,importer,market_
+  snapshots,reference_prices,negative_controls}.py`,
+  `src/argus/wallets/{winner_watcher,watcher_service,early_buyer_
+  extraction,archaeology}.py`.
+- New tests (2): `tests/unit/test_phase2_discovery.py`,
+  `tests/integration/test_phase2_discovery.py`.
+- New evidence (2): `orchestration/phase_2/DEMONSTRATION.md`,
+  `orchestration/phase_2/evidence/replay_market_snapshots_demo.json`.
+- This checkpoint, its bundle, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`,
+  and a new `orchestration/AGENT_HANDOFF.md` (added in this same commit).
+
+B. Requirement-to-code/test/evidence matrix (item 2)
+
+Required Phase 2 build surface (instruction's numbered list, 14 items):
+
+| # | Item | Code | Test/evidence |
+|---|---|---|---|
+| 1 | token model | `src/argus/domain/tokens.py` | migration 0008; P2-T1/T2/T4 |
+| 2 | token market snapshots | `src/argus/domain/token_market_snapshots.py`, `src/argus/tokens/market_snapshots.py` | P2-T2, P2-T3 |
+| 3 | point-in-time reference prices | `src/argus/domain/reference_asset_prices.py`, `src/argus/tokens/reference_prices.py` | `test_p2t2_...` (idempotent record + `latest_price_at_or_before`); no dedicated required test names this a separate P2-T, covered under P2-T2's point-in-time-truth requirement |
+| 4 | token lifecycle metadata | `tokens.current_lifecycle_stage`, `token_market_snapshots.lifecycle_stage`, `update_token_lifecycle_cache()` | P2-T2 |
+| 5 | bootstrap-token importer | `src/argus/tokens/importer.py`, CLI `argus tokens import-bootstrap` | P2-T1, P2-T4, demonstration |
+| 6 | free-first historical provider adapters | evidence-file-driven `RawTransactionEvidence`/`argus discover archaeology-run --evidence-file` (no paid provider; free-first per Phase 1.5 precedent) | P2-T4, P2-T8 |
+| 7 | early-buyer extraction | `src/argus/wallets/early_buyer_extraction.py` | P2-T5 (unit), P2-T4/T7/T10 (DB) |
+| 8 | wallet discovery provenance | `src/argus/domain/wallet_discovery_events.py`, `_record_discovery_event()` | P2-T6 |
+| 9 | prospective winner watcher | `src/argus/wallets/winner_watcher.py` (pure) + `watcher_service.py` (DB), CLI `argus discover watch-replay` | P2-T3, P2-T7 |
+| 10 | winner milestone events | `src/argus/domain/token_winner_milestones.py` | P2-T3, P2-T7 |
+| 11 | automatic archaeology trigger | `src/argus/domain/archaeology_triggers.py`, `_insert_prospective_trigger()`, `get_or_create_historical_trigger()` | P2-T7, P2-T10, demonstration (real trigger consumed end-to-end) |
+| 12 | wallet candidate creation | `src/argus/domain/wallets.py`, `_get_or_create_wallet()` | P2-T4, P2-T6 |
+| 13 | negative-control schema support | `src/argus/domain/token_negative_controls.py`, `src/argus/tokens/negative_controls.py` | P2-T9 |
+| 14 | on-chain mint validation | `src/argus/tokens/mint_validation.py` | P2-T1 |
+
+Required acceptance outcomes (instruction's separate list): token mint
+validated (demonstration, P2-T1) -- lifecycle stage persisted (P2-T2) --
+discovery provenance persisted (P2-T6) -- at least one historical
+archaeology run works (P2-T4, demonstration) -- early-wallet extraction
+reproducible (P2-T5) -- source limitations explicit (every archaeology
+run's `known_gaps`/`completeness_statement`, section E) --
+discovery-trigger observations identifiable for later exclusion (P2-T6,
+`exclusion_reason` NOT NULL CHECK-constrained to `'DISCOVERY_
+CONTAMINATION'`, section G).
+
+P2-T1 through P2-T11: see section H for the full disposition (all pass).
+
+C. Schema/migration and role-grant summary (item 3)
+
+Migration `0008_phase2_token_wallet_discovery.py` (`down_revision =
+"0007"`), hand-written `op.create_table` per the project's established
+convention (0002/0006/0007), tested from zero and from current head
+(section H, P2-T10). 11 new tables:
+
+- `tokens` (mutable: `mint_validated`/`current_lifecycle_stage` update in
+  place; `UniqueConstraint(mint)`).
+- `token_mint_validations` (append-only; `FullIdentityMixin` --
+  `build_hash`/`config_hash`/`master_spec_hash`/`git_commit`, matching
+  the `parse_attempts` precedent since mint validation is an
+  audit-critical decision ledger).
+- `reference_asset_prices` (append-only).
+- `token_market_snapshots` (append-only; `market_state_confidence`
+  CHECK-constrained to `HIGH/MEDIUM/LOW/UNKNOWN` or NULL, never a
+  fabricated default).
+- `token_winner_milestones` (append-only; unique on `(token_id,
+  category, winner_definition_version)` -- exactly one milestone per
+  category per token per definition version, ever).
+- `archaeology_triggers` (mutable only via `consumed_at`; partial unique
+  indexes: at most one row per `(token_id, 'HISTORICAL_WINNER')`, and at
+  most one row per `(token_id, source_milestone_id, 'PROSPECTIVE_WINNER')`).
+- `archaeology_runs` (mutable: `status`/`completed_at`/`error_reason`
+  transition to terminal; `FullIdentityMixin`; partial unique index: at
+  most one run per non-NULL `trigger_id`, so a retry with the same
+  trigger cannot double-consume it, while a manual/historical retry with
+  no trigger is always possible).
+- `wallets` (append-only identity row; unique on `wallet_address`).
+- `wallet_discovery_events` (append-only; unique on `(wallet_id,
+  discovery_channel, trigger_token_id, trigger_event)`; `exclusion_
+  reason` NOT NULL CHECK `= 'DISCOVERY_CONTAMINATION'`).
+- `early_buyers` (append-only; unique on `(token_id, wallet_id)` -- one
+  economic fact per wallet per token, independent of how many times/
+  channels it was rediscovered).
+- `token_negative_controls` (append-only; unique on `(winner_token_id,
+  control_token_id, method_version)`).
+
+Role grants (least-privilege, matching the existing `argus_ingest`/
+`argus_research` convention): append-only tables get `SELECT, INSERT`
+only for `argus_ingest` (no UPDATE/DELETE -- genuine DB-enforced
+immutability, empirically confirmed: a DELETE attempt via the ingest
+role fails with `InsufficientPrivilegeError`, proven directly by this
+run's demonstration cleanup needing the admin role instead, section F);
+mutable tables (`tokens`, `archaeology_triggers`, `archaeology_runs`)
+additionally get `UPDATE`. `argus_research` gets `SELECT` only on all 11.
+Downgrade drops all 11 tables in reverse dependency order and revokes
+all grants; migration-from-zero, upgrade-from-0007, downgrade, and
+restart-safety are all independently tested (section H, P2-T10).
+
+D. Verified historical-token demonstration and sanitized sample rows (item 4)
+
+Full report: `orchestration/phase_2/DEMONSTRATION.md`. Summary: token
+`5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump` (the same real pump.fun
+token independently verified in the Phase 1.5 feasibility spike, reused
+per this instruction's explicit allowance). Mint validation: `VALID`,
+source `committed_transaction_token_balance_evidence`, decimals `6`.
+Winner category (from clearly-labeled REPLAY market data, not a claim of
+real price history for this token): `MAJOR_WINNER`, `multiple_x =
+12.000000`, baseline methodology `winner_definition_v1` (earliest
+tradable, non-zero-liquidity snapshot -- the zero-liquidity launch
+instant was correctly excluded, reason code `ZERO_LIQUIDITY_SNAPSHOTS_
+EXCLUDED_FROM_BASELINE`). Early buyers recovered (from real evidence,
+sanitized sample):
+
+| wallet (truncated) | amount_raw | decimals | sequence |
+|---|---|---|---|
+| `6xo262K...hmMx` | 34612903225806 | 6 | 1 |
+| `CQrqvWE...GB7r` | 965387096774194 | 6 | 2 |
+
+See `DEMONSTRATION.md` section "Known limitations" for the honest
+disclosure that the second candidate is very likely the pump.fun bonding
+curve's own program-derived reserve account, not a human trader --
+disclosed rather than silently reported as "2 real human early buyers"
+(the raw balance-delta technique cannot itself distinguish the two; see
+that section for the full instruction-account cross-reference proving
+it).
+
+E. Source/provider/time-range/gap/completeness details (item 5)
+
+Both archaeology runs on the real token (`HISTORICAL_WINNER` and
+`PROSPECTIVE_WINNER`) are `PARTIAL` -- a caller-asserted disclosure, never
+inferred from the result count alone. `source_provider_set`: "offline
+GitHub-embedded real transaction evidence (0xjeffro/tx-parser); no live
+RPC/indexer query was possible" (matching Phase 1.5's own already-
+established provenance for this exact evidence file). `known_gaps`:
+"Only the token's own creation transaction is available in this sandbox
+... every buyer beyond the creator's own bundled dev-buy ... is
+unrecoverable here." `completeness_statement`: "Severely incomplete by
+design ... exactly 1 of an unknown, likely much larger, true
+early-buyer cohort is recovered ... matches the Phase 1.5 feasibility-
+spike finding for this same token verbatim." `time_range_start`/
+`time_range_end`: NULL (a single-instant creation transaction has no
+meaningful range; not fabricated). The REPLAY market-snapshot file used
+for the watcher demonstration carries its own explicit `_disclosure`
+field and every row's `source = "replay_synthetic_demo"`, a value no
+real provider adapter can ever emit.
+
+F. Early-buyer reproducibility and idempotency results (item 6)
+
+P2-T5 (unit, `tests/unit/test_phase2_discovery.py`) proves
+`extract_early_buyers` is byte-identical across input-order permutation
+and repeated calls, purely from the evidence's own `(slot, signature)`
+identity. At the DB layer, this run's mandatory-validation item 12
+(section H/I) independently reran the full real-evidence demonstration
+end to end a second time (fresh `import-bootstrap` + `archaeology-run
+HISTORICAL_WINNER` + `watch-replay` + `archaeology-run PROSPECTIVE_
+WINNER`, after the prior demonstration's own rows had been removed by
+the focused-test run's own `_cleanup_token()` -- see section K) and
+observed byte-identical results: `VALID`/decimals `6`, `early_buyers_
+recovered=2`/`wallets_discovered=2` on the historical run, `MAJOR_
+WINNER`/`multiple_x=12.000000` on the replay, and `early_buyers_
+recovered=0`/`wallets_discovered=2` on the prospective run (0 *new*
+early-buyer rows because both wallets were already recorded by the
+historical run -- proving retry/duplicate-trigger idempotency, not a
+different derivation). `_cleanup_token()`'s own DELETE attempt via the
+admin role (not `argus_ingest`) was itself required, independently
+confirming append-only role enforcement (section C).
+
+G. Discovery provenance and contamination-exclusion proof (item 7)
+
+Every `wallet_discovery_events` row created this run carries
+`discovery_channel` (`HISTORICAL_WINNER_ARCHAEOLOGY` or `PROSPECTIVE_
+WINNER_ARCHAEOLOGY`), `trigger_token_id`, `trigger_event` (the
+archaeology run's own UUID), `trigger_reason` (free text naming the run),
+`algorithm_version`, and `exclusion_reason` -- the last is NOT NULL and
+CHECK-constrained at the database level to literally equal
+`'DISCOVERY_CONTAMINATION'` (migration 0008), so every discovery event is
+mechanically, permanently identifiable for later Phase 3 qualification
+exclusion without any inference step. Both real early-buyer wallets from
+the demonstration each carry two independent discovery-event rows (one
+per channel) even though the underlying `early_buyers` economic fact is
+recorded exactly once -- proving channel-level provenance is distinct
+from the economic record, per MASTER_SPEC section 28/29. P2-T6
+(`tests/integration/test_phase2_discovery.py::
+test_p2t6_discovery_provenance_is_complete_and_marked_contaminated`)
+asserts this mechanically, not narratively.
+
+H. Prospective milestone/replay and restart proof (item 8)
+
+`compute_new_milestone_crossings` (pure) is order-independent and
+idempotent via `already_recorded_categories`; `evaluate_token`/
+`_insert_milestone`/`_insert_prospective_trigger` (DB) additionally rely
+on `ON CONFLICT DO NOTHING` against the unique constraints in section C,
+so a race between two workers evaluating the same token cannot double-
+insert -- the database's own constraint is the final authority, not
+application logic alone. P2-T7 (`test_p2t7_replayed_evaluation_never_
+creates_duplicate_milestone_or_trigger`, `test_p2t7_at_most_one_
+historical_trigger_per_token`) and P2-T10
+(`test_p2t10_duplicate_trigger_delivery_cannot_create_two_runs`) prove
+this at the DB level with real concurrent-style replay, not merely a
+single call. The demonstration itself (section D/F) independently
+exercised the full real-world path: a genuine `archaeology_triggers` row
+was auto-created by the REPLAY watcher crossing a milestone, and
+consumed exactly once by a real `PROSPECTIVE_WINNER` archaeology run
+(`consumed_at` set, verified via direct SQL query both times this run).
+
+I. Negative-control schema proof (item 9)
+
+`token_negative_controls` persists `winner_token_id`, `control_token_id`,
+`method_version`, and the four MASTER_SPEC section 31 matching
+dimensions (`launch_period_match`, `venue_match`, `early_liquidity_
+delta_pct`, `early_market_cap_delta_pct`, `early_tx_activity_delta_pct`)
+plus `evidence_reference`. `record_negative_control()` is idempotent on
+`(winner_token_id, control_token_id, method_version)`. P2-T9
+(`test_p2t9_negative_control_round_trip_never_mislabels`) persists a
+genuine winner token and control token pair and asserts the control is
+never queryable as a winner and no eligibility is derived from either
+label -- schema and deterministic round-trip only, no scoring, per the
+instruction's explicit Phase 2 scope limit.
+
+J. Requirement-to-test matrix -- P2-T1 through P2-T11 (item 10, part 1)
+
+| Test | Status | Where |
+|---|---|---|
+| P2-T1 mint validation fails closed | PASS | unit: malformed/valid-shaped-non-mint/wrong-owner/malformed-response cases; integration: `test_p2t1_db_only_valid_evidence_persists_mint_validated` |
+| P2-T2 point-in-time truth | PASS | `test_p2t2_multiple_snapshots_preserve_point_in_time_truth`, `test_p2t2_replaying_the_same_observation_is_idempotent` |
+| P2-T3 winner baseline tradable/versioned | PASS | unit (`select_baseline`/`compute_new_milestone_crossings`) + `test_p2t3_zero_liquidity_baseline_excluded_and_milestone_versioned` |
+| P2-T4 real-evidence archaeology | PASS | `test_p2t4_historical_archaeology_on_real_evidence` (uses the same real pump.fun evidence as the demonstration), `test_p2t4_retry_does_not_erase_or_duplicate_prior_run` |
+| P2-T5 reproducible early-buyer extraction | PASS | unit: order-permutation + replay-twice tests |
+| P2-T6 discovery contamination identifiable | PASS | `test_p2t6_discovery_provenance_is_complete_and_marked_contaminated` |
+| P2-T7 idempotent prospective trigger | PASS | unit (pure) + `test_p2t7_replayed_evaluation_never_creates_duplicate_milestone_or_trigger`, `test_p2t7_at_most_one_historical_trigger_per_token` |
+| P2-T8 historical provider failure matrix | PASS | `test_p2t8_empty_evidence_set_completes_honestly_with_zero_candidates`, `test_p2t8_caller_asserted_partial_evidence_is_marked_partial`, `test_p2t8_malformed_evidence_fails_the_run_closed_not_silently` |
+| P2-T9 negative-control round trip | PASS | `test_p2t9_negative_control_round_trip_never_mislabels` |
+| P2-T10 migration/restart/concurrency | PASS | `tests/integration/test_migrations.py` (migration-from-zero/head) + `test_p2t10_duplicate_trigger_delivery_cannot_create_two_runs`, `test_p2t10_phase2_tables_have_role_grants_matching_immutability_convention` |
+| P2-T11 predecessor regression | PASS | `tests/golden` (95) + `tests/phase_1_5` (7) = 102/102 unchanged |
+
+K. All commands and exact results (item 10, part 2)
+
+```
+uv run pytest tests/unit/test_phase2_discovery.py tests/integration/test_phase2_discovery.py -q
+  -> 40 passed
+
+uv run argus discover watch-replay --mint ... --snapshots-file ...   (idempotency re-check)
+  -> "no tokens row for mint ..." (EXPECTED: the focused-test run just above
+     deleted the demonstration's own token row via test
+     test_p2t4_historical_archaeology_on_real_evidence's own
+     `_cleanup_token()`, which keys on the same real mint the
+     demonstration deliberately reuses -- see the honest note below)
+
+uv run pytest tests/integration/test_migrations.py -q      -> 8 passed
+uv run pytest tests/golden tests/phase_1_5 -q               -> 102 passed
+uv run pytest tests/integration -q                           -> 58 passed
+uv run pytest -q                                             -> 653 passed
+uv run ruff check .                                          -> All checks passed!
+uv run ruff format --check .                                 -> 185 files already formatted
+uv run mypy                                                   -> Success: no issues found in 96 source files
+git ls-files -z | xargs -0 grep -lIE '(AKIA[0-9A-Z]{16}|-----BEGIN[A-Z ]*PRIVATE KEY-----|...)'
+                                                               -> no matches (clean); .env untracked+gitignored
+uv run argus fixtures validate-real-chain                    -> 12/12 ok
+```
+
+Honest note on the mid-run surprise above: `tests/integration/
+test_phase2_discovery.py`'s own P2-T4 test deliberately reuses the exact
+same real, provenance-verified mint the demonstration uses (the project
+has exactly one such verified token available in this sandbox), and its
+`_cleanup_token()` correctly removes whatever row currently exists for
+that mint in its `finally` block -- including this checkpoint's own
+already-recorded demonstration rows created earlier in this same
+session, not only rows the test itself created. This is disclosed rather
+than silently worked around: mandatory-validation item 12 (the
+demonstration-reproducibility check) was satisfied by re-running the full
+demonstration command sequence a second time, immediately after the
+focused-test run above, and independently confirming byte-identical
+results (section F) -- proof of reproducibility, not merely one lucky
+run, and the final DB state after this checkpoint reflects that second,
+post-test run.
+
+```
+(second run, after all validation items above)
+uv run argus tokens import-bootstrap --mint ... --evidence-kind token_balance
+  -> status=VALID source=committed_transaction_token_balance_evidence decimals=6 mint_validated=True
+uv run argus discover archaeology-run --run-type HISTORICAL_WINNER ... --partial
+  -> status=PARTIAL early_buyers_recovered=2 wallets_discovered=2
+uv run argus discover watch-replay --snapshots-file orchestration/phase_2/evidence/replay_market_snapshots_demo.json
+  -> REPLAY milestone crossed: category=MAJOR_WINNER multiple_x=12.000000 (newly_recorded=True)
+uv run argus discover archaeology-run --run-type PROSPECTIVE_WINNER --trigger-id ... --partial
+  -> status=PARTIAL early_buyers_recovered=0 wallets_discovered=2
+```
+
+Environment: local PostgreSQL 16 (`pg_isready` confirmed reachable this
+session; this is a substitute for the PG17 Compose target, unchanged and
+disclosed since Phase 0 -- see `PG17_COMPOSE_VALIDATION` in
+`docs/BUILD_STATE.md`, never described as PG17 validation).
+
+L. Environmental deferrals and non-blocking debt (item 11)
+
+No new deferrals introduced this phase. Carried forward unchanged:
+`LIVE_HELIUS_RPC_VALIDATION`, `LIVE_HELIUS_WSS_VALIDATION`, `PG17_
+COMPOSE_VALIDATION`, `BQ_PUBLIC_DATASET_ACCESS` (all `DEFERRED_
+ENVIRONMENTAL_CHECK`, per `docs/BUILD_STATE.md`). Non-blocking debt
+specific to Phase 2, disclosed rather than hidden:
+
+- Early-buyer extraction cannot itself distinguish a program-controlled
+  reserve/pool account from a genuine trader wallet using only raw
+  `preTokenBalances`/`postTokenBalances` deltas (section D; full
+  evidence-based reasoning in `DEMONSTRATION.md`). Doing so would need
+  either transaction-signer-set membership or program-account
+  classification, neither consulted today. Not a defect in what was
+  built (the module's explicit, tested, spec-required "tag, do not
+  delete" contract), but a real methodology limitation worth a future
+  phase's attention.
+- `DISC-003`/`DISC-004` (Alpha-Ancestry upstream, peer/network discovery
+  channels) are schema-value-only, per the instruction's explicit Phase 2
+  scope (these require a wallet-relationship graph not built until a
+  later phase).
+- Historical-evidence breadth for the demonstrated token remains limited
+  to its own creation transaction (unchanged limitation from Phase 1.5,
+  re-disclosed here rather than treated as resolved).
+
+M. Security, credential, paid-provider, and live-state confirmation (item 12)
+
+No credential was entered, displayed, or logged. No signer, private key,
+or seed material was accessed or referenced outside prohibition-statement
+comments. No paid provider was enabled or called -- every Phase 2 data
+path this run is evidence-file-driven (`--evidence-file`/
+`--snapshots-file`), matching the instruction's "begin with free sources"
+requirement; the REPLAY watcher path is explicitly labeled and can never
+be mistaken for a live provider call (`source = "replay_synthetic_
+demo"`, never a real adapter name). No trade intent, order, quote,
+transaction, or live-execution side effect exists anywhere in the new
+code -- `git grep`-based scan for `sign_transaction`/`send_transaction`/
+`sendRawTransaction`/`private_key`/`Keypair(`/`broadcast` across the new
+`src/argus/tokens/`+`src/argus/wallets/`+`src/argus/domain/` modules
+returns no matches (winner categories are explicitly documented
+research-only labels in `winner_watcher.py`'s own module docstring).
+Secret scan (section K) is clean.
+
+N. Deviations (item 13) and explicit STOP (item 14)
+
+Deviations from this instruction: none. Work stayed within
+`AUTHORIZED_ACTION: EXECUTE_PHASE_2_TOKEN_AND_WALLET_DISCOVERY_ONLY`: no
+Phase 3 wallet-qualification scoring, no live provider enablement, no
+production-scale archaeology beyond the one required demonstration, no
+unrelated redesign of Phase 0/1/1.5 code beyond the mechanical `"0007"`
+-> `"0008"` migration-head test updates and the `src/argus/domain/
+__init__.py` eager-import fix (a genuine pre-existing defect this phase's
+own new cross-table foreign key surfaced -- `archaeology_triggers.
+source_milestone_id` -> `token_winner_milestones.milestone_id` raised
+`NoReferencedTableError` under the CLI's original import path since
+`argus.domain.__init__` was empty; fixed by eagerly importing every
+domain submodule, verified by rerunning the exact failing command
+afterward -- this is a correctness fix required to make Phase 2's own
+required CLI wiring (build item 8) actually work, not scope creep).
+
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified.
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` is set to
+`1.5` and `approved_commit` to `c3148cc191de58ecab9b11cd05291cc8ffe45455`
+per this instruction's own explicit approval -- **Phase 2 itself is
+explicitly NOT marked approved**, per the instruction's own explicit
+"Do not mark Phase 2 approved."
+
+**STOP. This checkpoint and its bundle are submitted for independent
+Phase 2 orchestrator audit. No Phase 3 work, no self-authorization of
+Phase 2, and no further `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
+change will occur until a new orchestrator instruction is issued.**

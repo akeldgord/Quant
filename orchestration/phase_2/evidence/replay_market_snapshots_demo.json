@@ -1,0 +1,50 @@
+[
+  {
+    "_disclosure": "REPLAY / SYNTHETIC DEMONSTRATION DATA. These four observations are NOT a real recovered price history for mint 5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump. No live market-data provider (Helius, DexScreener, GeckoTerminal, Jupiter) or historical price archive is reachable in this sandbox, so this file exists solely to exercise the prospective winner-milestone watcher's real, deterministic detection/persistence code path end-to-end, per orchestrator instruction argus-phase-2-001's explicit allowance: 'The watcher may be demonstrated with deterministic REPLAY data when live provider access remains environmentally unavailable ... must be labeled as replay.' Every snapshot's 'source' field is 'replay_synthetic_demo' (never a real provider name) so these rows can never be confused with a genuine market observation in the database.",
+    "observed_at": "2024-09-29T19:52:26+00:00",
+    "lifecycle_stage": "TOKEN_CREATION",
+    "source": "replay_synthetic_demo",
+    "venue": "pump.fun",
+    "venue_program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    "price_usd": null,
+    "liquidity_usd": 0,
+    "market_state_confidence": "UNKNOWN",
+    "evidence_reference": "SYNTHETIC: launch-instant snapshot before the bonding curve holds tradable reserves; deliberately zero-liquidity so P2-T3's baseline-exclusion rule is exercised by this same demonstration"
+  },
+  {
+    "observed_at": "2024-09-29T19:55:00+00:00",
+    "lifecycle_stage": "BONDING_CURVE",
+    "source": "replay_synthetic_demo",
+    "venue": "pump.fun",
+    "venue_program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    "pool_or_curve_address": "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r",
+    "price_usd": "0.00003000",
+    "liquidity_usd": "5000.00",
+    "market_state_confidence": "LOW",
+    "evidence_reference": "SYNTHETIC baseline: chosen as a plausible early bonding-curve price/liquidity pair for demonstration purposes only, not a recovered on-chain observation"
+  },
+  {
+    "observed_at": "2024-09-30T06:00:00+00:00",
+    "lifecycle_stage": "BONDING_CURVE",
+    "source": "replay_synthetic_demo",
+    "venue": "pump.fun",
+    "venue_program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    "pool_or_curve_address": "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r",
+    "price_usd": "0.00015000",
+    "liquidity_usd": "18000.00",
+    "market_state_confidence": "LOW",
+    "evidence_reference": "SYNTHETIC intermediate point"
+  },
+  {
+    "observed_at": "2024-09-30T12:00:00+00:00",
+    "lifecycle_stage": "LAUNCHPAD_TRADING",
+    "source": "replay_synthetic_demo",
+    "venue": "pump.fun",
+    "venue_program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    "pool_or_curve_address": "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r",
+    "price_usd": "0.00036000",
+    "liquidity_usd": "40000.00",
+    "market_state_confidence": "LOW",
+    "evidence_reference": "SYNTHETIC peak: 12x the SYNTHETIC baseline price, chosen to cross the MAJOR_WINNER (>=10x) threshold but not MONSTER (>=20x), for demonstration purposes only"
+  }
+]

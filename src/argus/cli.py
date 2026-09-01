@@ -32,6 +32,14 @@ ingest_app = typer.Typer(add_completion=False, help="Live chain data ingestion (
 app.add_typer(ingest_app, name="ingest")
 fixtures_app = typer.Typer(add_completion=False, help="Golden fixture import/validation")
 app.add_typer(fixtures_app, name="fixtures")
+tokens_app = typer.Typer(
+    add_completion=False, help="Token bootstrap import + mint validation (Phase 2)"
+)
+app.add_typer(tokens_app, name="tokens")
+discover_app = typer.Typer(
+    add_completion=False, help="Historical/prospective wallet discovery archaeology (Phase 2)"
+)
+app.add_typer(discover_app, name="discover")
 
 console = Console()
 
@@ -623,6 +631,315 @@ def fixtures_validate_real_chain(
         console.print(f"{result.category}: {marker} - {result.detail}")
     if failed:
         raise typer.Exit(code=1)
+
+
+def _phase2_engine_and_sessionmaker():
+    """Shared Phase 2 CLI wiring: one engine + one sessionmaker per
+    invocation, disposed at the end -- same convention as
+    ``ingest_run``/``ingest_reparse`` (never a shared long-lived session)."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    config = load_config()
+    info = connection_for_role(config, DbRole.INGEST)
+    engine = create_async_engine(info.as_asyncpg_url())
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    return config, engine, sessionmaker
+
+
+@tokens_app.command("import-bootstrap")
+def tokens_import_bootstrap(
+    mint: str = typer.Option(..., "--mint", help="Candidate Solana token mint address."),
+    evidence_file: str = typer.Option(
+        ...,
+        "--evidence-file",
+        help="Path to a JSON file: a genuine Solana getAccountInfo response "
+        "({'value': {...}}, --evidence-kind account_info) or a genuine getTransaction "
+        "response whose own token-balance evidence covers this mint "
+        "(--evidence-kind token_balance).",
+    ),
+    evidence_kind: str = typer.Option(
+        "token_balance",
+        "--evidence-kind",
+        help="'account_info' (live getAccountInfo response, the real production path) or "
+        "'token_balance' (a committed getTransaction response -- this sandbox's free-first "
+        "evidence path; see argus.tokens.mint_validation).",
+    ),
+) -> None:
+    """Deterministic bootstrap-token importer (MASTER_SPEC.md Phase 2 build
+    item 5): creates or reuses a ``tokens`` row for ``mint`` and runs
+    on-chain mint validation against genuine committed evidence, recording
+    every attempt as an immutable ``token_mint_validations`` row. Never
+    reports ``mint_validated=true`` from address shape alone."""
+    import json
+    from datetime import UTC, datetime
+    from typing import cast
+
+    from argus.config import resolve_production_git_commit
+    from argus.tokens.importer import EvidenceKind, import_bootstrap_token
+
+    if evidence_kind not in ("account_info", "token_balance"):
+        console.print(
+            f"[red]--evidence-kind must be 'account_info' or 'token_balance', "
+            f"got {evidence_kind!r}[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            evidence = json.loads(Path(evidence_file).read_text())
+            if isinstance(evidence, list):
+                evidence = evidence[0]
+            # Phase 2 CLI commands are offline, evidence-file-driven research
+            # tools -- never a live signer/execution path -- so, like
+            # `ingest run --test-mode`, they use the honest
+            # GIT_COMMIT_UNAVAILABLE fallback on a dirty/unverifiable
+            # checkout rather than failing closed like production ingestion.
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            async with sessionmaker() as session, session.begin():
+                result = await import_bootstrap_token(
+                    session,
+                    mint=mint,
+                    evidence=evidence,
+                    evidence_kind=cast(EvidenceKind, evidence_kind),
+                    evidence_reference=evidence_file,
+                    now=datetime.now(UTC),
+                    config=config,
+                    git_commit=git_commit,
+                )
+        finally:
+            await engine.dispose()
+        console.print(
+            f"token_id={result.token_id} mint={result.mint} "
+            f"status={result.validation.status} source={result.validation.validation_source} "
+            f"decimals={result.validation.decimals} mint_validated={result.mint_validated} "
+            f"reason={result.validation.reason}"
+        )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@discover_app.command("archaeology-run")
+def discover_archaeology_run(
+    mint: str = typer.Option(
+        ..., "--mint", help="Must already be imported via 'tokens import-bootstrap'."
+    ),
+    run_type: str = typer.Option(
+        "HISTORICAL_WINNER", "--run-type", help="'HISTORICAL_WINNER' or 'PROSPECTIVE_WINNER'."
+    ),
+    evidence_file: list[str] = typer.Option(  # noqa: B008 - required Typer CLI-option idiom
+        ...,
+        "--evidence-file",
+        help="Path to a genuine getTransaction-shaped JSON file (repeatable) -- every "
+        "transaction to search for early buyers of this mint.",
+    ),
+    deployer_wallet: str = typer.Option(
+        "", "--deployer-wallet", help="Optional: tag this wallet possible_deployer if recovered."
+    ),
+    known_gaps: str = typer.Option(
+        "", "--known-gaps", help="Free-text disclosure of what this evidence set does NOT cover."
+    ),
+    completeness_statement: str = typer.Option(
+        ..., "--completeness-statement", help="Required honest statement of evidence completeness."
+    ),
+    source_provider_set: str = typer.Option(
+        "committed_evidence_replay",
+        "--source-provider-set",
+        help="Free-text description of where --evidence-file came from.",
+    ),
+    trigger_id: str = typer.Option(
+        "", "--trigger-id", help="Optional: consume a specific pending archaeology_triggers row."
+    ),
+    partial: bool = typer.Option(
+        False, "--partial", help="Mark this run PARTIAL (evidence set is known incomplete)."
+    ),
+) -> None:
+    """Runs one archaeology job for a token already imported via
+    'tokens import-bootstrap': recovers early buyers deterministically
+    from the given evidence files (MASTER_SPEC.md section 33), creates
+    wallet/wallet_discovery_events/early_buyers rows, and always leaves
+    exactly one archaeology_runs row in a terminal COMPLETED/PARTIAL/
+    FAILED state. Reusing the same evidence files on a retry is safe --
+    no duplicate wallet, discovery event, or early-buyer row is ever
+    created."""
+    import json
+    import uuid as uuid_module
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.domain.tokens import Token
+    from argus.wallets.archaeology import run_archaeology
+    from argus.wallets.early_buyer_extraction import RawTransactionEvidence
+
+    if run_type not in ("HISTORICAL_WINNER", "PROSPECTIVE_WINNER"):
+        console.print("[red]--run-type must be HISTORICAL_WINNER or PROSPECTIVE_WINNER[/red]")
+        raise typer.Exit(code=1)
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            now = datetime.now(UTC)
+            transactions: list[RawTransactionEvidence] = []
+            for path in evidence_file:
+                raw = json.loads(Path(path).read_text())
+                if isinstance(raw, list):
+                    raw = raw[0]
+                sig = raw["transaction"]["signatures"][0]
+                block_time = raw.get("blockTime")
+                transactions.append(
+                    RawTransactionEvidence(
+                        raw=raw,
+                        signature=sig,
+                        slot=raw["slot"],
+                        block_time=(
+                            datetime.fromtimestamp(block_time, tz=UTC) if block_time else None
+                        ),
+                        evidence_reference=path,
+                    )
+                )
+
+            async with sessionmaker() as session, session.begin():
+                token = (
+                    await session.execute(select(Token).where(Token.mint == mint))
+                ).scalar_one_or_none()
+                if token is None:
+                    console.print(
+                        f"[red]no tokens row for mint {mint!r} -- run "
+                        f"'argus tokens import-bootstrap --mint {mint}' first[/red]"
+                    )
+                    return 1
+
+                from argus.domain.wallet_discovery_events import (
+                    DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+                    DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY,
+                )
+
+                discovery_channel = (
+                    DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY
+                    if run_type == "HISTORICAL_WINNER"
+                    else DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY
+                )
+                result = await run_archaeology(
+                    session,
+                    token_id=token.token_id,
+                    mint=mint,
+                    run_type=run_type,
+                    transactions=transactions,
+                    discovery_channel=discovery_channel,
+                    source_provider_set=source_provider_set,
+                    input_evidence_reference=", ".join(evidence_file),
+                    time_range_start=None,
+                    time_range_end=None,
+                    known_gaps=known_gaps or None,
+                    completeness_statement=completeness_statement,
+                    config=config,
+                    git_commit=git_commit,
+                    now=now,
+                    trigger_id=uuid_module.UUID(trigger_id) if trigger_id else None,
+                    deployer_wallet=deployer_wallet or None,
+                    is_partial=partial,
+                )
+        finally:
+            await engine.dispose()
+        console.print(
+            f"run_id={result.run_id} status={result.status} "
+            f"early_buyers_recovered={result.early_buyers_recovered} "
+            f"wallets_discovered={result.wallets_discovered}"
+        )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@discover_app.command("watch-replay")
+def discover_watch_replay(
+    mint: str = typer.Option(
+        ..., "--mint", help="Must already be imported via 'tokens import-bootstrap'."
+    ),
+    snapshots_file: str = typer.Option(
+        ...,
+        "--snapshots-file",
+        help="Path to a JSON file: a list of market-snapshot observation objects "
+        "(observed_at, lifecycle_stage, source, price_usd, liquidity_usd, ...). "
+        "REPLAY data -- see argus.wallets.watcher_service module docstring; this is "
+        "never a claim of live market-data provider access.",
+    ),
+) -> None:
+    """Runs the deterministic prospective winner watcher
+    (MASTER_SPEC.md Phase 2 build items 9-11) against a REPLAY market-
+    snapshot history for a token already imported via
+    'tokens import-bootstrap': records each snapshot idempotently, then
+    detects and persists any new winner-milestone crossing plus its
+    linked archaeology_triggers row. Labeled REPLAY throughout -- never
+    claims live Helius/market-data validation."""
+    import json
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from argus.domain.tokens import Token
+    from argus.tokens.market_snapshots import MarketSnapshotDraft, record_snapshot
+    from argus.wallets.watcher_service import evaluate_token
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            now = datetime.now(UTC)
+            raw_snapshots = json.loads(Path(snapshots_file).read_text())
+            async with sessionmaker() as session, session.begin():
+                token = (
+                    await session.execute(select(Token).where(Token.mint == mint))
+                ).scalar_one_or_none()
+                if token is None:
+                    console.print(
+                        f"[red]no tokens row for mint {mint!r} -- run "
+                        f"'argus tokens import-bootstrap --mint {mint}' first[/red]"
+                    )
+                    return 1
+
+                for entry in raw_snapshots:
+                    draft = MarketSnapshotDraft(
+                        token_id=token.token_id,
+                        observed_at=datetime.fromisoformat(entry["observed_at"]),
+                        lifecycle_stage=entry["lifecycle_stage"],
+                        source=entry.get("source", "replay_fixture"),
+                        venue=entry.get("venue"),
+                        venue_program=entry.get("venue_program"),
+                        pool_or_curve_address=entry.get("pool_or_curve_address"),
+                        price_usd=(
+                            Decimal(str(entry["price_usd"])) if entry.get("price_usd") else None
+                        ),
+                        liquidity_usd=(
+                            Decimal(str(entry["liquidity_usd"]))
+                            if entry.get("liquidity_usd")
+                            else None
+                        ),
+                        market_state_confidence=entry.get("market_state_confidence"),
+                        evidence_reference=entry.get("evidence_reference", snapshots_file),
+                    )
+                    await record_snapshot(session, draft, now=now)
+
+                evaluations = await evaluate_token(session, token_id=token.token_id, now=now)
+        finally:
+            await engine.dispose()
+
+        if not evaluations:
+            console.print("no new winner-milestone crossings detected")
+        for evaluation in evaluations:
+            console.print(
+                f"REPLAY milestone crossed: category={evaluation.crossing.category} "
+                f"multiple_x={evaluation.crossing.multiple_x} "
+                f"milestone_id={evaluation.milestone_id} trigger_id={evaluation.trigger_id} "
+                f"(newly_recorded={evaluation.milestone_newly_recorded})"
+            )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
 
 
 if __name__ == "__main__":

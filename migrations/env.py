@@ -16,13 +16,24 @@ from argus.config import load_config  # noqa: E402
 from argus.db.base import Base  # noqa: E402
 from argus.db.connection import connection_for_admin  # noqa: E402
 from argus.domain import (
+    archaeology_runs,  # noqa: E402,F401  (registers ORM metadata)
+    archaeology_triggers,  # noqa: E402,F401  (registers ORM metadata)
     chain_events,  # noqa: E402,F401  (registers ORM metadata)
     clock_health,  # noqa: E402,F401  (registers ORM metadata)
     commitment,  # noqa: E402,F401  (registers ORM metadata)
+    early_buyers,  # noqa: E402,F401  (registers ORM metadata)
     parse_attempts,  # noqa: E402,F401  (registers ORM metadata)
     provider_usage,  # noqa: E402,F401  (registers ORM metadata)
+    reference_asset_prices,  # noqa: E402,F401  (registers ORM metadata)
     swaps,  # noqa: E402,F401  (registers ORM metadata)
+    token_market_snapshots,  # noqa: E402,F401  (registers ORM metadata)
+    token_mint_validations,  # noqa: E402,F401  (registers ORM metadata)
+    token_negative_controls,  # noqa: E402,F401  (registers ORM metadata)
+    token_winner_milestones,  # noqa: E402,F401  (registers ORM metadata)
+    tokens,  # noqa: E402,F401  (registers ORM metadata)
+    wallet_discovery_events,  # noqa: E402,F401  (registers ORM metadata)
     wallet_stream_state,  # noqa: E402,F401  (registers ORM metadata)
+    wallets,  # noqa: E402,F401  (registers ORM metadata)
 )
 
 config = context.config

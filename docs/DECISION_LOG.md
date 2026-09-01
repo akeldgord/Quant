@@ -1575,3 +1575,75 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `orchestration/bundles/phase_1_5_remediation_1.txt` are preserved
   unmodified as immutable history.
 - git_commit: f4ed7893849128257b3b5e62f44b93b779ee50c8
+
+### 2026-09-01 — Phase 1.5 approved; Phase 2 (TOKEN + WALLET DISCOVERY) authorized and built
+- requirement_id: MASTER_SPEC.md section 8 (build-state/session-recovery
+  discipline); Phase 2 -- TOKEN + WALLET DISCOVERY (sections 24-33);
+  section 109 (orchestrator-delegated phase-approval authority).
+- decision: Orchestrator instruction `argus-phase-2-001` independently
+  approved Phase 1.5 at exact audited commit
+  `c3148cc191de58ecab9b11cd05291cc8ffe45455` (`PASS_WITH_LIMITATIONS`,
+  `APPROVES_PHASE: 1.5`) and authorized Phase 2
+  (`AUTHORIZED_ACTION: EXECUTE_PHASE_2_TOKEN_AND_WALLET_DISCOVERY_ONLY`).
+  This entry records both: (1) `docs/BUILD_STATE.md`'s
+  `last_orchestrator_approved_phase` is set to `1.5` and `approved_commit`
+  to `c3148cc191de58ecab9b11cd05291cc8ffe45455`, per this instruction's
+  explicit approval -- no earlier instruction had advanced it past `1`;
+  (2) Phase 2's full required build surface (11 new tables via migration
+  0008; deterministic on-chain mint validation; token market-snapshot/
+  reference-price point-in-time ledger; versioned winner-milestone
+  detection with a tradable, non-zero-liquidity baseline rule; automatic
+  archaeology-trigger creation/consumption; deterministic early-buyer
+  extraction; permanent wallet-discovery provenance mechanically
+  identifiable for later `DISCOVERY_CONTAMINATION` exclusion;
+  negative-control schema round-trip) was implemented, wired through real
+  CLI commands, and demonstrated end-to-end against the same real,
+  provenance-verified pump.fun token used in the Phase 1.5 spike. Per
+  this instruction's own explicit requirement, Phase 2 itself is NOT
+  marked approved by this entry or by `docs/BUILD_STATE.md` -- only the
+  orchestrator may do that in a future instruction.
+- reason: MASTER_SPEC.md section 8 requires `docs/BUILD_STATE.md` to
+  reflect the actual, orchestrator-verified project state for session
+  recovery; `last_orchestrator_approved_phase`/`approved_commit` may only
+  advance on an explicit orchestrator instruction (never a self-
+  assessment), which `argus-phase-2-001` is. Phase 2's own build closes
+  the required token/wallet discovery gate the orchestrator froze in this
+  same instruction, producing the historical/prospective candidate-wallet
+  discovery pipeline Phase 3 (wallet qualification scoring) will need.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-2-001` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: c3148cc191de58ecab9b11cd05291cc8ffe45455`,
+  `AUTHORIZED_ACTION: EXECUTE_PHASE_2_TOKEN_AND_WALLET_DISCOVERY_ONLY`,
+  `AUTHORIZED_PHASE: 2`, `APPROVES_PHASE: 1.5`; all mandatory
+  session-start preconditions verified against `docs/BUILD_STATE.md` and
+  git history before this task began, per the instruction's own required
+  steps).
+- impact: New migration `migrations/versions/0008_phase2_token_wallet_
+  discovery.py` (11 tables, indexes, partial unique constraints, role
+  grants). New domain modules
+  (`src/argus/domain/{tokens,token_mint_validations,reference_asset_
+  prices,token_market_snapshots,token_winner_milestones,archaeology_
+  triggers,archaeology_runs,wallets,wallet_discovery_events,early_buyers,
+  token_negative_controls,identity_mixin}.py`). New services
+  (`src/argus/tokens/{mint_validation,importer,market_snapshots,
+  reference_prices,negative_controls}.py`,
+  `src/argus/wallets/{winner_watcher,watcher_service,early_buyer_
+  extraction,archaeology}.py`). Three new CLI commands (`argus tokens
+  import-bootstrap`, `argus discover archaeology-run`, `argus discover
+  watch-replay`) in `src/argus/cli.py`. Two new test files (40 focused
+  Phase 2 tests covering all 11 required P2-T1..T11 acceptance tests).
+  Fixed a genuine pre-existing defect in `src/argus/domain/__init__.py`
+  (was empty, causing `NoReferencedTableError` for any process that
+  imports only some domain submodules) via eager submodule imports.
+  `docs/BUILD_STATE.md`'s `current_phase`/`last_completed_phase` set to
+  `2` (implementation-agent-reported, awaiting orchestrator review);
+  `last_orchestrator_approved_phase`/`approved_commit` set to `1.5`/
+  `c3148cc191de58ecab9b11cd05291cc8ffe45455` per this instruction's
+  explicit approval. 653 tests passing (up from 613), ruff clean, mypy
+  clean, migration-from-zero/upgrade-from-0007 clean through 0008, 12/12
+  real-chain fixtures ok, secret scan clean. See
+  `orchestration/checkpoints/phase_2.md` for the full 14-item
+  disposition and `orchestration/phase_2/DEMONSTRATION.md` for the
+  required real historical-token demonstration report.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
