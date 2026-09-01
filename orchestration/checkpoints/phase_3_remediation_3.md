@@ -17,7 +17,7 @@ STATUS: The one remaining P3-R2 defect (persisted acquisition manifest
   orchestrator-approved -- this checkpoint reports remediation completion
   for independent audit, it does not and cannot itself apply approval.
 UTC_TIMESTAMP: 2026-09-01T09:55:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 34080e5e70f88b668af6ca3543e1d1f39145d582
 TARGET_COMMIT: ad21304a2f9fedd3c11a39a8d840ce577e0afe58
 AUTHORIZED_PHASE: 3
 APPROVES_PHASE: NONE
@@ -208,7 +208,7 @@ two-commit convention, this checkpoint, the paired bundle,
 `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every
 commit-hash-bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+`34080e5e70f88b668af6ca3543e1d1f39145d582`, then a second, immediately
 following commit fills in that first commit's own real hash in every one
 of those fields -- both commits carry the sole terminal trailer
 `ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-003` with no paragraph
