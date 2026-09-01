@@ -1108,6 +1108,17 @@ def discover_acquire_and_run_archaeology(
         help="Signatures requested per page. Default matches "
         "historical_acquisition.DEFAULT_PAGE_SIZE.",
     ),
+    expected_oldest_slot: int | None = typer.Option(
+        None,
+        "--expected-oldest-slot",
+        help="P2-R2 remediation round 2: an independently known expected historical "
+        "boundary for ADDRESS (e.g. a token's own known creation slot). When given, an "
+        "empty/short page is trusted as a genuine COMPLETE walk only once this slot has "
+        "actually been observed -- a provider truncating early before then is reported "
+        "PARTIAL, never silently COMPLETE. Omit when no independent boundary is known; "
+        "the walk then keeps the exact prior (round-1) short/empty-page-is-complete "
+        "behavior unchanged.",
+    ),
     deployer_wallet: str = typer.Option(
         "", "--deployer-wallet", help="Optional: tag this wallet possible_deployer if recovered."
     ),
@@ -1200,7 +1211,11 @@ def discover_acquire_and_run_archaeology(
                     usage_recorder=usage_recorder,
                 )
                 acquisition = await acquire_historical_transactions(
-                    rpc_client, address=address, max_pages=max_pages, page_size=page_size
+                    rpc_client,
+                    address=address,
+                    max_pages=max_pages,
+                    page_size=page_size,
+                    expected_oldest_slot=expected_oldest_slot,
                 )
 
             console.print(

@@ -1720,3 +1720,69 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   from-clean-database, real end-to-end CLI re-run confirming the
   corrected behavior directly via Postgres queries.
 - git_commit: 16737ca851ec51a528f4251fa94be3ef8ae84fc9
+
+### 2026-09-01 — Phase 2 remediation round 2: one narrow P2-R2 boundary defect fixed
+- requirement_id: MASTER_SPEC.md section 8 (build-state/session-recovery
+  discipline); Phase 2 -- TOKEN + WALLET DISCOVERY (sections 24-33,
+  required implementation 4/P2-T8); section 109 (orchestrator-delegated
+  phase-approval authority).
+- decision: Orchestrator instruction `argus-phase-2-remediation-002`
+  independently re-audited the Phase 2 remediation round 1 submission
+  and closed 7 of the 8 frozen findings (P2-R1, P2-R3, P2-R4, P2-R5,
+  P2-R6, P2-R7, P2-R8), leaving exactly one narrow P2-R2 acceptance case
+  open: the historical acquisition service had no explicit
+  expected-history boundary to distinguish a legitimate end-of-history
+  empty/short pagination page from a premature provider truncation, so
+  it unconditionally treated any empty/short page as `COMPLETE`.
+  `AUTHORIZED_ACTION: REMEDIATE_ONE_REMAINING_FROZEN_PHASE_2_BOUNDARY_
+  DEFECT_ONLY`, `APPROVES_PHASE: NONE` -- explicitly authorizing
+  remediation of exactly this one item, with an explicit scope lock
+  against redesigning Phase 2, adding new hardening, or revisiting the
+  seven closed findings' own implementation. The defect was fixed: an
+  optional `expected_oldest_slot` boundary parameter on
+  `acquire_historical_transactions()`, machine-checked against the
+  observed walk rather than trusted from a caller-supplied `--partial`
+  flag (see `orchestration/checkpoints/phase_2_remediation_2.md` for the
+  full defect-to-code/test mapping and the 4-item frozen
+  acceptance-test disposition). Per this instruction's own explicit
+  requirement, Phase 2 itself is NOT marked approved by this entry or by
+  `docs/BUILD_STATE.md` -- only the orchestrator may do that in a future
+  instruction; `last_orchestrator_approved_phase` remains `1.5`,
+  unchanged.
+- reason: MASTER_SPEC.md section 8 requires `docs/BUILD_STATE.md` to
+  reflect the actual, orchestrator-verified project state for session
+  recovery; `last_orchestrator_approved_phase`/`approved_commit` may only
+  advance on an explicit orchestrator instruction, which
+  `argus-phase-2-remediation-002` explicitly declines to grant
+  (`APPROVES_PHASE: NONE`). The frozen P2-R2 finding from
+  `argus-phase-2-remediation-001` explicitly required handling "a
+  premature empty/short page before an expected boundary" -- the round-1
+  submission's own test module described this scenario but never
+  actually proved it, so this was a real, independently-verified gap
+  against an already-frozen requirement, not a newly invented one.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-2-remediation-002` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: c99341a9c767c006cfe96fa4948dd54a9efe712b`,
+  `AUTHORIZED_ACTION: REMEDIATE_ONE_REMAINING_FROZEN_PHASE_2_BOUNDARY_
+  DEFECT_ONLY`, `AUTHORIZED_PHASE: 2`, `APPROVES_PHASE: NONE`; all
+  mandatory session-start preconditions -- instruction-only-commit
+  parentage exactly matching `TARGET_COMMIT`, changing only
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`, Phase 2 awaiting review
+  and not orchestrator-approved, clean/synced worktree -- independently
+  verified before this task began).
+- impact: Modified `src/argus/tokens/historical_acquisition.py` (new
+  `expected_oldest_slot` parameter, `ALGORITHM_VERSION` bumped to
+  `historical_acquisition_v2`), `src/argus/cli.py` (new
+  `--expected-oldest-slot` option on `argus discover
+  acquire-and-run-archaeology`), and `tests/unit/
+  test_historical_acquisition.py` (4 new tests, module total 18) --
+  exactly 3 files, no other Phase 2 code touched. `docs/BUILD_STATE.md`
+  gained a new "2 (remediation round 2)" phase-history row (round-1's own
+  row left unmodified as immutable history); `last_orchestrator_approved_
+  phase`/`approved_commit` unchanged. 706 tests passing (up from 702),
+  85% coverage (unchanged), ruff+mypy+format clean, 12/12 real-chain
+  fixtures ok, secret scan clean on the changed files. See
+  `orchestration/checkpoints/phase_2_remediation_2.md` for the full
+  disposition.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT

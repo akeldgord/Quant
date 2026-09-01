@@ -1,0 +1,334 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE
+instruction_id: argus-phase-2-remediation-002
+STATUS: PHASE_2_REMEDIATION_ROUND_2_COMPLETE_ONE_BOUNDARY_DEFECT_FIXED
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TEST_STATUS: unit 523/523 passed (test_historical_acquisition.py 18/18,
+  incl. 4 new remediation-002 tests); integration 71/71 passed (real
+  PostgreSQL 16); golden 95/95 passed; replay 10/10 passed; phase_1_5
+  7/7 passed; full suite 706/706 passed (up from 702), 85% overall
+  coverage; ruff clean; ruff format clean; mypy clean (98 source files);
+  12/12 real-chain fixtures ok; secret scan clean on this round's 3
+  changed files.
+
+This bundle contains the full checkpoint (below) plus additional review
+evidence: the exact single named P2-R2 boundary defect mapped to code and
+tests in checkpoint section B, all 4 frozen remediation-002 acceptance
+tests individually scored PASS with exact test-name citations in section
+E (including a direct "identical page shape, boundary omitted"
+regression proof that the new default genuinely preserves round-1
+behavior, not a coincidence), the real `argus discover
+acquire-and-run-archaeology --help` and its real fail-closed run against
+the missing `HELIUS_API_KEY` credential with the new
+`--expected-oldest-slot` flag set (proving the new CLI wiring is genuine
+production wiring, not a test-only argument), a `git diff --stat` proof
+that exactly 3 files were touched this round (the tiny, scope-locked
+diff the instruction requires -- zero touches to any of the seven closed
+P2-R findings' own code), a full secret scan and signing/broadcast
+keyword scan across this round's changed files, and an explicit
+cost/security confirmation (sections I, J) that zero real provider calls
+and zero signing/broadcast paths exist anywhere in this round's work.
+One incidental, disclosed, non-destructive operational note: this
+sandbox's local PostgreSQL service was found stopped mid-run and was
+restarted (section G) -- no data lost, same dev cluster used throughout
+this project. All of the above was captured live during this task,
+against this exact commit.
+
+================================================================
+FULL CHECKPOINT
+================================================================
+
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 2 remediation round 2 -- fix the one narrow remaining
+  P2-R2 boundary defect named in orchestrator instruction
+  `argus-phase-2-remediation-002`: the historical acquisition service had
+  no explicit expected-history boundary to distinguish a legitimate
+  end-of-history empty/short pagination page from a premature provider
+  truncation, so it unconditionally treated any empty/short page as
+  `COMPLETE`.
+STATUS: The single named defect is fixed with real, tested code. All 4
+  frozen remediation-002 acceptance tests pass. Phase 2 remains NOT
+  orchestrator-approved.
+UTC_TIMESTAMP: 2026-09-01T02:53:11Z
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TARGET_COMMIT: c99341a9c767c006cfe96fa4948dd54a9efe712b
+AUTHORIZED_PHASE: 2
+APPROVES_PHASE: NONE
+
+B. What was built
+
+Per orchestrator instruction `argus-phase-2-remediation-002`
+(`AUTHORIZED_ACTION: REMEDIATE_ONE_REMAINING_FROZEN_PHASE_2_BOUNDARY_
+DEFECT_ONLY`), the independent re-audit closed 7 of the 8 round-1
+findings (P2-R1, P2-R3, P2-R4, P2-R5, P2-R6, P2-R7, P2-R8) and left
+exactly one narrow P2-R2 acceptance case open: the acquisition service's
+own test module described a "premature short/empty page" scenario in its
+header, but its actual tests only proved that an *ordinary* short final
+page and an ordinary empty history are treated as complete -- never that
+a caller-supplied expected boundary is respected when the walk truncates
+before reaching it. Per this instruction's own scope lock ("Do not
+revisit the seven closed P2 findings except for regression tests"), only
+this one item was touched.
+
+1. **`src/argus/tokens/historical_acquisition.py`**
+   (`ALGORITHM_VERSION` bumped `historical_acquisition_v1` ->
+   `historical_acquisition_v2`) -- `acquire_historical_transactions`
+   gained a new, optional, typed parameter `expected_oldest_slot: int |
+   None = None`: an independently known expected historical boundary
+   (e.g. a token's own known creation slot), machine-checkable against
+   the observed pagination walk. A local `boundary_satisfied` flag starts
+   `True` immediately when no boundary is supplied (nothing to satisfy,
+   preserving round-1 behavior exactly) and otherwise flips `True` the
+   first time an observed signature's own `slot` is at or below
+   `expected_oldest_slot`. Both of the two "natural completion" exit
+   points (an empty page, and a short/`< page_size` page) now check this
+   flag before letting the walk report `COMPLETE`: if the boundary was
+   supplied but not yet satisfied at that point, the result is
+   `PARTIAL` instead, with a specific `known_gaps` note naming the
+   unsatisfied slot, the page kind (`empty`/`short`), the page number,
+   and the earliest slot actually observed so far -- and every
+   successfully collected signature/transaction up to that point is
+   still returned, never discarded. No other exit path (provider
+   failure, ordering fault, duplicate/cycle, safety-ceiling exhaustion,
+   per-transaction fetch failure) is touched at all -- each was already
+   correctly non-`COMPLETE` regardless of any boundary, so none needed
+   boundary-awareness added. A caller-supplied `--partial` flag is never
+   the proof anywhere in this path: the comparison is the service's own,
+   against `expected_oldest_slot`, not a caller assertion.
+2. **`src/argus/cli.py`** (`argus discover acquire-and-run-archaeology`)
+   -- gained `--expected-oldest-slot <int>` (optional, defaults to unset
+   -> `None`), threaded straight through to
+   `acquire_historical_transactions(..., expected_oldest_slot=
+   expected_oldest_slot)`. The option is real production CLI wiring, not
+   a test-only argument: `argus discover acquire-and-run-archaeology
+   --help` shows it, and a real invocation with the flag set (against
+   this sandbox's real missing-`HELIUS_API_KEY` state) still produces the
+   exact section-108 `LOCAL CREDENTIAL REQUIRED` notice before any
+   network call, proving the option reaches the real call site without
+   affecting the credential-gated fail-closed path (section C).
+3. **`tests/unit/test_historical_acquisition.py`** -- 4 new frozen
+   remediation-002 acceptance tests (module total 14 -> 18):
+   - `test_r002_premature_short_page_before_boundary_is_partial` --
+     boundary not reached, a short page arrives; asserts `PARTIAL`, the
+     unsatisfied boundary and page kind named in `known_gaps`, every
+     fetched transaction preserved, and the exact provider call sequence
+     (`usage_log`) the walk actually made.
+   - `test_r002_premature_empty_page_before_boundary_is_partial` -- one
+     genuine full page, then an empty page before the boundary; same
+     fail-closed assertions, prior page's evidence preserved.
+   - `test_r002_boundary_satisfied_reports_complete` -- the expected
+     slot IS observed before a short final page; asserts `COMPLETE`,
+     `known_gaps is None`.
+   - `test_r002_no_boundary_supplied_preserves_prior_short_page_complete_
+     behavior` -- the *identical* page shape used in the first test
+     above, but with `expected_oldest_slot` omitted entirely; asserts
+     `COMPLETE` -- direct proof that omitting the parameter is not
+     merely "usually fine" but genuinely, exactly the unconditional
+     round-1 behavior, not a coincidentally-passing case.
+
+C. Commands actually run
+
+All commands below were run against this exact commit (this checkpoint's
+own `GIT_COMMIT`, filled in by the second commit per this project's
+established two-commit convention):
+
+- `uv run ruff check .` -- All checks passed.
+- `uv run ruff format --check .` -- 192 files already formatted.
+- `uv run mypy` (bare -- `[tool.mypy]` scopes this to `src/argus`) --
+  Success: no issues found in 98 source files.
+- `uv run pytest tests/unit -q` -- 523 passed, 0 failed, 0 skipped
+  (includes `test_historical_acquisition.py`'s 4 new remediation-002
+  tests, module total 18).
+- `uv run pytest tests/integration -q` -- 71 passed, 0 failed, 0 skipped
+  (real local PostgreSQL 16 -- this sandbox's Postgres service was found
+  stopped mid-session and was restarted via `sudo service postgresql
+  start`, a non-destructive operation on the same local dev cluster used
+  throughout this project; all data survived the restart, confirmed by
+  the full Phase 2 remediation-1 evidence still being queryable
+  afterward).
+- `uv run pytest tests/golden -q` -- 95 passed (unchanged -- regression).
+- `uv run pytest tests/replay -q` -- 10 passed (unchanged -- regression).
+- `uv run pytest tests/phase_1_5 -q` -- 7 passed (unchanged --
+  regression).
+- `uv run pytest tests/ -q` -- 706 passed, 0 failed, 0 unexplained
+  skipped (full repository suite, up from remediation-1's 702; the exact
+  +4 from this round's new tests).
+- `uv run pytest --cov --cov-report=term-missing -q` -- 706 passed, 85%
+  overall coverage (4927 statements, 689 missed, 1022 branches, 125
+  partial) -- materially unchanged from remediation-1's 85%.
+- `uv run argus fixtures validate-real-chain` -- all 12 real-chain
+  fixtures ok (unaffected by this round -- regression-confirmed).
+- `uv run python -m argus.cli discover acquire-and-run-archaeology
+  --help` -- confirms `--expected-oldest-slot` is real, wired CLI surface
+  (not a test-only argument).
+- `uv run python -m argus.cli discover acquire-and-run-archaeology
+  --mint FAKEMINT --address FAKEADDR --expected-oldest-slot 12345
+  --completeness-statement test` (no `HELIUS_API_KEY` configured) --
+  produces the exact section-108 `LOCAL CREDENTIAL REQUIRED` notice, no
+  network call attempted -- the new option does not disturb the
+  fail-closed live-credential path.
+- `git diff --stat c99341a9c767c006cfe96fa4948dd54a9efe712b --
+  . ':!orchestration'` -- exactly 3 files changed
+  (`src/argus/cli.py`, `src/argus/tokens/historical_acquisition.py`,
+  `tests/unit/test_historical_acquisition.py`), 183 insertions(+), 5
+  deletions(-) -- the tiny, scope-locked diff this instruction requires;
+  zero touches to any of the seven closed P2-R findings' own code, zero
+  `config/` changes, no new top-level module.
+- `git grep -n "sign_transaction\|send_transaction\|sendRawTransaction\|
+  private_key\|Keypair(\|broadcast" -- src/argus/tokens/historical_
+  acquisition.py src/argus/cli.py` -- every match is a pre-existing
+  docstring/comment stating the prohibition; no executable signing/
+  broadcast code was added.
+- `git ls-files -z src/argus/tokens/historical_acquisition.py
+  src/argus/cli.py tests/unit/test_historical_acquisition.py | xargs -0
+  grep` secret scan (AWS-style keys, PEM headers, inline password/
+  api-key/secret literals) across this round's 3 changed files -- clean,
+  no matches.
+
+D. Test results
+
+- unit: 523 passed (module `test_historical_acquisition.py`: 18/18,
+  incl. 4 new remediation-002 tests)
+- integration: 71 passed (real PostgreSQL 16)
+- golden: 95 passed (unchanged -- regression)
+- replay: 10 passed (unchanged -- regression)
+- phase_1_5: 7 passed (unchanged -- regression)
+- full suite: 706 passed, 0 failed, 0 unexplained skipped (up from 702)
+- full suite with coverage: 706 passed, 85% overall coverage
+- ruff check: clean
+- ruff format --check: clean
+- mypy: clean, 98 source files
+- real-chain fixtures: 12/12 ok
+
+E. Frozen remediation-002 acceptance-test disposition
+
+1. **Premature short page** -- PASS.
+   `test_r002_premature_short_page_before_boundary_is_partial`: an
+   unsatisfied `expected_oldest_slot` plus a short page asserts
+   `PARTIAL`, the unsatisfied boundary named in `known_gaps`, every
+   fetched transaction preserved, and the exact provider call sequence
+   asserted via `usage_log` (correct usage accounting -- one listing
+   call, two transaction fetches, nothing skipped or duplicated).
+2. **Premature empty page** -- PASS.
+   `test_r002_premature_empty_page_before_boundary_is_partial`: one
+   genuine full page followed by an empty page before the boundary
+   asserts the same fail-closed `PARTIAL` behavior, the prior page's
+   evidence preserved, and the exact call sequence.
+3. **Boundary satisfied** -- PASS.
+   `test_r002_boundary_satisfied_reports_complete`: an expected boundary
+   that IS actually observed before an otherwise-identical short final
+   page asserts `COMPLETE`, `known_gaps is None`.
+4. **No-boundary regression** -- PASS.
+   `test_r002_no_boundary_supplied_preserves_prior_short_page_complete_
+   behavior`: the *identical* short-page shape from item 1 above, with
+   `expected_oldest_slot` omitted, asserts `COMPLETE` -- direct proof
+   the default is exactly round-1's unconditional semantics, not a
+   coincidence. Additionally, all 14 pre-existing
+   `test_historical_acquisition.py` tests, the full Phase 2 test suite,
+   the full repository suite (706/706), Ruff lint/format, mypy, and the
+   real-chain/golden regression suite all pass unchanged (section D) --
+   previously approved environmental deferrals were not reopened this
+   round (section F).
+
+F. Environmental deferrals (unchanged from remediation-1; none reopened
+   this round, per this instruction's own explicit "do not spend this
+   run reopening them")
+
+- Live Helius RPC connectivity -- NOT TESTED (no `HELIUS_API_KEY`
+  configured). The new `--expected-oldest-slot` CLI option was directly
+  exercised against this exact deferral (section C) and produces the
+  honest section-108 notice, never a mocked live-acceptance claim.
+- Real PostgreSQL 17 Compose validation -- unchanged, `DEFERRED_
+  ENVIRONMENTAL_CHECK`; this round's real-Postgres integration tests ran
+  against the same local PostgreSQL 16 substitute this project has used
+  throughout, restarted mid-session per section C, never described as
+  PostgreSQL 17 validation.
+- DexScreener/GeckoTerminal/Jupiter live reachability -- unchanged,
+  UNREACHABLE.
+
+None of these deferrals is claimed as PASS, and none authorizes live
+readiness by itself.
+
+G. Deviation from the audit instruction
+
+None. Work was strictly limited to the single named P2-R2 boundary
+defect (`AUTHORIZED_ACTION: REMEDIATE_ONE_REMAINING_FROZEN_PHASE_2_
+BOUNDARY_DEFECT_ONLY`): exactly 3 files touched (section C), no redesign
+of Phase 2, no new security/hardening requirement invented, none of the
+seven closed P2-R findings' own implementation revisited (only their
+regression tests re-run, all passing unchanged), no Phase 3 work begun,
+no extra test unrelated to this boundary defect added.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified; no live
+trade, signing, credential disclosure, paid-provider upgrade, or
+threshold relaxation was performed or attempted. One incidental,
+non-destructive operational note: this sandbox's local PostgreSQL
+service was found stopped partway through this round's validation run
+(unrelated to any change made here) and was restarted
+(`sudo service postgresql start`) so the real-Postgres integration suite
+could run -- the same local dev cluster used throughout this project,
+no data lost, no schema change, disclosed here rather than silently
+worked around.
+
+H. Known bugs / debt
+
+- No new known bugs are introduced by this round's changes.
+- All known debt items disclosed in
+  `orchestration/checkpoints/phase_2_remediation.md` section H are
+  unchanged and not reopened by this round (per the instruction's own
+  scope lock).
+
+I. Security state
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` -- unaffected.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast
+  path exists anywhere in the 3 files this round touched (section C).
+- Credential handling for `HELIUS_API_KEY` is unchanged and was directly
+  re-exercised with the new option set (section C): missing credential
+  raises the exact section-108 notice, never a mocked fallback.
+- Secret scan clean on this round's changed files (section C).
+- No paid-provider feature enabled; no Phase 3 or later-phase code
+  started; `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` not modified.
+
+J. Cost confirmation
+
+No real provider call was made anywhere in this round: the new option's
+only live-network attempt (section C) failed closed on the missing
+credential before any HTTP request was constructed; all 4 new tests use
+the same deterministic `ScriptedChainProvider` fake already established
+in remediation-1, never a real or paid provider. Zero new usage-recorder
+rows this round.
+
+K. Next specified phase
+
+Per orchestrator instruction `argus-phase-2-remediation-002`, this
+instruction approves no phase and authorizes remediation of exactly the
+one named P2-R2 boundary defect.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified.
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` (`1.5`) and
+`approved_commit` are left unchanged -- this session does not and cannot
+self-approve Phase 2. Per this project's established two-commit
+convention, this checkpoint, the paired bundle, `docs/BUILD_STATE.md`,
+`docs/DECISION_LOG.md`, and `orchestration/AGENT_HANDOFF.md` are
+committed once with every commit-hash-bearing field set to the literal
+placeholder `PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second,
+immediately following commit fills in that first commit's own real hash
+in every one of those fields -- both commits carry the sole terminal
+trailer `ARGUS-INSTRUCTION-ID: argus-phase-2-remediation-002` with no
+paragraph after it, verified via `git interpret-trailers --parse` before
+push.
+
+Per this instruction's own explicit statement: "If this exact boundary
+defect is proven fixed with no regression, the next orchestrator audit
+should approve Phase 2 and authorize Phase 3 in the same cycle." This
+checkpoint reports that the defect is fixed (section E) with no
+regression (section D) for orchestrator disposition -- it does not and
+cannot itself apply that approval.
+
+STOP. Await orchestrator review of this checkpoint before any further
+phase work.
+
+================ END ARGUS CHECKPOINT =========================

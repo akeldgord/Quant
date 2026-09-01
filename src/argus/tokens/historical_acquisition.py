@@ -37,6 +37,17 @@ Provider usage accounting flows through the provider instance itself
 (``HeliusRpcClient``'s own ``usage_recorder``, wired the same way
 ``argus ingest run`` already wires it) -- this module makes no separate
 usage-accounting call of its own.
+
+P2-R2 remediation round 2 (``argus-phase-2-remediation-002``) closes the
+one narrow acceptance case round 1 left unproven: a caller with an
+independently known expected historical boundary (e.g. a token's own
+creation slot, already recoverable from other evidence) can supply
+``expected_oldest_slot`` so a provider's *premature* early truncation --
+an empty/short page that arrives before that boundary is actually
+reached -- is distinguished, machine-checkably, from a genuine "reached
+the start of history" completion. With no boundary supplied, the
+original round-1 semantics are unchanged exactly (a short/empty page is
+still the ordinary successful completion signal).
 """
 
 from __future__ import annotations
@@ -49,7 +60,7 @@ if TYPE_CHECKING:
 
 from argus.wallets.early_buyer_extraction import RawTransactionEvidence
 
-ALGORITHM_VERSION: Final[str] = "historical_acquisition_v1"
+ALGORITHM_VERSION: Final[str] = "historical_acquisition_v2"
 
 STATUS_COMPLETE: Final[str] = "COMPLETE"
 STATUS_PARTIAL: Final[str] = "PARTIAL"
@@ -85,11 +96,23 @@ async def acquire_historical_transactions(
     address: str,
     max_pages: int = DEFAULT_MAX_PAGES,
     page_size: int = DEFAULT_PAGE_SIZE,
+    expected_oldest_slot: int | None = None,
 ) -> AcquisitionResult:
     """Walks ``address``'s full signature history back to genesis (no
-    persisted watermark/boundary -- this is a bootstrap-style historical
+    persisted watermark -- this is a bootstrap-style historical
     acquisition, not an incremental gap-fill), bounded by ``max_pages``
     (never unbounded), then fetches and normalizes each transaction.
+
+    ``expected_oldest_slot`` is an optional, caller-supplied, machine-
+    checkable boundary (e.g. a token's own known creation slot) -- when
+    given, an empty/short "natural completion" page is trusted as
+    genuinely ``COMPLETE`` only once the walk has actually observed a
+    signature at or before that slot; a caller with no independently
+    known boundary passes ``None`` and gets the exact prior (round-1)
+    behavior unchanged, where any short/empty page is itself sufficient.
+    A caller-supplied ``--partial`` flag downstream is never the proof
+    here -- this function itself compares the observed walk against the
+    boundary.
 
     Explicit fault handling, never silently reported complete:
 
@@ -105,8 +128,14 @@ async def acquire_historical_transactions(
       the same check) stops and reports ``PARTIAL``;
     - **the safety ceiling** (``max_pages`` reached without the walk
       naturally completing) reports ``PARTIAL``;
-    - **a short/empty final page** is the ordinary, successful "reached
-      the true start of this address's history" outcome -- ``COMPLETE``;
+    - **a short/empty final page** is the ordinary "reached the true
+      start of this address's history" signal -- ``COMPLETE`` when no
+      ``expected_oldest_slot`` was supplied, or once the walk has already
+      observed a signature at or before it; if that boundary is supplied
+      but has NOT yet been reached, the same short/empty page instead
+      reports ``PARTIAL`` with the unsatisfied boundary named in
+      ``known_gaps`` and every signature/transaction acquired so far
+      still preserved, never discarded;
     - **a per-transaction fetch failure** (the signature was listed, but
       ``get_transaction`` itself failed) is recorded individually
       (``transaction_fetch_failures``), never silently dropped from the
@@ -121,6 +150,17 @@ async def acquire_historical_transactions(
     status = STATUS_COMPLETE
     gap_notes: list[str] = []
     page_number = 0
+    # True immediately when no boundary was supplied (nothing to satisfy);
+    # otherwise flips True the first time an observed signature's slot is
+    # at or below the caller's expected oldest slot.
+    boundary_satisfied = expected_oldest_slot is None
+
+    def _unsatisfied_boundary_note(*, page_kind: str) -> str:
+        observed = f"slot {last_slot}" if last_slot is not None else "no signatures observed"
+        return (
+            f"expected oldest slot {expected_oldest_slot} not yet reached before a "
+            f"{page_kind} page at page {page_number} -- earliest observed: {observed}"
+        )
 
     for page_number in range(1, max_pages + 1):
         try:
@@ -136,6 +176,9 @@ async def acquire_historical_transactions(
             break
 
         if not page:
+            if not boundary_satisfied:
+                gap_notes.append(_unsatisfied_boundary_note(page_kind="empty"))
+                status = STATUS_PARTIAL
             break  # genuinely reached the start of this address's history
 
         fault = False
@@ -160,11 +203,16 @@ async def acquire_historical_transactions(
                 break
             seen_signatures.add(item.signature)
             all_signatures.append(item)
+            if expected_oldest_slot is not None and item.slot <= expected_oldest_slot:
+                boundary_satisfied = True
         if fault:
             break
 
         before_cursor = page[-1].signature
         if len(page) < page_size:
+            if not boundary_satisfied:
+                gap_notes.append(_unsatisfied_boundary_note(page_kind="short"))
+                status = STATUS_PARTIAL
             break  # short page -- reached the start
     else:
         gap_notes.append(

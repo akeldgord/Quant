@@ -404,3 +404,118 @@ async def test_evidence_reference_and_identity_fields_are_carried_through() -> N
     assert ev.slot == 1
     assert ev.evidence_reference == f"live_acquisition:{ADDRESS}:A"
     assert ev.raw == _tx("A")
+
+
+# ---------------------------------------------------------------------
+# argus-phase-2-remediation-002: expected_oldest_slot boundary matrix.
+# The one remaining acceptance case round 1 left unproven -- a caller
+# with an independently known expected historical boundary must not
+# have a *premature* provider truncation (an empty/short page arriving
+# before that boundary is actually reached) silently reported COMPLETE.
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_r002_premature_short_page_before_boundary_is_partial() -> None:
+    """Frozen acceptance test 1: an expected boundary that has NOT been
+    reached, then a short (< page_size) page -- must be non-COMPLETE,
+    name the unsatisfied boundary, preserve every fetched transaction,
+    and account for every provider call actually made."""
+    provider = ScriptedChainProvider(
+        pages=[[_sig("A", 50), _sig("B", 49)]],  # short: 2 < page_size(5)
+        transactions={"A": _tx("A"), "B": _tx("B")},
+    )
+
+    result = await acquire_historical_transactions(
+        provider, address=ADDRESS, max_pages=10, page_size=5, expected_oldest_slot=10
+    )
+
+    assert result.status == STATUS_PARTIAL
+    assert result.known_gaps is not None
+    assert "expected oldest slot 10 not yet reached" in result.known_gaps
+    assert "short" in result.known_gaps
+    assert "slot 49" in result.known_gaps  # earliest observed, honestly reported
+    # Every fetched transaction is preserved, never discarded over the
+    # unsatisfied boundary.
+    assert [t.signature for t in result.transactions] == ["A", "B"]
+    assert result.signatures_seen == 2
+    # Exactly the calls the walk actually made -- one listing call, two
+    # transaction fetches -- correct provider usage accounting.
+    assert provider.usage_log == [
+        "get_signatures_for_address#0",
+        "get_transaction:A",
+        "get_transaction:B",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_r002_premature_empty_page_before_boundary_is_partial() -> None:
+    """Frozen acceptance test 2: after at least one valid (full) page, an
+    empty page arrives before the expected boundary is satisfied -- same
+    fail-closed behavior, prior page's evidence preserved."""
+    provider = ScriptedChainProvider(
+        pages=[
+            [_sig("A", 50), _sig("B", 49)],  # full page (page_size=2)
+            [],  # premature empty page -- boundary (slot 10) not reached
+        ],
+        transactions={"A": _tx("A"), "B": _tx("B")},
+    )
+
+    result = await acquire_historical_transactions(
+        provider, address=ADDRESS, max_pages=10, page_size=2, expected_oldest_slot=10
+    )
+
+    assert result.status == STATUS_PARTIAL
+    assert result.known_gaps is not None
+    assert "expected oldest slot 10 not yet reached" in result.known_gaps
+    assert "empty" in result.known_gaps
+    assert "slot 49" in result.known_gaps
+    assert [t.signature for t in result.transactions] == ["A", "B"]
+    assert provider.usage_log == [
+        "get_signatures_for_address#0",
+        "get_signatures_for_address#1",
+        "get_transaction:A",
+        "get_transaction:B",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_r002_boundary_satisfied_reports_complete() -> None:
+    """Frozen acceptance test 3: the expected boundary IS actually
+    reached/observed before the natural short-page completion -- the
+    otherwise-valid walk may report COMPLETE."""
+    provider = ScriptedChainProvider(
+        pages=[[_sig("A", 50), _sig("B", 10), _sig("C", 9)]],  # short: 3 < page_size(5)
+        transactions={s: _tx(s) for s in "ABC"},
+    )
+
+    result = await acquire_historical_transactions(
+        provider, address=ADDRESS, max_pages=10, page_size=5, expected_oldest_slot=10
+    )
+
+    assert result.status == STATUS_COMPLETE
+    assert result.known_gaps is None
+    assert [t.signature for t in result.transactions] == ["A", "B", "C"]
+    assert "complete" in result.completeness_statement.lower()
+
+
+@pytest.mark.asyncio
+async def test_r002_no_boundary_supplied_preserves_prior_short_page_complete_behavior() -> None:
+    """Frozen acceptance test 4 (no-boundary regression): the exact same
+    short-page shape that test_r002_premature_short_page_before_boundary_
+    is_partial reports PARTIAL for (with a boundary) must still report
+    COMPLETE when expected_oldest_slot is omitted entirely -- proving the
+    default genuinely preserves round-1's unconditional short/empty-page-
+    is-complete semantics, not merely a coincidentally-passing case."""
+    provider = ScriptedChainProvider(
+        pages=[[_sig("A", 50), _sig("B", 49)]],  # identical shape to test 1 above
+        transactions={"A": _tx("A"), "B": _tx("B")},
+    )
+
+    result = await acquire_historical_transactions(
+        provider, address=ADDRESS, max_pages=10, page_size=5
+    )  # expected_oldest_slot omitted -- defaults to None
+
+    assert result.status == STATUS_COMPLETE
+    assert result.known_gaps is None
+    assert [t.signature for t in result.transactions] == ["A", "B"]
