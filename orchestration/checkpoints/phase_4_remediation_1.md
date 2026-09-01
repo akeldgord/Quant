@@ -21,7 +21,7 @@ STATUS: All 7 frozen findings (P4-R1..P4-R7) are fixed with real, tested
   checkpoint reports remediation completion for independent re-audit, it
   does not and cannot itself apply approval.
 UTC_TIMESTAMP: 2026-09-01T16:30:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 285f5a9fe993ff72a02ef6470ea9627952389428
 TARGET_COMMIT: d95a629985668a0ba73795d3ad8daeb5534ce855
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
@@ -251,7 +251,7 @@ Per this project's established two-commit convention, this checkpoint, the
 paired bundle, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every commit-hash-
 bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately following
+`285f5a9fe993ff72a02ef6470ea9627952389428`, then a second, immediately following
 commit fills in that first commit's own real hash in every one of those
 fields -- both commits carry the sole terminal trailer `ARGUS-INSTRUCTION-
 ID: argus-phase-4-remediation-001` with no paragraph after it, verified via
