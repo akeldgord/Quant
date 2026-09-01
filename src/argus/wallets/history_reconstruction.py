@@ -283,6 +283,32 @@ def _walk_stats_from_dict(data: dict, *, context: str) -> WalkStats:
     )
 
 
+def _check_walk_internal_consistency(walk: WalkStats, *, context: str) -> None:
+    """P3-R2 remediation round 4 (`argus-phase-3-remediation-004`,
+    adversarial probe 3): the real producer
+    (``argus.tokens.historical_acquisition.acquire_historical_transactions``)
+    can never itself report ``STATUS_COMPLETE`` while also recording a
+    per-transaction fetch failure or an unsatisfied caller-supplied
+    boundary -- either one downgrades its own ``status`` to
+    ``STATUS_PARTIAL`` before returning. A persisted walk claiming
+    ``COMPLETE`` alongside either of those is therefore never genuine
+    producer output; it is conflicting/tampered data and must fail
+    closed rather than silently justify trust in a COMPLETE walk."""
+    if walk.status != STATUS_COMPLETE:
+        return
+    if walk.transaction_fetch_failures != 0:
+        raise ManifestDecodeError(
+            f"{context}: status is {STATUS_COMPLETE!r} but transaction_fetch_failures="
+            f"{walk.transaction_fetch_failures} -- a genuinely complete walk can never record "
+            "a per-transaction fetch failure"
+        )
+    if walk.boundary_satisfied is False:
+        raise ManifestDecodeError(
+            f"{context}: status is {STATUS_COMPLETE!r} but boundary_satisfied is False -- a "
+            "genuinely complete walk can never leave a supplied boundary unsatisfied"
+        )
+
+
 def manifest_as_dict(manifest: AcquisitionManifest) -> dict:
     return {
         "run_id": str(manifest.run_id),
@@ -339,7 +365,35 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
     outcome literal must be one of the recognized constants, and no
     account pubkey or evidence signature may repeat within one manifest
     (a duplicate is itself malformed/conflicting data, never silently
-    deduplicated here)."""
+    deduplicated here).
+
+    P3-R2 remediation round 4 (`argus-phase-3-remediation-004`, closing
+    audit `argus-phase-3-remediation-audit-003`'s P3-R2b): ``acquired_
+    evidence`` and ``associated_token_accounts`` must be explicitly
+    present arrays -- a genuinely empty array (a real enumeration/walk
+    that found nothing) remains legitimate, but a MISSING key (adversarial
+    probe 2: deleting the key entirely) is fatal, never silently defaulted
+    to ``[]``. ``PARSED``/``ALREADY_KNOWN_VERIFIED`` evidence must name a
+    non-null, resolving ``derived_swap_id`` plus its real ``parser_version``/
+    ``build_hash`` (adversarial probe 4: a null derived reference can no
+    longer decode successfully at all). ``wallet_walk_status`` must agree
+    with ``wallet_walk.status`` (and each account's own top-level
+    ``status`` with its own ``walk.status``) -- the real producer never
+    disagrees with itself, so any manifest that does is conflicting data
+    (adversarial probe 3). A walk cannot claim ``COMPLETE`` while also
+    recording a transaction-fetch failure or an unsatisfied supplied
+    boundary -- see :func:`_check_walk_internal_consistency`."""
+    if "associated_token_accounts" not in data:
+        raise ManifestDecodeError(
+            "associated_token_accounts is a required array (an explicit empty list is "
+            "legitimate; the key itself must always be present)"
+        )
+    if "acquired_evidence" not in data:
+        raise ManifestDecodeError(
+            "acquired_evidence is a required array (an explicit empty list is legitimate; "
+            "the key itself must always be present)"
+        )
+
     enumerated = data.get("token_accounts_enumerated")
     if not isinstance(enumerated, bool):
         raise ManifestDecodeError(
@@ -351,10 +405,18 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
         raise ManifestDecodeError(
             f"wallet_walk_status {wallet_walk_status!r} is not a recognized walk status"
         )
+    wallet_walk = _walk_stats_from_dict(data["wallet_walk"], context="wallet walk")
+    if wallet_walk_status != wallet_walk.status:
+        raise ManifestDecodeError(
+            f"wallet_walk_status {wallet_walk_status!r} disagrees with wallet_walk.status "
+            f"{wallet_walk.status!r} -- the real producer never reports these two fields "
+            "differently; this is conflicting data"
+        )
+    _check_walk_internal_consistency(wallet_walk, context="wallet walk")
 
     seen_pubkeys: set[str] = set()
     accounts: list[TokenAccountCoverage] = []
-    for tac in data.get("associated_token_accounts", []):
+    for tac in data["associated_token_accounts"]:
         pubkey = tac.get("pubkey")
         if not pubkey or not isinstance(pubkey, str):
             raise ManifestDecodeError(f"associated token account missing a valid pubkey: {tac!r}")
@@ -369,19 +431,26 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
             raise ManifestDecodeError(
                 f"associated token account {pubkey!r}: status {status!r} is not recognized"
             )
+        account_walk = _walk_stats_from_dict(tac["walk"], context=f"account {pubkey!r}")
+        if status != account_walk.status:
+            raise ManifestDecodeError(
+                f"associated token account {pubkey!r}: status {status!r} disagrees with its "
+                f"own walk.status {account_walk.status!r} -- conflicting data"
+            )
+        _check_walk_internal_consistency(account_walk, context=f"account {pubkey!r}")
         accounts.append(
             TokenAccountCoverage(
                 pubkey=pubkey,
                 mint=tac["mint"],
                 owner=tac["owner"],
                 status=status,
-                walk=_walk_stats_from_dict(tac["walk"], context=f"account {pubkey!r}"),
+                walk=account_walk,
             )
         )
 
     seen_signatures: set[str] = set()
     evidence: list[AcquiredEvidenceRecord] = []
-    for ev in data.get("acquired_evidence", []):
+    for ev in data["acquired_evidence"]:
         signature = ev.get("signature")
         if not signature or not isinstance(signature, str):
             raise ManifestDecodeError(f"acquired evidence entry missing a valid signature: {ev!r}")
@@ -404,6 +473,25 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
         payload_hash_value = ev.get("payload_hash")
         if not payload_hash_value or not isinstance(payload_hash_value, str):
             raise ManifestDecodeError(f"acquired evidence {signature!r}: missing a payload_hash")
+        parser_version = ev.get("parser_version")
+        build_hash_value = ev.get("build_hash")
+        derived_swap_id = ev.get("derived_swap_id")
+        if outcome in _GENUINE_EVIDENCE_OUTCOMES:
+            if not derived_swap_id or not isinstance(derived_swap_id, str):
+                raise ManifestDecodeError(
+                    f"acquired evidence {signature!r}: parser_outcome {outcome!r} claims "
+                    "genuine usable evidence but names no non-null, resolving derived_swap_id"
+                )
+            if not parser_version or not isinstance(parser_version, str):
+                raise ManifestDecodeError(
+                    f"acquired evidence {signature!r}: parser_outcome {outcome!r} requires a "
+                    "real, non-null parser_version"
+                )
+            if not build_hash_value or not isinstance(build_hash_value, str):
+                raise ManifestDecodeError(
+                    f"acquired evidence {signature!r}: parser_outcome {outcome!r} requires a "
+                    "real, non-null build_hash"
+                )
         evidence.append(
             AcquiredEvidenceRecord(
                 address=ev["address"],
@@ -412,9 +500,9 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
                 chain_event_id=chain_event_id,
                 payload_hash=payload_hash_value,
                 parser_outcome=outcome,
-                parser_version=ev.get("parser_version"),
-                build_hash=ev.get("build_hash"),
-                derived_swap_id=ev.get("derived_swap_id"),
+                parser_version=parser_version,
+                build_hash=build_hash_value,
+                derived_swap_id=derived_swap_id,
             )
         )
 
@@ -425,7 +513,7 @@ def manifest_from_dict(data: dict) -> AcquisitionManifest:
         observation_cutoff=datetime.fromisoformat(data["observation_cutoff"]),
         algorithm_version=data["algorithm_version"],
         wallet_walk_status=wallet_walk_status,
-        wallet_walk=_walk_stats_from_dict(data["wallet_walk"], context="wallet walk"),
+        wallet_walk=wallet_walk,
         token_accounts_enumerated=enumerated,
         associated_token_accounts=tuple(accounts),
         acquired_evidence=tuple(evidence),

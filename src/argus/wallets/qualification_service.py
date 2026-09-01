@@ -52,6 +52,8 @@ from argus.domain.wallets import Wallet
 from argus.wallets.acquisition import load_verified_acquisition_manifest
 from argus.wallets.clustering import ClusterLinkEvidence, assess_wallet_cluster_risk
 from argus.wallets.history_reconstruction import (
+    EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED,
+    EVIDENCE_OUTCOME_PARSED,
     EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
     assess_wallet_history,
     manifest_as_dict,
@@ -106,6 +108,17 @@ _EXCLUSION_REASON_FUTURE_ECONOMIC_TIMESTAMP: Final[str] = "FUTURE_ECONOMIC_TIMES
 # 2) -- see the quantize() call site below for why this must happen
 # before persistence, not merely be tolerated by it.
 _SCORE_STORAGE_QUANTUM: Final[Decimal] = Decimal("1.000000000000000")
+
+# P3-R2 remediation round 4 (`argus-phase-3-remediation-004`, closing
+# audit `argus-phase-3-remediation-audit-003`'s P3-R2a): the set of
+# acquired_evidence outcomes that name real, verified, usable derived
+# swap rows -- see ``argus.wallets.acquisition.load_verified_acquisition_
+# manifest``, which independently re-verifies every entry with one of
+# these outcomes against the real chain_events/swaps rows before this
+# service ever sees the manifest.
+_GENUINE_EVIDENCE_OUTCOMES: Final[frozenset[str]] = frozenset(
+    {EVIDENCE_OUTCOME_PARSED, EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED}
+)
 
 
 def _filter_swaps_by_as_of(
@@ -311,25 +324,13 @@ async def reconstruct_and_score_wallet(
             )
         wallet_id = wallet.wallet_id
 
-        # --- 0. point-in-time-bounded evidence (P3-R1) -------------------
-        swap_rows: Sequence[Swap] = (
-            (
-                await session.execute(
-                    select(Swap).where(
-                        Swap.wallet_address == wallet_address, Swap.first_seen_at <= now
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        # ONE shared future-economic-time filter (P3-R1 remediation round
-        # 2): history assessment, position reconstruction, and scoring all
-        # see the exact same usable-evidence set -- never independently
-        # re-filtered, never silently dropped with no persisted reason.
-        usable_swaps, excluded_evidence = _filter_swaps_by_as_of(list(swap_rows), as_of=now)
-
-        # --- 0b. real, verified acquisition manifest (P3-R2) -------------
+        # --- 0. real, verified acquisition manifest (P3-R2) -------------
+        # Loaded BEFORE the swap query below (P3-R2 remediation round 4,
+        # closing audit `argus-phase-3-remediation-audit-003`'s P3-R2a) so
+        # LIVE_ACQUISITION_WALK evidence_source can bind the swap set
+        # itself to this run's own verified derived evidence, never to
+        # every Swap row the wallet happens to have accumulated from any
+        # source.
         acquisition_manifest: AcquisitionManifest | None = None
         if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK:
             if acquisition_run_id is None:
@@ -341,8 +342,67 @@ async def reconstruct_and_score_wallet(
                     "is never accepted"
                 )
             acquisition_manifest = await load_verified_acquisition_manifest(
-                session, run_id=acquisition_run_id, wallet_id=wallet_id, as_of=now
+                session,
+                run_id=acquisition_run_id,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                as_of=now,
             )
+
+        # --- 0b. point-in-time-bounded evidence (P3-R1), bound to this
+        # run's own verified evidence for LIVE_ACQUISITION_WALK ----------
+        if evidence_source == EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK:
+            assert acquisition_manifest is not None  # established above
+            # P3-R2 remediation round 4 (required implementation item 2):
+            # the exact raw/parser input set USED for reconstruction is
+            # this run's own named genuine (PARSED/ALREADY_KNOWN_VERIFIED)
+            # derived_swap_id set -- never every Swap row this wallet_
+            # address happens to have, which would let an unrelated or
+            # differently-scoped run's rows silently enter this run's
+            # history/positions/score. A genuinely empty bound set (the
+            # wallet legitimately had no usable evidence) still correctly
+            # falls through to the zero-evidence UNKNOWN behavior below --
+            # it must never be widened back out to "every row."
+            bound_swap_ids = {
+                uuid.UUID(ev.derived_swap_id)
+                for ev in acquisition_manifest.acquired_evidence
+                if ev.parser_outcome in _GENUINE_EVIDENCE_OUTCOMES
+                and ev.derived_swap_id is not None
+            }
+            swap_rows: Sequence[Swap] = (
+                (
+                    (
+                        await session.execute(
+                            select(Swap).where(
+                                Swap.wallet_address == wallet_address,
+                                Swap.first_seen_at <= now,
+                                Swap.swap_id.in_(bound_swap_ids),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if bound_swap_ids
+                else []
+            )
+        else:
+            swap_rows = (
+                (
+                    await session.execute(
+                        select(Swap).where(
+                            Swap.wallet_address == wallet_address, Swap.first_seen_at <= now
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        # ONE shared future-economic-time filter (P3-R1 remediation round
+        # 2): history assessment, position reconstruction, and scoring all
+        # see the exact same usable-evidence set -- never independently
+        # re-filtered, never silently dropped with no persisted reason.
+        usable_swaps, excluded_evidence = _filter_swaps_by_as_of(list(swap_rows), as_of=now)
 
         # --- 1. history completeness -----------------------------------
         assessment = assess_wallet_history(

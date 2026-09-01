@@ -2181,3 +2181,110 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   `phase_3_remediation_2.md` and their bundles are left byte-for-byte
   unmodified, preserved as evidence.
 - git_commit: 34080e5e70f88b668af6ca3543e1d1f39145d582
+
+### 2026-09-01 — Phase 3 fourth remediation (P3-R2a: bind reconstruction
+### to verified evidence; P3-R2b: complete fail-closed manifest/load
+### validation)
+
+- requirement_id: MASTER_SPEC.md v2.0 Phase 3, section 34 (evidence-
+  derived history completeness), CORE-001/CORE-004.
+- decision: implemented both named manifestations of the SAME P3-R2
+  requirement from independent focused re-audit
+  `argus-phase-3-remediation-audit-003` (`FAIL_REMEDIATION_REQUIRED` on
+  round 3's remediation at `fb2a3f7d2b75c526d06568ab3708ff85e1c1448d`),
+  per orchestrator instruction `argus-phase-3-remediation-004`
+  (`AUTHORIZED_ACTION: ENFORCE_EXISTING_ACQUISITION_EVIDENCE_BINDING_AT_
+  LOAD_AND_USE`, `APPROVES_PHASE: NONE`). Narrowly scoped to the audit's
+  own two-part justification table -- no previously-closed finding was
+  reopened or reworked, no `HARDENING_BACKLOG` item pulled into scope,
+  no schema change.
+- reason: the re-audit's independent adversarial probes proved two
+  concrete gaps survived round 3's own richer manifest shape. **P3-R2a**:
+  `qualification_service.reconstruct_and_score_wallet`'s
+  `LIVE_ACQUISITION_WALK` branch queried every `Swap` row for the wallet
+  address with `first_seen_at <= now`, completely independent of which
+  run's `acquired_evidence` actually named them -- the production service
+  itself supplies exactly the "unrelated nonempty swaps list" shape the
+  frozen prohibition (round 2's own P3-R2 fix) already forbade a
+  successful walk from being blessed by. Probe 1 proved a valid
+  COMPLETE/enumerated manifest with `acquired_evidence=[]` plus an
+  unrelated nonempty swaps list still returns HIGH; probe 2 proved
+  deleting `acquired_evidence` from the manifest still decodes and still
+  returns HIGH. **P3-R2b**: `manifest_from_dict` still defaulted a
+  MISSING `acquired_evidence`/`associated_token_accounts` key to `[]` via
+  `data.get(..., [])` (the same probe 2), never distinguishing "the key
+  is genuinely absent" from "a real enumeration/walk found nothing";
+  `load_verified_acquisition_manifest` only re-verified a `derived_
+  swap_id` `if ... is not None`, so `PARSED` evidence with a null
+  reference loaded successfully with NO swap query at all (probe 4); and
+  `wallet_walk_status` could disagree with the structured `wallet_walk.
+  status`, and a walk could claim `COMPLETE` while its own `wallet_walk`
+  simultaneously recorded a transaction-fetch failure (probe 3) -- none
+  of which the real producer (`acquire_historical_transactions`) can ever
+  itself emit, but which the decoder still accepted from a tampered or
+  malformed manifest.
+- fix: `qualification_service.py`'s manifest load is now moved BEFORE
+  the swap query; for `LIVE_ACQUISITION_WALK`, `bound_swap_ids` is
+  computed as exactly the manifest's own genuine (`PARSED`/`ALREADY_
+  KNOWN_VERIFIED`) `derived_swap_id` set, and the swap query is
+  restricted to `Swap.swap_id.in_(bound_swap_ids)` (short-circuited to
+  `[]` when the bound set is empty, never an unbounded `IN ()`);
+  `STREAM_FORWARD_ONLY` is completely unchanged. `history_reconstruction.
+  manifest_from_dict` now requires the `acquired_evidence`/`associated_
+  token_accounts` keys to be explicitly present (an explicit `[]` remains
+  legitimate; a missing key raises `ManifestDecodeError`); every `PARSED`/
+  `ALREADY_KNOWN_VERIFIED` entry must name a non-null, real-typed
+  `derived_swap_id`/`parser_version`/`build_hash` at decode time;
+  `wallet_walk_status` is reconciled against `wallet_walk.status` (and
+  each account's own `status` against its own `walk.status`); a new
+  `_check_walk_internal_consistency` rejects `COMPLETE` co-occurring with
+  a nonzero `transaction_fetch_failures` or `boundary_satisfied is
+  False`. `acquisition.load_verified_acquisition_manifest` gains a
+  `wallet_address` parameter and verifies the manifest's own `wallet_
+  address` against the caller's authoritative wallet row, and verifies
+  the referenced swap's actual `parser_version`/`build_hash` match what
+  the evidence entry claims (never merely "a swap for this event
+  exists," which could silently name a different artifact than the one
+  actually used for reconstruction). `run_wallet_acquisition`'s `ALREADY_
+  KNOWN_VERIFIED` producer branch now records the pre-existing swap's
+  real historical `parser_version`/`build_hash` instead of null metadata,
+  closing the one gap that would otherwise have made every already-known
+  event fail the new artifact-match check.
+- test_evidence: 12 new focused integration tests in
+  `tests/integration/test_wallet_acquisition.py` (24 -> 36): explicit-
+  empty-array acceptance, missing-`acquired_evidence`-key rejection,
+  missing-`associated_token_accounts`-key rejection, null-derived-swap
+  rejection for `PARSED`, null-`parser_version` rejection for `ALREADY_
+  KNOWN_VERIFIED`, `wallet_walk_status`/`wallet_walk.status` disagreement
+  rejection, account-status/its-own-walk-status disagreement rejection,
+  `COMPLETE`-with-fetch-failure rejection, `COMPLETE`-with-unsatisfied-
+  boundary rejection, load-time rejection of a nonexistent derived swap,
+  load-time rejection of a derived swap belonging to a different event,
+  load-time rejection of a conflicting parser-artifact identity. 3 new
+  full-producer-to-score-path integration tests in `tests/integration/
+  test_phase3_wallet_qualification.py` (14 -> 17): reconstruction proven
+  bound only to the named acquisition evidence (a genuinely real,
+  separately-persisted unrelated closed position for a second mint is
+  proven absent from the reconstructed positions), a genuinely empty
+  acquired-evidence set proven to retain the established zero-evidence
+  UNKNOWN behavior despite unrelated real swap rows existing for the same
+  wallet, and a two-parser-artifact-rows-for-one-raw-event scenario
+  proving rebinding to a different artifact yields an honest new
+  history/position identity without rewriting the prior decision's row.
+  No new migration this round (alembic head unchanged at `0015`); the
+  existing migration-preservation regression tests were re-run and
+  confirmed passing unchanged. `docs/BUILD_STATE.md` gained a new "3
+  (remediation round 4)" phase-history row; `last_orchestrator_approved_
+  phase`/`approved_commit` remain `2`/`a13ba2ab8729a08de3c571b7b12c32cc3f14c56b`
+  -- this instruction approves no phase. 792 tests passing (up from 777),
+  ruff+mypy+format clean, 12/12 real-chain fixtures ok, secret scan clean
+  on this round's 5 changed files. The accepted `PHASE_3_CANDIDATE_
+  SAMPLE_BLOCKED` result is unchanged. See `orchestration/checkpoints/
+  phase_3_remediation_4.md` for the full two-finding closure matrix and
+  acceptance criteria; the paired bundle (`orchestration/bundles/
+  phase_3_remediation_4.txt`) embeds the raw stdout and exit status of
+  every required command verbatim; historical `orchestration/checkpoints/
+  phase_3.md`/`phase_3_remediation.md`/`phase_3_remediation_2.md`/
+  `phase_3_remediation_3.md` and their bundles are left byte-for-byte
+  unmodified, preserved as evidence.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT

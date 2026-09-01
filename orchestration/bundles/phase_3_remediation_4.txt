@@ -1,0 +1,391 @@
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 3 fourth, consolidated remediation of the SAME P3-R2
+  evidence-binding requirement, per independent focused re-audit
+  `argus-phase-3-remediation-audit-003` (`FAIL_REMEDIATION_REQUIRED`) and
+  orchestrator instruction `argus-phase-3-remediation-004`
+  (`AUTHORIZED_ACTION: ENFORCE_EXISTING_ACQUISITION_EVIDENCE_BINDING_AT_
+  LOAD_AND_USE`). Narrowly scoped to the audit's own two-part
+  justification table (P3-R2a, P3-R2b): wiring `qualification_service.py`
+  to the manifest's own verified derived evidence, and completing
+  manifest/load validation to reject the four demonstrated missing/null/
+  conflicting cases. No rework of any closed finding, no optional
+  hardening, no schema change.
+STATUS: Both named manifestations (P3-R2a: reconstruction was not
+  actually constrained to the verified run's own evidence; P3-R2b:
+  missing evidence/null derived reference/conflicting walk summary passed
+  validation) are fixed with real, tested code. Phase 3 remains NOT
+  orchestrator-approved -- this checkpoint reports remediation completion
+  for independent audit, it does not and cannot itself apply approval.
+UTC_TIMESTAMP: 2026-09-01T11:45:00Z
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TARGET_COMMIT: fb2a3f7d2b75c526d06568ab3708ff85e1c1448d
+AUTHORIZED_PHASE: 3
+APPROVES_PHASE: NONE
+
+B. Two-finding closure matrix and acceptance criteria (the exact
+   seven-part-justification-table blockers from
+   `argus-phase-3-remediation-004`, each matched against its own required-
+   implementation acceptance criteria)
+
+| Finding | Frozen defect | Fix location | Test proof | Result |
+|---|---|---|---|---|
+| P3-R2a | `qualification_service.reconstruct_and_score_wallet`'s LIVE_ACQUISITION_WALK branch queried EVERY `Swap` row for `wallet_address` with `first_seen_at <= now`, never restricted to the verified run's own `acquired_evidence` -- a successful, fully-verified run could therefore be "blessed" by unrelated or differently-scoped swap rows already sitting in the database for the same wallet | The manifest is now loaded FIRST (before any swap query). For `LIVE_ACQUISITION_WALK`, `bound_swap_ids` is computed as exactly the manifest's own genuine (`PARSED`/`ALREADY_KNOWN_VERIFIED`) `derived_swap_id` set, and the swap query is restricted to `Swap.swap_id.in_(bound_swap_ids)`; a genuinely empty bound set short-circuits to `[]` rather than an unbounded `IN ()`, correctly falling through to the pre-existing zero-evidence UNKNOWN behavior. `STREAM_FORWARD_ONLY` is completely unchanged | `tests/integration/test_phase3_wallet_qualification.py`: `test_p3r2a_reconstruction_bound_only_to_named_acquisition_evidence` (an unrelated, genuinely real closed position for a second mint is proven absent from the reconstructed positions), `test_p3r2a_empty_acquired_evidence_does_not_promote_unrelated_swaps_to_usable_history` (unrelated real rows exist; empty acquired_evidence still yields UNKNOWN, zero positions), `test_p3r2a_rebinding_to_a_different_parser_artifact_yields_new_history_identity` (two parser-artifact rows for one raw event; binding one vs. the other yields two distinct history/position rows, neither rewritten) | FIXED |
+| P3-R2b | `manifest_from_dict` defaulted MISSING `acquired_evidence`/`associated_token_accounts` keys to `[]` via `data.get(..., [])` (probe 2); genuine-evidence entries could carry a `derived_swap_id: None` and still decode/load successfully, since the loader only re-verified a swap reference `if ev.derived_swap_id is not None` (probe 4); `wallet_walk_status` and the structured `wallet_walk.status` could disagree, and a walk could claim `COMPLETE` while also recording a fetch failure or an unsatisfied boundary (probe 3) | `manifest_from_dict` now requires the `acquired_evidence`/`associated_token_accounts` KEYS to be explicitly present (an explicit `[]` remains legitimate; a missing key raises `ManifestDecodeError`). `PARSED`/`ALREADY_KNOWN_VERIFIED` evidence must name a non-null, real-typed `derived_swap_id`/`parser_version`/`build_hash` at decode time. `wallet_walk_status` is reconciled against `wallet_walk.status` (and each account's own `status` against its own `walk.status`); `_check_walk_internal_consistency` rejects `COMPLETE` alongside `transaction_fetch_failures != 0` or `boundary_satisfied is False`. At load time, `load_verified_acquisition_manifest` additionally verifies the manifest's own `wallet_address` against the caller's authoritative wallet row, and verifies the referenced swap's actual `parser_version`/`build_hash` match what the evidence entry claims (never "a swap for this event exists," which could name a different artifact than the one actually used) | `tests/integration/test_wallet_acquisition.py`: `test_manifest_decode_accepts_explicit_empty_arrays`, `test_manifest_decode_rejects_missing_acquired_evidence_key`, `test_manifest_decode_rejects_missing_associated_token_accounts_key`, `test_manifest_decode_rejects_null_derived_swap_for_parsed_outcome`, `test_manifest_decode_rejects_null_parser_version_for_already_known_verified`, `test_manifest_decode_rejects_wallet_walk_status_disagreement`, `test_manifest_decode_rejects_account_status_disagreement_with_its_walk`, `test_manifest_decode_rejects_complete_status_with_fetch_failure`, `test_manifest_decode_rejects_complete_status_with_unsatisfied_boundary`, `test_load_rejects_nonexistent_derived_swap_id`, `test_load_rejects_derived_swap_belonging_to_a_different_event`, `test_load_rejects_conflicting_parser_artifact_identity` | FIXED |
+
+No previously-closed finding (P3-R1, P3-R3, P3-R4, P3-R5, P3-R6a, P3-R6b,
+P3-R7, E1, or the original `bool("false")` defect closed in round 3) is
+reopened or reworked this round, per this instruction's own explicit
+scope lock. The accepted `PHASE_3_CANDIDATE_SAMPLE_BLOCKED` result is
+unchanged.
+
+C. Reconstruction-binding matrix (P3-R2a)
+
+| Evidence source | Swap query scope |
+|---|---|
+| `STREAM_FORWARD_ONLY` | Unchanged: every `Swap` row for `wallet_address` with `first_seen_at <= now` |
+| `LIVE_ACQUISITION_WALK` | Restricted to `Swap.swap_id IN (manifest.acquired_evidence's own genuine derived_swap_id set)`, additionally bounded by the pre-existing `first_seen_at <= now` filter; a genuinely empty bound set yields `[]`, never an unbounded query |
+
+The shared `_filter_swaps_by_as_of` future-economic-time filter (P3-R1
+remediation round 2) is applied identically after this scoping, so
+history assessment, position reconstruction, and scoring all still see
+one common usable-evidence set -- only its INPUT is now correctly bound
+for `LIVE_ACQUISITION_WALK`.
+
+D. Fail-closed manifest/load validation matrix (P3-R2b)
+
+| Adversarial probe (audit `argus-phase-3-remediation-audit-003`) | Prior behavior | Fixed behavior |
+|---|---|---|
+| 1: empty `acquired_evidence` + unrelated nonempty swaps list -> HIGH | The production service supplied every swap row regardless | Reconstruction bound to the manifest's own (here: empty) evidence set (section C) -- zero usable swaps, UNKNOWN |
+| 2: delete `acquired_evidence` entirely -> decodes, HIGH | `data.get("acquired_evidence", [])` silently defaulted a MISSING key to legitimate emptiness | `manifest_from_dict` raises `ManifestDecodeError` when the key itself is absent |
+| 3: `wallet_walk.status=PARTIAL` + `transaction_fetch_failures=1`, `wallet_walk_status=COMPLETE` -> decodes, HIGH | No reconciliation between the two status fields or between COMPLETE and a recorded fault | `manifest_from_dict` rejects `wallet_walk_status != wallet_walk.status` and rejects `COMPLETE` co-occurring with a fetch failure or unsatisfied boundary |
+| 4: `PARSED` evidence with `derived_swap_id=None` -> loads without any Swap query, HIGH | `load_verified_acquisition_manifest` only re-verified `if ev.derived_swap_id is not None` | `manifest_from_dict` now REQUIRES a non-null `derived_swap_id`/`parser_version`/`build_hash` for every genuine-outcome entry at decode time -- a null reference can no longer reach the loader at all |
+
+E. Commands actually run this round (raw output embedded verbatim, with
+   exit status, in the paired bundle `orchestration/bundles/
+   phase_3_remediation_4.txt` -- this section is the index; do not treat
+   this table alone as the required raw evidence)
+
+- `uv run pytest tests/unit/test_phase3_wallet_qualification.py -q` -- 27
+  passed (exit 0, unchanged regression).
+- `uv run pytest tests/unit/test_orchestrator_watch.py -q` -- 79 passed
+  (exit 0, unchanged regression).
+- `uv run pytest tests/integration/test_wallet_acquisition.py -v` -- 36
+  passed (exit 0; was 24, +12 new focused P3-R2-round-4 tests).
+- `uv run pytest tests/integration/test_phase3_wallet_qualification.py -q`
+  -- 17 passed (exit 0; was 14, +3 new focused P3-R2a full-path tests).
+- `uv run pytest tests/integration/test_migrations.py -q` -- 17 passed
+  (exit 0, unchanged regression -- no new migration this round).
+- `uv run pytest tests/golden tests/replay tests/phase_1_5 -q` -- 112
+  passed (exit 0, unchanged regression).
+- `uv run pytest tests/integration -q` -- 128 passed (exit 0; was 113).
+- `uv run pytest -q` (full repository suite) -- 792 passed, 0 failed, 0
+  unexplained skipped (exit 0; up from 777).
+- `uv run ruff check .` -- All checks passed (exit 0).
+- `uv run ruff format --check .` -- 221 files already formatted (exit 0).
+- `uv run mypy` -- Success: no issues found in 112 source files (exit 0).
+- `uv run alembic current` -- `0015 (head)` (exit 0, unchanged -- this
+  round is software wiring only, no new migration).
+- Database migration preservation regression re-confirmed as part of the
+  17-passed `tests/integration/test_migrations.py` run above (no new
+  migration, no schema touched this round).
+- `uv run argus fixtures validate-real-chain` -- all 12 real-chain
+  fixtures ok (exit 0, unaffected -- regression-confirmed).
+- Changed-file secret scan (AWS-style keys, PEM headers, inline
+  password/api-key/secret/token literals) across all 5 files this round
+  touched (per `git status --porcelain`) -- clean, no matches, no secret
+  values emitted.
+- `git diff --stat` against `TARGET_COMMIT` -- 5 files changed, 1050
+  insertions(+), 79 deletions(-).
+
+PostgreSQL 16 remains the explicit functional substitute for PostgreSQL
+17; none of the above is described as PostgreSQL 17 validation.
+
+F. Test results summary
+
+- unit `test_phase3_wallet_qualification.py`: 27/27 (unchanged)
+- unit `test_orchestrator_watch.py`: 79/79 (unchanged)
+- integration `test_wallet_acquisition.py`: 36/36 (was 24/24; +12 new)
+- integration `test_phase3_wallet_qualification.py`: 17/17 (was 14/14; +3 new)
+- integration `test_migrations.py`: 17/17 (unchanged)
+- golden + replay + phase_1_5: 112 passed (unchanged)
+- integration full suite: 128 passed (was 113)
+- full repository suite: 792 passed, 0 failed, 0 unexplained skipped (up
+  from 777)
+- ruff check: clean
+- ruff format --check: clean (221 files)
+- mypy: clean, 112 source files
+- real-chain fixtures: 12/12 ok
+- alembic head: 0015 (unchanged)
+- secret scan: clean
+
+G. Deviation from the audit instruction
+
+None. Work was strictly limited to (1) wiring `qualification_service.py`'s
+LIVE_ACQUISITION_WALK branch to the verified run's own named genuine
+derived swap rows, and (2) completing `history_reconstruction.py`/
+`acquisition.py`'s manifest/load validation to reject the four
+demonstrated missing/null/conflicting cases -- exactly the audit's own
+two-part justification table. No previously-closed finding was reworked.
+No `HARDENING_BACKLOG` item was pulled into scope. No Phase 4 work was
+begun. No new migration, no schema change -- the existing
+`wallet_acquisition_runs.manifest` JSONB column already represents every
+field this round validates more strictly.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified. No live
+trade, signing, credential disclosure, paid-provider upgrade, threshold
+relaxation, or candidate-sample expansion was performed or attempted.
+
+H. Known bugs / debt
+
+- No new known bugs are introduced by this round's changes.
+- All debt items disclosed in prior checkpoints not superseded by this
+  remediation remain unchanged and not reopened.
+
+I. Security state
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` -- unaffected.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast
+  path exists anywhere in this round's changed files.
+- Credential handling for `HELIUS_API_KEY` is unchanged; every new test
+  this round uses the existing deterministic `AddressKeyedChainProvider`
+  fake or directly-inserted real rows, never a real/paid provider.
+- Secret scan clean on this round's 5 changed files (section E).
+- No paid-provider feature enabled; no Phase 4 or later-phase code
+  started; `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` not modified.
+
+J. Cost confirmation
+
+No real provider call was made anywhere in this round: every new test
+reuses the existing deterministic `AddressKeyedChainProvider` fake or
+directly-inserted rows against real-but-local-only Postgres via
+`connection_for_role(..., DbRole.INGEST)`. Zero new usage-recorder rows
+this round.
+
+K. Environmental deferrals (unchanged, none reopened this round)
+
+- `LIVE_HELIUS_RPC_VALIDATION` -- DEFERRED_ENVIRONMENTAL_CHECK, unchanged.
+- `LIVE_HELIUS_WSS_VALIDATION` -- DEFERRED_ENVIRONMENTAL_CHECK, unchanged.
+- `PG17_COMPOSE_VALIDATION` -- DEFERRED_ENVIRONMENTAL_CHECK, unchanged.
+  PostgreSQL 16 remains the explicit functional substitute; every
+  Postgres-backed command in section E ran against it.
+- `BQ_PUBLIC_DATASET_ACCESS` -- unchanged deferral.
+
+None of these deferrals is claimed as PASS, and none authorizes live
+readiness by itself. The accepted `PHASE_3_CANDIDATE_SAMPLE_BLOCKED`
+result (`orchestration/phase_3/SAMPLE_REPORT.md`) is unchanged, per this
+instruction's own explicit statement that it "remains accepted."
+
+L. Next specified phase
+
+Per orchestrator instruction `argus-phase-3-remediation-004`, this
+instruction approves no phase (`APPROVES_PHASE: NONE`) and authorizes
+closing exactly the two named manifestations of the same P3-R2
+requirement. `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not
+modified. `docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase`
+(`2`) and `approved_commit` are left unchanged -- this session does not
+and cannot self-approve Phase 3. Per this project's established
+two-commit convention, this checkpoint, the paired bundle,
+`docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
+`orchestration/AGENT_HANDOFF.md` are committed once with every
+commit-hash-bearing field set to the literal placeholder
+`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+following commit fills in that first commit's own real hash in every one
+of those fields -- both commits carry the sole terminal trailer
+`ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-004` with no paragraph
+after it, verified via `git interpret-trailers --parse` before push.
+
+STOP. Await independent audit of this remediation before any further
+phase work. Passing these builder tests does not approve Phase 3. When
+these two exact manifestations pass with regressions, the instruction
+itself states the orchestrator should approve Phase 3 and authorize
+immediate Phase 4 -- that determination belongs to the orchestrator's own
+independent review, never to this builder session.
+
+================ END ARGUS CHECKPOINT =========================
+
+================ RAW EVIDENCE (round 4) ================
+
+--- 1. uv run pytest tests/unit/test_phase3_wallet_qualification.py -q ---
+...........................                                              [100%]
+27 passed in 0.61s
+exit=0
+
+--- 2. uv run pytest tests/unit/test_orchestrator_watch.py -q ---
+........................................................................ [ 91%]
+.......                                                                  [100%]
+79 passed in 39.98s
+exit=0
+
+--- 3. uv run pytest tests/integration/test_wallet_acquisition.py -v ---
+============================= test session starts ==============================
+platform linux -- Python 3.12.11, pytest-8.4.2, pluggy-1.6.0 -- /home/user/Quant/.venv/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /home/user/Quant
+configfile: pyproject.toml
+plugins: asyncio-0.26.0, hypothesis-6.167.1, anyio-4.14.2, cov-5.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 36 items
+
+tests/integration/test_wallet_acquisition.py::test_run_wallet_acquisition_persists_real_chain_events_swaps_and_manifest PASSED [  2%]
+tests/integration/test_wallet_acquisition.py::test_run_wallet_acquisition_records_partial_account_and_enumeration_failure PASSED [  5%]
+tests/integration/test_wallet_acquisition.py::test_run_wallet_acquisition_deduplicates_already_known_transactions PASSED [  8%]
+tests/integration/test_wallet_acquisition.py::test_load_verified_acquisition_manifest_rejects_wrong_wallet PASSED [ 11%]
+tests/integration/test_wallet_acquisition.py::test_load_verified_acquisition_manifest_rejects_future_observation_cutoff PASSED [ 13%]
+tests/integration/test_wallet_acquisition.py::test_load_verified_acquisition_manifest_rejects_nonexistent_run_id PASSED [ 16%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_string_false_for_token_accounts_enumerated PASSED [ 19%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_numeric_truthy_for_token_accounts_enumerated PASSED [ 22%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_missing_required_field PASSED [ 25%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_unrecognized_status_literal PASSED [ 27%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_duplicate_account_pubkeys PASSED [ 30%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_duplicate_evidence_signatures PASSED [ 33%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_accepts_explicit_empty_arrays PASSED [ 36%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_missing_acquired_evidence_key PASSED [ 38%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_missing_associated_token_accounts_key PASSED [ 41%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_null_derived_swap_for_parsed_outcome PASSED [ 44%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_null_parser_version_for_already_known_verified PASSED [ 47%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_wallet_walk_status_disagreement PASSED [ 50%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_account_status_disagreement_with_its_walk PASSED [ 52%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_complete_status_with_fetch_failure PASSED [ 55%]
+tests/integration/test_wallet_acquisition.py::test_manifest_decode_rejects_complete_status_with_unsatisfied_boundary PASSED [ 58%]
+tests/integration/test_wallet_acquisition.py::test_complete_wallet_and_enumerated_empty_accounts_binds_exact_empty_evidence_set PASSED [ 61%]
+tests/integration/test_wallet_acquisition.py::test_complete_wallet_and_complete_accounts_binds_every_reference_and_loads PASSED [ 63%]
+tests/integration/test_wallet_acquisition.py::test_parser_exception_is_a_parse_failed_gap_with_raw_evidence_preserved PASSED [ 66%]
+tests/integration/test_wallet_acquisition.py::test_transaction_fetch_failure_caps_wallet_walk_below_complete PASSED [ 69%]
+tests/integration/test_wallet_acquisition.py::test_pre_existing_event_reparsed_successfully_becomes_verified_evidence PASSED [ 72%]
+tests/integration/test_wallet_acquisition.py::test_pre_existing_event_with_already_derived_swap_is_already_known_verified PASSED [ 75%]
+tests/integration/test_wallet_acquisition.py::test_pre_existing_event_with_mismatched_payload_hash_is_a_gap PASSED [ 77%]
+tests/integration/test_wallet_acquisition.py::test_account_owner_mismatch_excluded_from_coverage_and_not_persisted PASSED [ 80%]
+tests/integration/test_wallet_acquisition.py::test_load_rejects_unresolved_chain_event_reference PASSED [ 83%]
+tests/integration/test_wallet_acquisition.py::test_load_rejects_payload_hash_mismatch_against_real_chain_event PASSED [ 86%]
+tests/integration/test_wallet_acquisition.py::test_load_rejects_associated_account_owner_mismatch PASSED [ 88%]
+tests/integration/test_wallet_acquisition.py::test_load_rejects_nonexistent_derived_swap_id PASSED [ 91%]
+tests/integration/test_wallet_acquisition.py::test_load_rejects_derived_swap_belonging_to_a_different_event PASSED [ 94%]
+tests/integration/test_wallet_acquisition.py::test_load_rejects_conflicting_parser_artifact_identity PASSED [ 97%]
+tests/integration/test_wallet_acquisition.py::test_expected_oldest_slot_boundary_unsatisfied_then_satisfied_and_no_boundary PASSED [100%]
+
+============================== 36 passed in 3.95s ==============================
+exit=0
+
+--- 4. uv run pytest tests/integration/test_phase3_wallet_qualification.py -q ---
+.................                                                        [100%]
+17 passed in 7.16s
+exit=0
+
+--- 5. uv run pytest tests/integration/test_migrations.py -q ---
+.................                                                        [100%]
+=============================== warnings summary ===============================
+tests/integration/test_migrations.py: 33 warnings
+  /home/user/Quant/.venv/lib/python3.12/site-packages/alembic/config.py:604: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+    util.warn_deprecated(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+17 passed, 33 warnings in 25.86s
+exit=0
+
+--- 6. uv run pytest tests/golden tests/replay tests/phase_1_5 -q ---
+........................................................................ [ 64%]
+........................................                                 [100%]
+112 passed in 2.54s
+exit=0
+
+--- 7. uv run pytest tests/integration -q ---
+........................................................................ [ 56%]
+........................................................                 [100%]
+=============================== warnings summary ===============================
+tests/integration/test_migrations.py: 33 warnings
+  /home/user/Quant/.venv/lib/python3.12/site-packages/alembic/config.py:604: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+    util.warn_deprecated(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+128 passed, 33 warnings in 51.38s
+exit=0
+
+--- 8. uv run pytest -q (full repository suite) ---
+........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 27%]
+........................................................................ [ 36%]
+........................................................................ [ 45%]
+........................................................................ [ 54%]
+........................................................................ [ 63%]
+........................................................................ [ 72%]
+........................................................................ [ 81%]
+........................................................................ [ 90%]
+........................................................................ [100%]
+=============================== warnings summary ===============================
+tests/integration/test_migrations.py: 33 warnings
+  /home/user/Quant/.venv/lib/python3.12/site-packages/alembic/config.py:604: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+    util.warn_deprecated(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+792 passed, 33 warnings in 103.69s (0:01:43)
+exit=0
+
+--- 9. uv run ruff check . ---
+All checks passed!
+exit=0
+
+--- 10. uv run ruff format --check . ---
+221 files already formatted
+exit=0
+
+--- 11. uv run mypy ---
+Success: no issues found in 112 source files
+exit=0
+
+--- 12. uv run alembic current ---
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+0015 (head)
+exit=0
+
+--- 13. uv run argus fixtures validate-real-chain ---
+real_mainnet_dca_close_dual_asset_transfer_in: ok - ok
+real_mainnet_failed_nft_sale: ok - ok
+real_mainnet_multi_hop_swap: ok - ok
+real_mainnet_orca_close_position_multi_account: ok - ok
+real_mainnet_partial_sell: ok - ok
+real_mainnet_sol_to_token_swap: ok - ok
+real_mainnet_sol_transfer_multi: ok - ok
+real_mainnet_sol_transfer_received: ok - ok
+real_mainnet_sol_transfer_single: ok - ok
+real_mainnet_token_to_sol_swap: ok - ok
+real_mainnet_token_to_usdc_swap: ok - ok
+real_mainnet_usdc_transfer: ok - ok
+exit=0
+
+--- 14. Changed-file secret scan ---
+exit=0
+== src/argus/wallets/acquisition.py ==
+  clean
+== src/argus/wallets/history_reconstruction.py ==
+  clean
+== src/argus/wallets/qualification_service.py ==
+  clean
+== tests/integration/test_phase3_wallet_qualification.py ==
+  clean
+== tests/integration/test_wallet_acquisition.py ==
+  clean
+
+--- 15. git diff --stat (against working tree parent) ---
+ src/argus/wallets/acquisition.py                   |  67 ++-
+ src/argus/wallets/history_reconstruction.py        | 104 ++++-
+ src/argus/wallets/qualification_service.py         | 100 ++++-
+ .../test_phase3_wallet_qualification.py            | 480 +++++++++++++++++++--
+ tests/integration/test_wallet_acquisition.py       | 378 +++++++++++++++-
+ 5 files changed, 1050 insertions(+), 79 deletions(-)
+
+--- 16. git log -8 --oneline ---
+2cbdb81 orchestrator(phase-3): enforce frozen evidence binding at load and use
+fb2a3f7 docs(phase-3-remediation-3): fill in commit hash for checkpoint, bundle, and handoff
+34080e5 Phase 3 remediation round 3: real acquired-evidence binding + fail-closed manifest decoding (final P3-R2 defect)
+67c49a5 orchestrator(phase-3): require final acquisition-evidence remediation
+ad21304 docs(phase-3-remediation-2): fill in commit hash for checkpoint, bundle, and handoff
+5735e0b Phase 3 remediation round 2: close P3-R6a data-loss regression + P3-R1/P3-R2/P3-R3/P3-R5/P3-R6b continuations
+9389b7c orchestration: require frozen Phase 3 follow-up and preserve decision history
+3fb7d56 docs(phase-3-remediation): fill in commit hash for checkpoint, bundle, and handoff

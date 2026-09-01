@@ -420,7 +420,11 @@ async def test_load_verified_acquisition_manifest_rejects_wrong_wallet(admin_eng
         async with sessionmaker() as session:
             with pytest.raises(AcquisitionRunVerificationError, match="belongs to wallet_id"):
                 await load_verified_acquisition_manifest(
-                    session, run_id=outcome.run_id, wallet_id=other_wallet_id, as_of=_NOW
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=other_wallet_id,
+                    wallet_address=other_wallet_address,
+                    as_of=_NOW,
                 )
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
@@ -460,7 +464,11 @@ async def test_load_verified_acquisition_manifest_rejects_future_observation_cut
         async with sessionmaker() as session:
             with pytest.raises(AcquisitionRunVerificationError, match="learned after"):
                 await load_verified_acquisition_manifest(
-                    session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=earlier
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=earlier,
                 )
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
@@ -490,7 +498,11 @@ async def test_load_verified_acquisition_manifest_rejects_nonexistent_run_id(
         async with sessionmaker() as session:
             with pytest.raises(AcquisitionRunVerificationError, match="no wallet_acquisition_runs"):
                 await load_verified_acquisition_manifest(
-                    session, run_id=uuid.uuid4(), wallet_id=wallet_id, as_of=_NOW
+                    session,
+                    run_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
                 )
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
@@ -588,10 +600,154 @@ async def test_manifest_decode_rejects_duplicate_evidence_signatures() -> None:
         "parser_outcome": EVIDENCE_OUTCOME_PARSED,
         "parser_version": "v1",
         "build_hash": "b1",
-        "derived_swap_id": None,
+        "derived_swap_id": str(uuid.uuid4()),
     }
     data["acquired_evidence"] = [ev, dict(ev)]
     with pytest.raises(Exception, match="duplicate acquired_evidence signature"):
+        manifest_from_dict(data)
+
+
+# ---------------------------------------------------------------------
+# P3-R2 remediation round 4 (`argus-phase-3-remediation-004`, closing
+# audit `argus-phase-3-remediation-audit-003`'s P3-R2b): explicit-array
+# presence, non-null genuine-evidence derived-swap/artifact identity, and
+# walk-status/COMPLETE-vs-fault reconciliation -- the exact four
+# adversarial probes the audit reproduced against the round-3 decoder.
+# ---------------------------------------------------------------------
+
+
+async def test_manifest_decode_accepts_explicit_empty_arrays() -> None:
+    """The positive control for every rejection test below: a genuinely
+    empty (but explicitly present) evidence/account set decodes fine."""
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    manifest = manifest_from_dict(data)
+    assert manifest.associated_token_accounts == ()
+    assert manifest.acquired_evidence == ()
+
+
+async def test_manifest_decode_rejects_missing_acquired_evidence_key() -> None:
+    """Adversarial probe 2 (`argus-phase-3-remediation-audit-003`):
+    deleting the ``acquired_evidence`` key entirely (never an explicit
+    empty list) previously decoded successfully via ``data.get(...,
+    [])``, silently defaulting a MISSING required-evidence set to
+    legitimate-looking emptiness."""
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    del data["acquired_evidence"]
+    with pytest.raises(Exception, match="acquired_evidence is a required array"):
+        manifest_from_dict(data)
+
+
+async def test_manifest_decode_rejects_missing_associated_token_accounts_key() -> None:
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    del data["associated_token_accounts"]
+    with pytest.raises(Exception, match="associated_token_accounts is a required array"):
+        manifest_from_dict(data)
+
+
+async def test_manifest_decode_rejects_null_derived_swap_for_parsed_outcome() -> None:
+    """Adversarial probe 4: ``PARSED`` evidence with ``derived_swap_id:
+    None`` previously decoded successfully and ``load_verified_
+    acquisition_manifest`` skipped the swap re-verification entirely
+    (``if ev.derived_swap_id is not None:``), so this manifest could
+    reach ``assess_wallet_history`` and justify HIGH with no real swap
+    behind it at all."""
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    data["acquired_evidence"] = [
+        {
+            "address": data["wallet_address"],
+            "signature": "sig-1",
+            "slot": 1,
+            "chain_event_id": str(uuid.uuid4()),
+            "payload_hash": "h",
+            "parser_outcome": EVIDENCE_OUTCOME_PARSED,
+            "parser_version": "v1",
+            "build_hash": "b1",
+            "derived_swap_id": None,
+        }
+    ]
+    with pytest.raises(Exception, match="names no non-null, resolving derived_swap_id"):
+        manifest_from_dict(data)
+
+
+async def test_manifest_decode_rejects_null_parser_version_for_already_known_verified() -> None:
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    data["acquired_evidence"] = [
+        {
+            "address": data["wallet_address"],
+            "signature": "sig-1",
+            "slot": 1,
+            "chain_event_id": str(uuid.uuid4()),
+            "payload_hash": "h",
+            "parser_outcome": EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED,
+            "parser_version": None,
+            "build_hash": "b1",
+            "derived_swap_id": str(uuid.uuid4()),
+        }
+    ]
+    with pytest.raises(Exception, match="requires a real, non-null parser_version"):
+        manifest_from_dict(data)
+
+
+def _partial_walk() -> dict:
+    return {
+        "status": STATUS_PARTIAL,
+        "known_gaps": "test gap",
+        "pages_fetched": 1,
+        "signatures_seen": 1,
+        "transaction_fetch_failures": 0,
+        "expected_oldest_slot": None,
+        "boundary_satisfied": None,
+    }
+
+
+async def test_manifest_decode_rejects_wallet_walk_status_disagreement() -> None:
+    """Adversarial probe 3: a top-level ``wallet_walk_status`` claiming
+    ``COMPLETE`` while the structured ``wallet_walk.status`` itself says
+    ``PARTIAL`` -- the real producer always derives both from the same
+    ``AcquisitionResult.status``, so disagreement is only possible via
+    tampering, never genuine producer output."""
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    data["wallet_walk_status"] = STATUS_COMPLETE
+    data["wallet_walk"] = _partial_walk()
+    with pytest.raises(Exception, match="disagrees with wallet_walk.status"):
+        manifest_from_dict(data)
+
+
+async def test_manifest_decode_rejects_account_status_disagreement_with_its_walk() -> None:
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    data["associated_token_accounts"] = [
+        {
+            "pubkey": "acct-1",
+            "mint": "mint-a",
+            "owner": data["wallet_address"],
+            "status": STATUS_COMPLETE,
+            "walk": _partial_walk(),
+        }
+    ]
+    with pytest.raises(Exception, match="disagrees with its own walk.status"):
+        manifest_from_dict(data)
+
+
+async def test_manifest_decode_rejects_complete_status_with_fetch_failure() -> None:
+    """Adversarial probe 3: the real producer can never itself report
+    ``COMPLETE`` alongside a recorded per-transaction fetch failure --
+    ``acquire_historical_transactions`` always downgrades ``status`` to
+    ``PARTIAL`` the moment a fetch failure occurs."""
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    data["wallet_walk"]["transaction_fetch_failures"] = 1
+    with pytest.raises(
+        Exception, match="a genuinely complete walk can never record a per-transaction"
+    ):
+        manifest_from_dict(data)
+
+
+async def test_manifest_decode_rejects_complete_status_with_unsatisfied_boundary() -> None:
+    data = _base_manifest_dict(wallet_id=uuid.uuid4(), wallet_address=_unique_wallet())
+    data["wallet_walk"]["expected_oldest_slot"] = 100
+    data["wallet_walk"]["boundary_satisfied"] = False
+    with pytest.raises(
+        Exception, match="a genuinely complete walk can never leave a supplied boundary"
+    ):
         manifest_from_dict(data)
 
 
@@ -637,7 +793,11 @@ async def test_complete_wallet_and_enumerated_empty_accounts_binds_exact_empty_e
 
         async with sessionmaker() as session:
             verified = await load_verified_acquisition_manifest(
-                session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=_NOW
+                session,
+                run_id=outcome.run_id,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                as_of=_NOW,
             )
         assert verified.associated_token_accounts == ()
         assert verified.acquired_evidence == outcome.manifest.acquired_evidence
@@ -722,7 +882,11 @@ async def test_complete_wallet_and_complete_accounts_binds_every_reference_and_l
 
         async with sessionmaker() as session:
             verified = await load_verified_acquisition_manifest(
-                session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=_NOW
+                session,
+                run_id=outcome.run_id,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                as_of=_NOW,
             )
         assert verified.acquired_evidence == outcome.manifest.acquired_evidence
     finally:
@@ -779,7 +943,11 @@ async def test_parser_exception_is_a_parse_failed_gap_with_raw_evidence_preserve
             assert event_row.transaction_signature == "bad-sig-1"
 
             verified = await load_verified_acquisition_manifest(
-                session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=_NOW
+                session,
+                run_id=outcome.run_id,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                as_of=_NOW,
             )
 
         # A parse-failure gap never blocks loading (it isn't "genuine
@@ -1197,7 +1365,11 @@ async def test_load_rejects_unresolved_chain_event_reference(admin_engine) -> No
         async with sessionmaker() as session:
             with pytest.raises(AcquisitionRunVerificationError, match="does not resolve"):
                 await load_verified_acquisition_manifest(
-                    session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=_NOW
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
                 )
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
@@ -1244,7 +1416,11 @@ async def test_load_rejects_payload_hash_mismatch_against_real_chain_event(admin
         async with sessionmaker() as session:
             with pytest.raises(AcquisitionRunVerificationError, match="does not resolve"):
                 await load_verified_acquisition_manifest(
-                    session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=_NOW
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
                 )
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
@@ -1298,7 +1474,189 @@ async def test_load_rejects_associated_account_owner_mismatch(admin_engine) -> N
         async with sessionmaker() as session:
             with pytest.raises(AcquisitionRunVerificationError, match="does not match"):
                 await load_verified_acquisition_manifest(
-                    session, run_id=outcome.run_id, wallet_id=wallet_id, as_of=_NOW
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
+                )
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_load_rejects_nonexistent_derived_swap_id(admin_engine) -> None:
+    """Adversarial probe 4's DB-backed counterpart: a well-formed but
+    nonexistent ``derived_swap_id`` (a real UUID, no matching row) fails
+    closed at load, never silently trusted because the referenced
+    ``chain_events`` row itself resolves correctly."""
+    wallet_address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=_NOW,
+                    created_at=_NOW,
+                )
+            )
+
+        provider = AddressKeyedChainProvider(
+            pages_by_address={wallet_address: [_sig("wallet-sig-1", slot=1)]},
+            transactions={"wallet-sig-1": _tx("wallet-sig-1", wallet_address=wallet_address)},
+            token_accounts=[],
+        )
+        async with sessionmaker() as session, session.begin():
+            outcome = await run_wallet_acquisition(
+                provider,
+                session,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                provider_name="fake-test-provider",
+                now=_NOW,
+            )
+
+        def _mutate(manifest: dict) -> None:
+            manifest["acquired_evidence"] = [
+                {**manifest["acquired_evidence"][0], "derived_swap_id": str(uuid.uuid4())}
+            ]
+
+        await _tamper_manifest(admin_engine, run_id=outcome.run_id, mutate=_mutate)
+
+        async with sessionmaker() as session:
+            with pytest.raises(AcquisitionRunVerificationError, match="does not resolve"):
+                await load_verified_acquisition_manifest(
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
+                )
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_load_rejects_derived_swap_belonging_to_a_different_event(admin_engine) -> None:
+    """A real, existing swap row -- but for a DIFFERENT event than the one
+    this evidence entry names -- must never satisfy verification merely
+    because the swap_id itself is genuine."""
+    wallet_address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=_NOW,
+                    created_at=_NOW,
+                )
+            )
+
+        provider = AddressKeyedChainProvider(
+            # Newest-first (descending slot), matching the real walk's own
+            # ordering contract -- an ascending pair here trips the
+            # unrelated "pagination ordering fault" check instead of
+            # exercising what this test is actually about.
+            pages_by_address={
+                wallet_address: [_sig("wallet-sig-2", slot=2), _sig("wallet-sig-1", slot=1)]
+            },
+            transactions={
+                "wallet-sig-1": _tx("wallet-sig-1", wallet_address=wallet_address),
+                "wallet-sig-2": _tx("wallet-sig-2", wallet_address=wallet_address),
+            },
+            token_accounts=[],
+        )
+        async with sessionmaker() as session, session.begin():
+            outcome = await run_wallet_acquisition(
+                provider,
+                session,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                provider_name="fake-test-provider",
+                now=_NOW,
+            )
+        assert len(outcome.manifest.acquired_evidence) == 2
+        other_swap_id = outcome.manifest.acquired_evidence[1].derived_swap_id
+
+        def _mutate(manifest: dict) -> None:
+            manifest["acquired_evidence"] = [
+                {**manifest["acquired_evidence"][0], "derived_swap_id": other_swap_id},
+                manifest["acquired_evidence"][1],
+            ]
+
+        await _tamper_manifest(admin_engine, run_id=outcome.run_id, mutate=_mutate)
+
+        async with sessionmaker() as session:
+            with pytest.raises(AcquisitionRunVerificationError, match="does not resolve"):
+                await load_verified_acquisition_manifest(
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
+                )
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+async def test_load_rejects_conflicting_parser_artifact_identity(admin_engine) -> None:
+    """The referenced swap row is real and belongs to the right event --
+    but the manifest's own recorded ``parser_version`` disagrees with the
+    artifact that actually produced it, exactly the "validate that named
+    swap's ... parser artifact matches the evidence" requirement."""
+    wallet_address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=_NOW,
+                    created_at=_NOW,
+                )
+            )
+
+        provider = AddressKeyedChainProvider(
+            pages_by_address={wallet_address: [_sig("wallet-sig-1", slot=1)]},
+            transactions={"wallet-sig-1": _tx("wallet-sig-1", wallet_address=wallet_address)},
+            token_accounts=[],
+        )
+        async with sessionmaker() as session, session.begin():
+            outcome = await run_wallet_acquisition(
+                provider,
+                session,
+                wallet_id=wallet_id,
+                wallet_address=wallet_address,
+                provider_name="fake-test-provider",
+                now=_NOW,
+            )
+
+        def _mutate(manifest: dict) -> None:
+            manifest["acquired_evidence"] = [
+                {**manifest["acquired_evidence"][0], "parser_version": "some-other-parser-v99"}
+            ]
+
+        await _tamper_manifest(admin_engine, run_id=outcome.run_id, mutate=_mutate)
+
+        async with sessionmaker() as session:
+            with pytest.raises(
+                AcquisitionRunVerificationError, match="conflicting artifact identity"
+            ):
+                await load_verified_acquisition_manifest(
+                    session,
+                    run_id=outcome.run_id,
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    as_of=_NOW,
                 )
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)

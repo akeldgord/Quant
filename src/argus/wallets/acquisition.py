@@ -256,12 +256,21 @@ async def run_wallet_acquisition(
                     )
                 )
                 continue
-            existing_swap_id = (
+            existing_swap_row = (
                 await session.execute(
-                    select(Swap.swap_id).where(Swap.event_id == existing_event.event_id).limit(1)
+                    select(Swap.swap_id, Swap.parser_version, Swap.build_hash)
+                    .where(Swap.event_id == existing_event.event_id)
+                    .limit(1)
                 )
-            ).scalar_one_or_none()
-            if existing_swap_id is not None:
+            ).one_or_none()
+            if existing_swap_row is not None:
+                # P3-R2 remediation round 4 (required implementation item
+                # 1, "record the selected swap's actual parser version and
+                # build hash, rather than null metadata"): this manifest
+                # commits to the REAL historical artifact identity that
+                # produced the already-persisted swap -- never today's
+                # PARSER_VERSION/PARSER_BUILD_HASH, and never null.
+                existing_swap_id, existing_parser_version, existing_build_hash = existing_swap_row
                 acquired_evidence.append(
                     AcquiredEvidenceRecord(
                         address=source_address,
@@ -270,8 +279,8 @@ async def run_wallet_acquisition(
                         chain_event_id=str(existing_event.event_id),
                         payload_hash=existing_event.payload_hash,
                         parser_outcome=EVIDENCE_OUTCOME_ALREADY_KNOWN_VERIFIED,
-                        parser_version=None,
-                        build_hash=None,
+                        parser_version=existing_parser_version,
+                        build_hash=existing_build_hash,
                         derived_swap_id=str(existing_swap_id),
                     )
                 )
@@ -402,7 +411,12 @@ class AcquisitionRunVerificationError(ValueError):
 
 
 async def load_verified_acquisition_manifest(
-    session: AsyncSession, *, run_id: uuid.UUID, wallet_id: uuid.UUID, as_of: datetime
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    wallet_id: uuid.UUID,
+    wallet_address: str,
+    as_of: datetime,
 ) -> AcquisitionManifest:
     """The only path from a persisted acquisition run to a usable
     :class:`AcquisitionManifest`: loads the run, verifies it genuinely
@@ -412,7 +426,14 @@ async def load_verified_acquisition_manifest(
     ``acquired_evidence`` entry claiming genuine usable evidence
     (``PARSED``/``ALREADY_KNOWN_VERIFIED``) against the real, current
     ``chain_events``/``swaps`` rows -- a manifest is never trusted as a
-    summary assertion (P3-R2 remediation round 3)."""
+    summary assertion (P3-R2 remediation round 3).
+
+    ``wallet_address`` (P3-R2 remediation round 4, required implementation
+    item 1, "validate manifest/run wallet ... identity against their
+    authoritative rows"): the manifest's own ``wallet_address`` must match
+    the CALLER's authoritative wallet row for ``wallet_id`` -- ``wallet_id``
+    alone binds the run's row, but never previously proved the manifest's
+    own embedded address is genuinely this same wallet's real address."""
     run = (
         await session.execute(
             select(WalletAcquisitionRun).where(WalletAcquisitionRun.run_id == run_id)
@@ -449,6 +470,13 @@ async def load_verified_acquisition_manifest(
             f"acquisition run {run_id}: the manifest's own run_id ({manifest.run_id}) or "
             f"wallet_id ({manifest.wallet_id}) does not match the row it was persisted under "
             f"(run_id={run_id}, wallet_id={wallet_id}) -- conflicting identity, never trusted"
+        )
+    if manifest.wallet_address != wallet_address:
+        raise AcquisitionRunVerificationError(
+            f"acquisition run {run_id}: the manifest's own wallet_address "
+            f"({manifest.wallet_address!r}) does not match the authoritative wallet_address "
+            f"for wallet_id={wallet_id} ({wallet_address!r}) -- conflicting identity, never "
+            "trusted"
         )
 
     for tac in manifest.associated_token_accounts:
@@ -496,14 +524,33 @@ async def load_verified_acquisition_manifest(
                 ) from exc
             swap_row = (
                 await session.execute(
-                    select(Swap.swap_id).where(Swap.swap_id == swap_id, Swap.event_id == event_id)
+                    select(Swap.parser_version, Swap.build_hash).where(
+                        Swap.swap_id == swap_id, Swap.event_id == event_id
+                    )
                 )
-            ).scalar_one_or_none()
+            ).one_or_none()
             if swap_row is None:
                 raise AcquisitionRunVerificationError(
                     f"acquisition run {run_id}: evidence for signature {ev.signature!r} names "
                     f"a derived_swap_id {ev.derived_swap_id!r} that does not resolve to a real "
                     "swaps row for the same chain event"
+                )
+            # P3-R2 remediation round 4 (required implementation item 1,
+            # "validate that named swap's ... parser artifact matches the
+            # evidence"): the manifest's own recorded parser_version/
+            # build_hash must be the SAME artifact identity that actually
+            # produced the referenced swap -- never merely "a swap for
+            # this event exists," which would let a manifest name one
+            # parser artifact while a different one is the row actually
+            # used for reconstruction.
+            actual_parser_version, actual_build_hash = swap_row
+            if actual_parser_version != ev.parser_version or actual_build_hash != ev.build_hash:
+                raise AcquisitionRunVerificationError(
+                    f"acquisition run {run_id}: evidence for signature {ev.signature!r} claims "
+                    f"parser_version={ev.parser_version!r}/build_hash={ev.build_hash!r}, but the "
+                    f"referenced swap {ev.derived_swap_id!r} was actually produced by "
+                    f"parser_version={actual_parser_version!r}/build_hash={actual_build_hash!r} "
+                    "-- conflicting artifact identity, never trusted"
                 )
 
     return manifest

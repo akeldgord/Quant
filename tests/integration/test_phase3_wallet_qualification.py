@@ -17,6 +17,7 @@ cleanup via the admin engine.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -31,6 +32,7 @@ from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
 from argus.domain.swaps import Swap
+from argus.domain.tokens import Token
 from argus.domain.wallet_acquisition_runs import WalletAcquisitionRun
 from argus.domain.wallet_cluster_links import EVIDENCE_SYNCHRONIZED_ACTIVITY, WalletClusterLink
 from argus.domain.wallet_discovery_events import (
@@ -52,8 +54,10 @@ from argus.domain.wallets import Wallet
 from argus.tokens.historical_acquisition import STATUS_COMPLETE
 from argus.tokens.importer import import_bootstrap_token
 from argus.wallets.history_reconstruction import (
+    EVIDENCE_OUTCOME_PARSED,
     EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
     EVIDENCE_SOURCE_STREAM_FORWARD_ONLY,
+    AcquiredEvidenceRecord,
     AcquisitionManifest,
     WalkStats,
     manifest_as_dict,
@@ -154,14 +158,20 @@ def _test_manifest(
     observation_cutoff: datetime,
     provider_set: str = "test-fake-acquisition",
     evidence_reference: str = "test",
+    acquired_evidence: tuple[AcquiredEvidenceRecord, ...] = (),
 ) -> AcquisitionManifest:
     """A real, structured, HIGH-completeness acquisition manifest -- never
-    a bare caller-typed status string (P3-R2) -- with a genuinely empty
-    but real ``acquired_evidence`` set (this fixture's positions come
-    from directly-inserted swaps, not from a real acquisition walk, so
-    there is honestly no acquired-evidence set to name; the wallet-walk/
-    account-enumeration completeness fields alone are what these tests
-    exercise)."""
+    a bare caller-typed status string (P3-R2).
+
+    ``acquired_evidence`` (P3-R2 remediation round 4,
+    `argus-phase-3-remediation-004`, closing audit
+    `argus-phase-3-remediation-audit-003`'s P3-R2a): qualification_service
+    now binds LIVE_ACQUISITION_WALK reconstruction to exactly this named
+    set -- a caller whose fixture directly inserts ``chain_events``/
+    ``swaps`` rows (see ``_add_closed_position_swaps``, which returns the
+    matching ``AcquiredEvidenceRecord`` list for exactly what it inserted)
+    must pass that same set here, or the manifest honestly names zero
+    usable evidence and reconstruction correctly sees zero swaps."""
     return AcquisitionManifest(
         run_id=uuid.uuid4(),
         wallet_id=wallet_id,
@@ -172,7 +182,7 @@ def _test_manifest(
         wallet_walk=_complete_walk(),
         token_accounts_enumerated=True,
         associated_token_accounts=(),
-        acquired_evidence=(),
+        acquired_evidence=acquired_evidence,
         provider_set=provider_set,
         known_gaps=None,
         evidence_reference=evidence_reference,
@@ -221,13 +231,63 @@ async def _make_token(sessionmaker, config, mint: str, now: datetime) -> None:
         )
 
 
+def _evidence_pair(
+    *,
+    wallet_address: str,
+    buy_event_id,
+    buy_swap_id,
+    buy_sig,
+    buy_slot,
+    sell_event_id,
+    sell_swap_id,
+    sell_sig,
+    sell_slot,
+) -> list[AcquiredEvidenceRecord]:
+    return [
+        AcquiredEvidenceRecord(
+            address=wallet_address,
+            signature=buy_sig,
+            slot=buy_slot,
+            chain_event_id=str(buy_event_id),
+            payload_hash="h",
+            parser_outcome=EVIDENCE_OUTCOME_PARSED,
+            parser_version="v1",
+            build_hash="test-build-hash",
+            derived_swap_id=str(buy_swap_id),
+        ),
+        AcquiredEvidenceRecord(
+            address=wallet_address,
+            signature=sell_sig,
+            slot=sell_slot,
+            chain_event_id=str(sell_event_id),
+            payload_hash="h",
+            parser_outcome=EVIDENCE_OUTCOME_PARSED,
+            parser_version="v1",
+            build_hash="test-build-hash",
+            derived_swap_id=str(sell_swap_id),
+        ),
+    ]
+
+
 async def _add_closed_position_swaps(
     session, *, wallet_address: str, mint: str, slot_base: int, at: datetime
-) -> None:
+) -> list[AcquiredEvidenceRecord]:
     """One SWAP_SIMPLE buy + one SWAP_SIMPLE sell -- a single clean
-    closed position -- backed by real ``chain_events``/``swaps`` rows."""
+    closed position -- backed by real ``chain_events``/``swaps`` rows.
+
+    Returns the matching ``AcquiredEvidenceRecord`` pair (P3-R2
+    remediation round 4) naming exactly the two rows just inserted, so a
+    LIVE_ACQUISITION_WALK caller can bind a manifest to this real evidence
+    -- ``qualification_service.reconstruct_and_score_wallet`` now
+    restricts reconstruction to a manifest's own named evidence set, so a
+    manifest with no matching entry for these rows would see zero usable
+    swaps here."""
     buy_event_id = uuid.uuid4()
+    buy_swap_id = uuid.uuid4()
+    buy_sig = f"p3-buy-{uuid.uuid4()}"
     sell_event_id = uuid.uuid4()
+    sell_swap_id = uuid.uuid4()
+    sell_sig = f"p3-sell-{uuid.uuid4()}"
     session.add(
         ChainEvent(
             event_id=buy_event_id,
@@ -236,7 +296,7 @@ async def _add_closed_position_swaps(
             first_seen_at=at,
             provider="helius",
             provider_received_at=at,
-            transaction_signature=f"p3-buy-{uuid.uuid4()}",
+            transaction_signature=buy_sig,
             event_type="TRANSACTION_OBSERVED",
             wallet_address=wallet_address,
             raw_payload={},
@@ -247,7 +307,7 @@ async def _add_closed_position_swaps(
     )
     session.add(
         Swap(
-            swap_id=uuid.uuid4(),
+            swap_id=buy_swap_id,
             event_id=buy_event_id,
             wallet_address=wallet_address,
             classification="SWAP_SIMPLE",
@@ -276,7 +336,7 @@ async def _add_closed_position_swaps(
             first_seen_at=sell_at,
             provider="helius",
             provider_received_at=sell_at,
-            transaction_signature=f"p3-sell-{uuid.uuid4()}",
+            transaction_signature=sell_sig,
             event_type="TRANSACTION_OBSERVED",
             wallet_address=wallet_address,
             raw_payload={},
@@ -287,7 +347,7 @@ async def _add_closed_position_swaps(
     )
     session.add(
         Swap(
-            swap_id=uuid.uuid4(),
+            swap_id=sell_swap_id,
             event_id=sell_event_id,
             wallet_address=wallet_address,
             classification="SWAP_SIMPLE",
@@ -306,6 +366,17 @@ async def _add_closed_position_swaps(
             build_hash="test-build-hash",
             created_at=sell_at,
         )
+    )
+    return _evidence_pair(
+        wallet_address=wallet_address,
+        buy_event_id=buy_event_id,
+        buy_swap_id=buy_swap_id,
+        buy_sig=buy_sig,
+        buy_slot=slot_base,
+        sell_event_id=sell_event_id,
+        sell_swap_id=sell_swap_id,
+        sell_sig=sell_sig,
+        sell_slot=slot_base + 1,
     )
 
 
@@ -976,13 +1047,16 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
                     created_at=now - timedelta(days=1),
                 )
             )
+            evidence: list[AcquiredEvidenceRecord] = []
             for i, mint in enumerate(mints):
-                await _add_closed_position_swaps(
-                    session,
-                    wallet_address=wallet_address,
-                    mint=mint,
-                    slot_base=i * 10,
-                    at=now - timedelta(days=1) + timedelta(minutes=i),
+                evidence.extend(
+                    await _add_closed_position_swaps(
+                        session,
+                        wallet_address=wallet_address,
+                        mint=mint,
+                        slot_base=i * 10,
+                        at=now - timedelta(days=1) + timedelta(minutes=i),
+                    )
                 )
         for mint in mints:
             await _make_token(sessionmaker, config, mint, now)
@@ -990,10 +1064,14 @@ async def test_p3_eligible_wallet_first_invocation_not_forced_discovered_replay_
         # A real, structured, HIGH-completeness acquisition manifest --
         # never a bare caller-typed status string (P3-R2) -- persisted as
         # a real, verified WalletAcquisitionRun row, loaded by run_id.
+        # P3-R2 remediation round 4: bound to exactly the evidence just
+        # inserted, since reconstruction now restricts itself to a
+        # manifest's own named acquired_evidence set.
         manifest = _test_manifest(
             wallet_id=wallet_id,
             wallet_address=wallet_address,
             observation_cutoff=now - timedelta(seconds=1),
+            acquired_evidence=tuple(evidence),
         )
         async with sessionmaker() as session, session.begin():
             run_id = await _insert_acquisition_run(
@@ -1105,13 +1183,16 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
                 )
             )
             await session.flush()
+            evidence: list[AcquiredEvidenceRecord] = []
             for i, mint in enumerate(mints):
-                await _add_closed_position_swaps(
-                    session,
-                    wallet_address=wallet_address,
-                    mint=mint,
-                    slot_base=i * 10,
-                    at=now - timedelta(days=1) + timedelta(minutes=i),
+                evidence.extend(
+                    await _add_closed_position_swaps(
+                        session,
+                        wallet_address=wallet_address,
+                        mint=mint,
+                        slot_base=i * 10,
+                        at=now - timedelta(days=1) + timedelta(minutes=i),
+                    )
                 )
         for mint in mints:
             await _make_token(sessionmaker, config, mint, now)
@@ -1120,6 +1201,7 @@ async def test_p3_cluster_penalty_crossing_tier_cutoff_persists_the_same_adjuste
             wallet_id=wallet_id,
             wallet_address=wallet_address,
             observation_cutoff=now - timedelta(seconds=1),
+            acquired_evidence=tuple(evidence),
         )
         async with sessionmaker() as session, session.begin():
             run_id = await _insert_acquisition_run(
@@ -1882,13 +1964,16 @@ async def test_p3r6b_changed_acquisition_manifest_forces_new_score_row_despite_e
                     created_at=now - timedelta(days=1),
                 )
             )
+            evidence: list[AcquiredEvidenceRecord] = []
             for i, mint in enumerate(mints):
-                await _add_closed_position_swaps(
-                    session,
-                    wallet_address=wallet_address,
-                    mint=mint,
-                    slot_base=i * 10,
-                    at=now - timedelta(days=1) + timedelta(minutes=i),
+                evidence.extend(
+                    await _add_closed_position_swaps(
+                        session,
+                        wallet_address=wallet_address,
+                        mint=mint,
+                        slot_base=i * 10,
+                        at=now - timedelta(days=1) + timedelta(minutes=i),
+                    )
                 )
         for mint in mints:
             await _make_token(sessionmaker, config, mint, now)
@@ -1899,6 +1984,7 @@ async def test_p3r6b_changed_acquisition_manifest_forces_new_score_row_despite_e
             observation_cutoff=now - timedelta(seconds=2),
             provider_set="test-fake-acquisition-A",
             evidence_reference="test: manifest A",
+            acquired_evidence=tuple(evidence),
         )
         manifest_b = _test_manifest(
             wallet_id=wallet_id,
@@ -1906,6 +1992,7 @@ async def test_p3r6b_changed_acquisition_manifest_forces_new_score_row_despite_e
             observation_cutoff=now - timedelta(seconds=1),
             provider_set="test-fake-acquisition-B",
             evidence_reference="test: manifest B, otherwise equivalent",
+            acquired_evidence=tuple(evidence),
         )
         async with sessionmaker() as session, session.begin():
             run_id_a = await _insert_acquisition_run(
@@ -2159,3 +2246,334 @@ async def test_p3r6b_exact_replay_idempotent_after_session_restart(admin_engine)
         await engine.dispose()
         if second_engine is not None:
             await second_engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P3-R2 remediation round 4 (`argus-phase-3-remediation-004`, closing
+# audit `argus-phase-3-remediation-audit-003`'s P3-R2a): the verified
+# run's own named genuine derived_swap_id set -- never every Swap row
+# the wallet happens to have -- is what LIVE_ACQUISITION_WALK
+# reconstruction actually uses. These exercise the full producer-shaped
+# path: real chain_events/swaps rows, a manifest that genuinely names
+# only some of them, a persisted WalletAcquisitionRun, and the production
+# `reconstruct_and_score_wallet` service.
+# ---------------------------------------------------------------------
+
+
+async def test_p3r2a_reconstruction_bound_only_to_named_acquisition_evidence(
+    admin_engine,
+) -> None:
+    """Adversarial probe 1 (`argus-phase-3-remediation-audit-003`): the
+    production service previously queried every Swap row for the wallet
+    address, regardless of which run's evidence actually named it. A
+    genuinely unrelated closed position -- backed by real chain_events/
+    swaps rows, just never named by this run's own acquired_evidence --
+    must never enter this run's reconstructed positions/history/score."""
+    wallet_address = _unique_wallet()
+    acquired_mint = _unique_mint()
+    unrelated_mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=1),
+                )
+            )
+            acquired_evidence = await _add_closed_position_swaps(
+                session,
+                wallet_address=wallet_address,
+                mint=acquired_mint,
+                slot_base=1,
+                at=now - timedelta(days=1),
+            )
+            # A genuinely real, separately-persisted closed position for a
+            # DIFFERENT mint -- never named by the manifest built below.
+            await _add_closed_position_swaps(
+                session,
+                wallet_address=wallet_address,
+                mint=unrelated_mint,
+                slot_base=100,
+                at=now - timedelta(days=1) + timedelta(minutes=5),
+            )
+        await _make_token(sessionmaker, config, acquired_mint, now)
+        await _make_token(sessionmaker, config, unrelated_mint, now)
+
+        manifest = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=1),
+            acquired_evidence=tuple(acquired_evidence),
+        )
+        async with sessionmaker() as session, session.begin():
+            run_id = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest,
+                observation_cutoff=now - timedelta(seconds=1),
+            )
+
+        result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+            acquisition_run_id=run_id,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert result.history_completeness == "HIGH"
+        # Exactly the one named closed position -- never the unrelated one.
+        assert result.positions_reconstructed == 1
+        assert result.positions_written == 1
+
+        async with sessionmaker() as session:
+            position_rows = (
+                (
+                    await session.execute(
+                        select(WalletPosition).where(WalletPosition.wallet_id == wallet_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(position_rows) == 1
+            token_row = (
+                await session.execute(
+                    select(Token).where(Token.token_id == position_rows[0].token_id)
+                )
+            ).scalar_one()
+            assert token_row.mint == acquired_mint
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, acquired_mint)
+        await _cleanup_token(admin_engine, unrelated_mint)
+        await engine.dispose()
+
+
+async def test_p3r2a_empty_acquired_evidence_does_not_promote_unrelated_swaps_to_usable_history(
+    admin_engine,
+) -> None:
+    """Adversarial probes 1+2: a manifest with a genuinely empty
+    (explicitly present) ``acquired_evidence`` set names zero usable
+    evidence -- a wallet with other, genuinely real, unrelated swaps
+    rows must still see UNKNOWN completeness and zero reconstructed
+    positions, never silently promoted to usable history because
+    unrelated rows happen to exist for the same wallet_address."""
+    wallet_address = _unique_wallet()
+    unrelated_mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=1),
+                )
+            )
+            await _add_closed_position_swaps(
+                session,
+                wallet_address=wallet_address,
+                mint=unrelated_mint,
+                slot_base=1,
+                at=now - timedelta(days=1),
+            )
+        await _make_token(sessionmaker, config, unrelated_mint, now)
+
+        manifest = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=1),
+            acquired_evidence=(),
+        )
+        async with sessionmaker() as session, session.begin():
+            run_id = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest,
+                observation_cutoff=now - timedelta(seconds=1),
+            )
+
+        result = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+            acquisition_run_id=run_id,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert result.history_completeness == "UNKNOWN"
+        assert result.positions_reconstructed == 0
+        assert result.positions_written == 0
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, unrelated_mint)
+        await engine.dispose()
+
+
+async def test_p3r2a_rebinding_to_a_different_parser_artifact_yields_new_history_identity(
+    admin_engine,
+) -> None:
+    """Two parser-artifact rows for the SAME raw buy event (a real
+    historical reparse scenario): explicitly binding one, then rebinding
+    to the other, must yield an honest new history/score identity --
+    never silently reuse or rewrite the prior decision's row."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    try:
+        wallet_id = uuid.uuid4()
+        async with sessionmaker() as session, session.begin():
+            session.add(
+                Wallet(
+                    wallet_id=wallet_id,
+                    wallet_address=wallet_address,
+                    first_discovered_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=1),
+                )
+            )
+            evidence_v1 = await _add_closed_position_swaps(
+                session,
+                wallet_address=wallet_address,
+                mint=mint,
+                slot_base=1,
+                at=now - timedelta(days=1),
+            )
+            # A second parser-artifact row for the exact SAME buy event --
+            # same economic numbers, a different (parser_version,
+            # build_hash, swap_id) identity, exactly the "reparse with a
+            # different artifact" scenario.
+            buy_event_id = uuid.UUID(evidence_v1[0].chain_event_id)
+            buy_swap_v2_id = uuid.uuid4()
+            session.add(
+                Swap(
+                    swap_id=buy_swap_v2_id,
+                    event_id=buy_event_id,
+                    wallet_address=wallet_address,
+                    classification="SWAP_SIMPLE",
+                    input_mint=SOL,
+                    input_amount_raw=10_000_000_000,
+                    input_amount_ui=Decimal("10"),
+                    output_mint=mint,
+                    output_amount_raw=100,
+                    output_amount_ui=Decimal("100"),
+                    network_fee_raw=5000,
+                    slot=1,
+                    block_time=now - timedelta(days=1),
+                    first_seen_at=now - timedelta(days=1),
+                    confidence=Decimal("1.000"),
+                    parser_version="v2-reparsed",
+                    build_hash="test-build-hash-v2",
+                    created_at=now - timedelta(days=1),
+                )
+            )
+        await _make_token(sessionmaker, config, mint, now)
+
+        evidence_v2 = [
+            dataclasses.replace(
+                evidence_v1[0],
+                derived_swap_id=str(buy_swap_v2_id),
+                parser_version="v2-reparsed",
+                build_hash="test-build-hash-v2",
+            ),
+            evidence_v1[1],
+        ]
+
+        manifest_a = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=2),
+            provider_set="test-fake-acquisition-artifact-v1",
+            evidence_reference="test: bound to artifact v1",
+            acquired_evidence=tuple(evidence_v1),
+        )
+        manifest_b = _test_manifest(
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+            observation_cutoff=now - timedelta(seconds=1),
+            provider_set="test-fake-acquisition-artifact-v2",
+            evidence_reference="test: bound to artifact v2",
+            acquired_evidence=tuple(evidence_v2),
+        )
+        async with sessionmaker() as session, session.begin():
+            run_id_a = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest_a,
+                observation_cutoff=now - timedelta(seconds=2),
+            )
+        async with sessionmaker() as session, session.begin():
+            run_id_b = await _insert_acquisition_run(
+                session,
+                wallet_id=wallet_id,
+                manifest=manifest_b,
+                observation_cutoff=now - timedelta(seconds=1),
+            )
+
+        result_a = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+            acquisition_run_id=run_id_a,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        result_b = await reconstruct_and_score_wallet(
+            sessionmaker,
+            wallet_address=wallet_address,
+            evidence_source=EVIDENCE_SOURCE_LIVE_ACQUISITION_WALK,
+            acquisition_run_id=run_id_b,
+            config=config,
+            git_commit=_TEST_GIT_COMMIT,
+            now=now,
+        )
+        assert result_a.qualification_score == result_b.qualification_score
+        assert result_b.score_written is True
+
+        async with sessionmaker() as session:
+            history_rows = (
+                (
+                    await session.execute(
+                        select(WalletHistoryQuality).where(
+                            WalletHistoryQuality.wallet_id == wallet_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Two genuinely distinct history/evidence identities -- never
+            # collapsed into one, and the first is never rewritten.
+            assert len(history_rows) == 2
+            manifests = {row.acquisition_manifest["evidence_reference"] for row in history_rows}
+            assert manifests == {"test: bound to artifact v1", "test: bound to artifact v2"}
+
+            position_rows = (
+                (
+                    await session.execute(
+                        select(WalletPosition).where(WalletPosition.wallet_id == wallet_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # A distinct input_manifest_digest (different derived_swap_id)
+            # -- an honestly new position snapshot, not deduplicated
+            # against the first run's own row.
+            assert len(position_rows) == 2
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
