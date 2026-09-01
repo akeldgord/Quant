@@ -1866,4 +1866,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   downgrade-then-reupgrade clean through 0010, 12/12 real-chain fixtures
   ok, secret scan clean. See `orchestration/checkpoints/phase_3.md` for
   the full disposition.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+- git_commit: f2e69423c1f93beb657ccc0bc415828ac2de046b
