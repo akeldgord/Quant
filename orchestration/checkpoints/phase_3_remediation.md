@@ -14,12 +14,13 @@ STATUS: All 7 frozen findings (P3-R1..P3-R7) are fixed with real, tested
   orchestrator-approved -- this checkpoint reports remediation completion
   for independent audit, it does not and cannot itself apply approval.
 UTC_TIMESTAMP: 2026-09-01T05:35:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 5713e9bd86011ae1033507fbdab349cc3dc5fdbd
 TARGET_COMMIT: 69a8de622b1977f92999ca680fcb8d851ba78c9f
 AUTHORIZED_PHASE: 3
 APPROVES_PHASE: NONE
 
-B. Requirement-to-evidence disposition (one row per frozen finding)
+B. Requirement-to-evidence disposition / acceptance criteria (one row per
+   frozen finding)
 
 | Finding | Fix location | Test proof | Result |
 |---|---|---|---|
@@ -334,7 +335,7 @@ self-approve Phase 3. Per this project's established two-commit convention,
 this checkpoint, the paired bundle, `docs/BUILD_STATE.md`,
 `docs/DECISION_LOG.md`, and `orchestration/AGENT_HANDOFF.md` are committed
 once with every commit-hash-bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately following
+`5713e9bd86011ae1033507fbdab349cc3dc5fdbd`, then a second, immediately following
 commit fills in that first commit's own real hash in every one of those
 fields -- both commits carry the sole terminal trailer
 `ARGUS-INSTRUCTION-ID: argus-phase-3-remediation-001` with no paragraph

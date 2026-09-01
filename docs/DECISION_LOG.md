@@ -1947,4 +1947,4 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   disposition; the historical `orchestration/checkpoints/phase_3.md`/
   `orchestration/bundles/phase_3.txt` are left byte-for-byte unmodified,
   preserved as evidence of the P3-R7 defect.
-- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+- git_commit: 5713e9bd86011ae1033507fbdab349cc3dc5fdbd
