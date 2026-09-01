@@ -63,6 +63,8 @@ class ShadowMarkOutcome(Base):
 
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # P4-R5 remediation -- see ShadowQuoteProbe.claim_generation.
+    claim_generation: Mapped[int] = mapped_column(nullable=False, default=0)
 
     actual_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     mark_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)

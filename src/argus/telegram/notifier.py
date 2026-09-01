@@ -70,8 +70,12 @@ class FakeTelegramTransport:
 class HttpTelegramTransport:
     """A real Telegram Bot API ``sendMessage`` transport. Exists as real,
     reviewable code -- never invoked with a real bot token anywhere in
-    this repository's tests, CLI wiring, or REPLAY demonstration, per
-    this instruction's own explicit prohibition on external delivery
+    this repository's tests or REPLAY demonstration. The CLI only
+    constructs this transport when a human operator has explicitly
+    configured BOTH ``TELEGRAM_BOT_TOKEN``/``TELEGRAM_CHAT_ID`` (see
+    ``argus.cli._optional_telegram_notifier``) -- neither is ever set in
+    this sandbox, so no CLI invocation here sends a real message either,
+    per this instruction's own explicit prohibition on external delivery
     without separately established human authority."""
 
     def __init__(

@@ -12,12 +12,34 @@ report ``"NOT_IMPLEMENTED"`` for those fields, per this instruction's own
 not invented activity." No causal language is used anywhere in this
 module (section 93's own explicit rule) -- every sentence states a count
 or a status, never an inference about why it occurred.
+
+P4-R6 remediation (argus-phase-4-remediation-001): tier-transition
+direction (promotion/demotion/quarantine/exit) is now computed from
+``from_tier``/``to_tier`` together against the real ``WALLET_TIERS`` rank
+order, never from ``to_tier`` alone (the previous version could not
+distinguish an actual promotion like DISCOVERED->WATCH from an actual
+demotion like S->A, since both merely land on a tier that isn't
+QUARANTINE). ``new_wallets`` now counts distinct wallet IDENTITIES whose
+``wallets.first_discovered_at`` falls in the window, never repeated
+``wallet_discovery_events`` rows for the same already-known wallet.
+Previously-``NOT_IMPLEMENTED`` fields this offline report CAN genuinely
+answer from already-persisted evidence (``low_completeness_wallets``,
+``provider_gaps``, descriptive ``mfe_mae``, research ``sample_counts``)
+are now populated; features that genuinely do not exist yet (Phase 5+
+hypothesis/graph/live work) remain honestly ``NOT_IMPLEMENTED``. An
+optional injectable ``notifier`` sends one ``DAILY_SUMMARY`` notification
+after the report is fully built, using only its own already-committed
+figures -- disabled/no-op by default, ``FakeTelegramTransport`` in tests/
+the REPLAY demo, and a notification failure never affects the returned
+report.
 """
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 from datetime import timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
@@ -26,17 +48,21 @@ from argus.domain.provider_usage import ProviderUsage
 from argus.domain.shadow_intents import STATUS_FILLED, ShadowIntent
 from argus.domain.shadow_mark_outcomes import OUTCOME_RECORDED, ShadowMarkOutcome
 from argus.domain.shadow_positions import ShadowPosition
-from argus.domain.shadow_quote_probes import PROBE_KIND_REVERSE_EXECUTABLE, ShadowQuoteProbe
+from argus.domain.shadow_quote_probes import (
+    OUTCOME_PROVIDER_CAPACITY_MISS,
+    PROBE_KIND_REVERSE_EXECUTABLE,
+    ShadowQuoteProbe,
+)
 from argus.domain.swaps import Swap
 from argus.domain.tokens import Token
-from argus.domain.wallet_discovery_events import WalletDiscoveryEvent
-from argus.domain.wallet_stream_state import WalletStreamState
-from argus.domain.wallet_tier_history import (
-    TIER_A,
-    TIER_QUARANTINE,
-    TIER_S,
-    WalletTierTransition,
+from argus.domain.wallet_history_quality import (
+    COMPLETENESS_LOW,
+    COMPLETENESS_UNKNOWN,
+    WalletHistoryQuality,
 )
+from argus.domain.wallet_positions import WalletPosition
+from argus.domain.wallet_stream_state import WalletStreamState
+from argus.domain.wallet_tier_history import TIER_QUARANTINE, WALLET_TIERS, WalletTierTransition
 from argus.domain.wallets import Wallet
 
 if TYPE_CHECKING:
@@ -44,7 +70,16 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-REPORT_VERSION = "daily_report_v1"
+    from argus.telegram.notifier import TelegramNotifier
+
+REPORT_VERSION = "daily_report_v2"
+
+# Only the "normal progression" tiers rank-compare for promotion/demotion
+# purposes -- QUARANTINE/DORMANT/RETIRED are exits/holds, never scored as
+# a promotion merely because their tuple position happens to sit later.
+_PROGRESSION_TIERS = WALLET_TIERS[:6]  # DISCOVERED..S
+_TIER_RANK = {tier: rank for rank, tier in enumerate(_PROGRESSION_TIERS)}
+_EXIT_TIERS = frozenset(WALLET_TIERS[6:])  # QUARANTINE, DORMANT, RETIRED
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -98,24 +133,37 @@ async def _build_discovery(session: AsyncSession, *, start: datetime, end: datet
     new_wallets = await _count(
         session,
         select(func.count())
-        .select_from(WalletDiscoveryEvent)
-        .where(WalletDiscoveryEvent.created_at >= start, WalletDiscoveryEvent.created_at < end),
+        .select_from(Wallet)
+        .where(Wallet.first_discovered_at >= start, Wallet.first_discovered_at < end),
     )
     transitions = (
-        (
-            await session.execute(
-                select(WalletTierTransition.to_tier).where(
-                    WalletTierTransition.transitioned_at >= start,
-                    WalletTierTransition.transitioned_at < end,
-                )
+        await session.execute(
+            select(WalletTierTransition.from_tier, WalletTierTransition.to_tier).where(
+                WalletTierTransition.transitioned_at >= start,
+                WalletTierTransition.transitioned_at < end,
             )
         )
-        .scalars()
-        .all()
-    )
-    promotions = sum(1 for t in transitions if t in (TIER_A, TIER_S))
-    quarantines = sum(1 for t in transitions if t == TIER_QUARANTINE)
-    demotions = len(transitions) - promotions - quarantines
+    ).all()
+    promotions = 0
+    demotions = 0
+    quarantines = 0
+    for from_tier, to_tier in transitions:
+        if to_tier == TIER_QUARANTINE:
+            quarantines += 1
+            continue
+        if to_tier in _EXIT_TIERS or from_tier in _EXIT_TIERS:
+            # A DORMANT/RETIRED exit or a recovery FROM one of those
+            # states is neither a promotion nor a demotion in the normal
+            # progression sense.
+            continue
+        to_rank = _TIER_RANK.get(to_tier)
+        if to_rank is None:
+            continue
+        from_rank = _TIER_RANK[from_tier] if from_tier is not None else -1
+        if to_rank > from_rank:
+            promotions += 1
+        elif to_rank < from_rank:
+            demotions += 1
     return {
         "new_tokens": new_tokens,
         "new_wallets": new_wallets,
@@ -234,12 +282,33 @@ async def _build_shadow(session: AsyncSession, *, start: datetime, end: datetime
         ),
     )
     open_positions = await _count(session, select(func.count()).select_from(ShadowPosition))
+
+    mfe_mae_rows = (
+        await session.execute(
+            select(WalletPosition.mfe_quote, WalletPosition.mae_quote).where(
+                WalletPosition.mfe_quote.is_not(None), WalletPosition.mae_quote.is_not(None)
+            )
+        )
+    ).all()
+    if mfe_mae_rows:
+        sample_count = len(mfe_mae_rows)
+        avg_mfe = sum((r[0] for r in mfe_mae_rows), start=Decimal(0)) / sample_count
+        avg_mae = sum((r[1] for r in mfe_mae_rows), start=Decimal(0)) / sample_count
+        mfe_mae: dict | str = {
+            "sample_count": sample_count,
+            "avg_mfe_quote": str(avg_mfe),
+            "avg_mae_quote": str(avg_mae),
+            "note": "descriptive, sampled Phase 3 position evidence -- not continuous market coverage",
+        }
+    else:
+        mfe_mae = "INSUFFICIENT_SAMPLE"
+
     return {
         "shadow_trades_opened_in_window": trades,
         "matured_executable_outcomes_in_window": matured_executable,
         "matured_mark_outcomes_in_window": matured_mark,
         "open_shadow_positions_total": open_positions,
-        "mfe_mae": "NOT_IMPLEMENTED",
+        "mfe_mae": mfe_mae,
     }
 
 
@@ -256,9 +325,21 @@ def _build_live() -> dict:
     }
 
 
-def _build_research() -> dict:
+async def _build_research(session: AsyncSession) -> dict:
+    closed_positions_with_mfe_mae = await _count(
+        session,
+        select(func.count())
+        .select_from(WalletPosition)
+        .where(WalletPosition.mfe_quote.is_not(None), WalletPosition.mae_quote.is_not(None)),
+    )
+    wallet_history_rows = await _count(
+        session, select(func.count()).select_from(WalletHistoryQuality)
+    )
     return {
-        "sample_counts": "NOT_IMPLEMENTED",
+        "sample_counts": {
+            "closed_positions_with_mfe_mae": closed_positions_with_mfe_mae,
+            "wallet_history_rows": wallet_history_rows,
+        },
         "hypothesis_changes": "NOT_IMPLEMENTED",
         "notable_anomalies": "NOT_IMPLEMENTED",
     }
@@ -277,12 +358,45 @@ async def _build_data_quality(session: AsyncSession, *, start: datetime, end: da
         .select_from(ShadowMarkOutcome)
         .where(ShadowMarkOutcome.due_at < end, ShadowMarkOutcome.actual_at.is_(None)),
     )
+    low_completeness_wallets = await _count(
+        session,
+        select(func.count())
+        .select_from(WalletHistoryQuality)
+        .where(
+            WalletHistoryQuality.history_completeness.in_((COMPLETENESS_LOW, COMPLETENESS_UNKNOWN))
+        ),
+    )
+    provider_gaps = await _count(
+        session,
+        select(func.count())
+        .select_from(ShadowQuoteProbe)
+        .where(
+            ShadowQuoteProbe.outcome == OUTCOME_PROVIDER_CAPACITY_MISS,
+            ShadowQuoteProbe.responded_at >= start,
+            ShadowQuoteProbe.responded_at < end,
+        ),
+    )
     return {
         "ambiguous_swaps_in_window": ambiguous_swaps,
         "missing_mark_observations_overdue": missing_mark_observations,
-        "low_completeness_wallets": "NOT_IMPLEMENTED",
-        "provider_gaps": "NOT_IMPLEMENTED",
+        "low_completeness_wallets": low_completeness_wallets,
+        "provider_gaps": provider_gaps,
     }
+
+
+async def _notify_daily_summary(notifier: TelegramNotifier | None, *, report: DailyReport) -> None:
+    if notifier is None:
+        return
+    with contextlib.suppress(Exception):  # notification is never allowed to affect the record
+        await notifier.notify(
+            event_type="DAILY_SUMMARY",
+            text=(
+                f"Daily report {report.window_start.isoformat()}..{report.window_end.isoformat()}: "
+                f"{report.discovery['new_wallets']} new wallets, "
+                f"{report.signals['signals']} signals, "
+                f"{report.shadow['shadow_trades_opened_in_window']} shadow trades opened"
+            ),
+        )
 
 
 async def build_daily_report(
@@ -291,6 +405,7 @@ async def build_daily_report(
     now: datetime,
     tier_allowed: list[str],
     window: timedelta = timedelta(hours=24),
+    notifier: TelegramNotifier | None = None,
 ) -> DailyReport:
     start = now - window
     async with session_factory() as session:
@@ -299,8 +414,9 @@ async def build_daily_report(
         tracking = await _build_tracking(session, start=start, end=now, tier_allowed=tier_allowed)
         signals = await _build_signals(session, start=start, end=now)
         shadow = await _build_shadow(session, start=start, end=now)
+        research = await _build_research(session)
         data_quality = await _build_data_quality(session, start=start, end=now)
-    return DailyReport(
+    report = DailyReport(
         generated_at=now,
         window_start=start,
         window_end=now,
@@ -310,6 +426,8 @@ async def build_daily_report(
         signals=signals,
         shadow=shadow,
         live=_build_live(),
-        research=_build_research(),
+        research=research,
         data_quality=data_quality,
     )
+    await _notify_daily_summary(notifier, report=report)
+    return report

@@ -46,6 +46,7 @@ from argus.domain.shadow_quote_probes import (
 )
 from argus.domain.swaps import Swap
 from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
+from argus.domain.wallet_tier_history import WalletTierTransition
 from argus.domain.wallets import Wallet
 from argus.providers.models import ExecutableQuote, TokenSnapshot
 from argus.shadow.errors import (
@@ -116,6 +117,9 @@ async def _cleanup_wallet(admin_engine: Any, wallet_address: str) -> None:
                 text("DELETE FROM prospective_events WHERE wallet_id = :w"), {"w": wid}
             )
             await conn.execute(
+                text("DELETE FROM wallet_tier_history WHERE wallet_id = :w"), {"w": wid}
+            )
+            await conn.execute(
                 text("DELETE FROM wallet_score_snapshots WHERE wallet_id = :w"), {"w": wid}
             )
             await conn.execute(
@@ -152,9 +156,10 @@ async def _seed_tracked_wallet_with_buy_swap(
         )
     )
     await session.flush()
+    score_id = uuid.uuid4()
     session.add(
         WalletScoreSnapshot(
-            score_id=uuid.uuid4(),
+            score_id=score_id,
             wallet_id=wallet_id,
             as_of=at,
             score_version="test-v1",
@@ -170,6 +175,22 @@ async def _seed_tracked_wallet_with_buy_swap(
             config_hash="test-config",
             master_spec_hash="test-spec",
             git_commit=_TEST_GIT_COMMIT,
+            created_at=at,
+        )
+    )
+    # P4-R1 remediation: wallet_tier_snapshot is resolved from real
+    # WalletTierTransition history as-of first_seen_at, never trusted
+    # from wallets.current_tier alone -- every test wallet needs a real
+    # transition row for its tier to be honestly picked up.
+    session.add(
+        WalletTierTransition(
+            transition_id=uuid.uuid4(),
+            wallet_id=wallet_id,
+            source_score_id=score_id,
+            from_tier=None,
+            to_tier=tier,
+            reason="test",
+            transitioned_at=at,
             created_at=at,
         )
     )
@@ -239,7 +260,14 @@ def _quote(*, input_mint: str, output_mint: str, in_amount: int, out_amount: int
         output_mint=output_mint,
         in_amount_raw=in_amount,
         out_amount_raw=out_amount,
-        raw={"priceImpactPct": impact, "inAmount": str(in_amount), "outAmount": str(out_amount)},
+        raw={
+            "priceImpactPct": impact,
+            "inAmount": str(in_amount),
+            "outAmount": str(out_amount),
+            # A real Jupiter quote's non-empty routePlan -- required
+            # route evidence since P4-R4's _classify_quote fix.
+            "routePlan": [{"swapInfo": {"label": "fake-amm"}, "percent": 100}],
+        },
     )
 
 
@@ -843,14 +871,21 @@ async def test_reprocessing_an_already_responded_probe_is_a_no_op(admin_engine) 
 
         from argus.shadow.quote_jobs import _execute_and_record_probe
 
+        # P4-R5: a call counter, not just a queued exception, proves the
+        # already-terminal probe's re-execution never reaches the
+        # provider at all -- catching the "should never be called"
+        # RuntimeError alone would mask an actual provider call whose
+        # result is merely discarded afterward.
+        no_call_provider = QueuedExecutionProvider(queue=[RuntimeError("should never be called")])
         second_result = await _execute_and_record_probe(
             sessionmaker,
             probe_id=probe_id,
-            provider=QueuedExecutionProvider(queue=[RuntimeError("should never be called")]),
+            provider=no_call_provider,
             config=config,
             clock=Clock(),
         )
         assert second_result.outcome == OUTCOME_SUCCESS
+        assert no_call_provider.calls == []
 
         async with sessionmaker() as session:
             positions = (

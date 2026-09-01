@@ -1522,11 +1522,30 @@ def prospective_run(
             await engine.dispose()
         console.print(
             f"prospective_events_created={len(result.prospective_events)} "
-            f"shadow_intents_created={len(result.shadow_intents)}"
+            f"shadow_intents_created={len(result.shadow_intents)} "
+            f"confirmations_revisited={len(result.confirmed_event_ids)}"
         )
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
+
+
+def _optional_telegram_notifier(config, http_client):
+    """Real, production-capable Telegram wiring -- returns ``None``
+    (no-op, per section 94's "disabled/no-op default") unless BOTH
+    ``TELEGRAM_BOT_TOKEN``/``TELEGRAM_CHAT_ID`` are explicitly configured.
+    Neither is ever set in this sandbox, so every CLI invocation here
+    stays inert; a real deployment supplying both gets real notifications
+    through the same closed, secret-guarded event-type set every test
+    exercises via ``FakeTelegramTransport``."""
+    from argus.telegram.notifier import HttpTelegramTransport, TelegramNotifier
+
+    bot_token = config.env.get("TELEGRAM_BOT_TOKEN")
+    chat_id = config.env.get("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return None
+    transport = HttpTelegramTransport(http_client=http_client, bot_token=bot_token)
+    return TelegramNotifier(transport, chat_id=chat_id)
 
 
 @shadow_app.command("run-entry-probes")
@@ -1548,6 +1567,7 @@ def shadow_run_entry_probes(
     from argus.providers.dexscreener.client import DexScreenerClient
     from argus.providers.jupiter.client import JupiterClient
     from argus.providers.retry import retry_policy_from_config
+    from argus.providers.scheduler import PriorityScheduler
     from argus.providers.usage import SqlUsageRecorder
     from argus.shadow.quote_jobs import run_due_entry_probes
 
@@ -1555,6 +1575,7 @@ def shadow_run_entry_probes(
         config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
         try:
             retry_policy = retry_policy_from_config(config)
+            scheduler = PriorityScheduler()
             async with httpx.AsyncClient(timeout=30.0) as http_client:
                 usage_recorder = SqlUsageRecorder(sessionmaker)
                 jupiter = JupiterClient(
@@ -1562,7 +1583,12 @@ def shadow_run_entry_probes(
                     retry_policy=retry_policy,
                     usage_recorder=usage_recorder,
                 )
-                market = DexScreenerClient(http_client=http_client, retry_policy=retry_policy)
+                market = DexScreenerClient(
+                    http_client=http_client,
+                    retry_policy=retry_policy,
+                    usage_recorder=usage_recorder,
+                )
+                notifier = _optional_telegram_notifier(config, http_client)
                 results = await run_due_entry_probes(
                     sessionmaker,
                     jupiter,
@@ -1570,6 +1596,8 @@ def shadow_run_entry_probes(
                     clock=Clock(),
                     now=datetime.now(UTC),
                     market_provider=market,
+                    scheduler=scheduler,
+                    notifier=notifier,
                     limit=limit,
                 )
         finally:
@@ -1597,6 +1625,7 @@ def shadow_run_reverse_probes(
     from argus.clock import Clock
     from argus.providers.jupiter.client import JupiterClient
     from argus.providers.retry import retry_policy_from_config
+    from argus.providers.scheduler import PriorityScheduler
     from argus.providers.usage import SqlUsageRecorder
     from argus.shadow.quote_jobs import run_due_reverse_probes
 
@@ -1604,6 +1633,7 @@ def shadow_run_reverse_probes(
         config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
         try:
             retry_policy = retry_policy_from_config(config)
+            scheduler = PriorityScheduler()
             async with httpx.AsyncClient(timeout=30.0) as http_client:
                 usage_recorder = SqlUsageRecorder(sessionmaker)
                 jupiter = JupiterClient(
@@ -1617,6 +1647,7 @@ def shadow_run_reverse_probes(
                     config=config,
                     clock=Clock(),
                     now=datetime.now(UTC),
+                    scheduler=scheduler,
                     limit=limit,
                 )
         finally:
@@ -1645,6 +1676,7 @@ def shadow_run_mark_outcomes(
     from argus.clock import Clock
     from argus.providers.dexscreener.client import DexScreenerClient
     from argus.providers.retry import retry_policy_from_config
+    from argus.providers.usage import SqlUsageRecorder
     from argus.shadow.mark_jobs import run_due_mark_outcomes
 
     async def _run() -> int:
@@ -1652,7 +1684,12 @@ def shadow_run_mark_outcomes(
         try:
             retry_policy = retry_policy_from_config(config)
             async with httpx.AsyncClient(timeout=30.0) as http_client:
-                market = DexScreenerClient(http_client=http_client, retry_policy=retry_policy)
+                usage_recorder = SqlUsageRecorder(sessionmaker)
+                market = DexScreenerClient(
+                    http_client=http_client,
+                    retry_policy=retry_policy,
+                    usage_recorder=usage_recorder,
+                )
                 results = await run_due_mark_outcomes(
                     sessionmaker, market, clock=Clock(), now=datetime.now(UTC), limit=limit
                 )
@@ -1678,15 +1715,22 @@ def report_daily() -> None:
     import json
     from datetime import UTC, datetime
 
+    import httpx
+
     from argus.reports.daily import build_daily_report
 
     async def _run() -> int:
         config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
         try:
             tier_allowed = config.get("thresholds.wallet_tier_allowed") or []
-            report = await build_daily_report(
-                sessionmaker, now=datetime.now(UTC), tier_allowed=tier_allowed
-            )
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                notifier = _optional_telegram_notifier(config, http_client)
+                report = await build_daily_report(
+                    sessionmaker,
+                    now=datetime.now(UTC),
+                    tier_allowed=tier_allowed,
+                    notifier=notifier,
+                )
         finally:
             await engine.dispose()
         console.print(

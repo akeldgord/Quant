@@ -141,6 +141,12 @@ class ShadowQuoteProbe(Base):
     # Restart-safety claim (section 84) -- see argus.shadow.quote_jobs.
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # P4-R5 remediation: incremented on every claim (including a stale
+    # reclaim). The terminal-write step verifies the generation it read
+    # during its own claim still matches before publishing, so a
+    # superseded worker's late write can never overwrite a fresher
+    # attempt's already-recorded result (section 84).
+    claim_generation: Mapped[int] = mapped_column(nullable=False, default=0)
 
     # Actual timings -- always distinct from target_due_at (section 46).
     requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

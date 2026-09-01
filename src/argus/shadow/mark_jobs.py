@@ -7,6 +7,13 @@ copyability outcome (that is ``shadow_quote_probes(probe_kind=
 'REVERSE_EXECUTABLE')``, section 47's own explicit statement). A missing
 or unavailable market price is recorded as ``PRICE_UNAVAILABLE``, never
 silently treated as a zero return.
+
+P4-R5 remediation (argus-phase-4-remediation-001): the SAME claim-
+generation ownership check ``argus.shadow.quote_jobs`` now uses -- a
+stale worker whose claim was superseded by a fresh reclaim can never
+overwrite the fresh attempt's already-recorded mark outcome, and the
+terminal-write step's ``FOR UPDATE`` row lock serializes any two workers
+that raced through claim/execute concurrently.
 """
 
 from __future__ import annotations
@@ -31,7 +38,7 @@ if TYPE_CHECKING:
     from argus.clock import Clock
     from argus.providers import MarketDataProvider
 
-ALGORITHM_VERSION: Final[str] = "shadow_mark_jobs_v1"
+ALGORITHM_VERSION: Final[str] = "shadow_mark_jobs_v2"
 
 
 class SimulatedWorkerCrash(RuntimeError):
@@ -41,7 +48,7 @@ class SimulatedWorkerCrash(RuntimeError):
 
 async def _claim_due_mark_outcomes(
     session: AsyncSession, *, now: datetime, worker_id: str, stale_after: timedelta, limit: int
-) -> list[uuid.UUID]:
+) -> list[tuple[uuid.UUID, int]]:
     stale_cutoff = now - stale_after
     candidates = (
         (
@@ -63,13 +70,14 @@ async def _claim_due_mark_outcomes(
         .scalars()
         .all()
     )
-    claimed_ids: list[uuid.UUID] = []
+    claimed: list[tuple[uuid.UUID, int]] = []
     for row in candidates:
         row.claimed_at = now
         row.claimed_by = worker_id
-        claimed_ids.append(row.shadow_mark_outcome_id)
+        row.claim_generation += 1
+        claimed.append((row.shadow_mark_outcome_id, row.claim_generation))
     await session.flush()
-    return claimed_ids
+    return claimed
 
 
 async def _execute_and_record_mark_outcome(
@@ -78,15 +86,24 @@ async def _execute_and_record_mark_outcome(
     outcome_id: uuid.UUID,
     market_provider: MarketDataProvider,
     clock: Clock,
+    _claim_generation: int | None = None,
     _simulate_crash_after: str | None = None,
 ) -> ShadowMarkOutcome:
     async with session_factory() as session:
         row = await session.get(ShadowMarkOutcome, outcome_id)
         assert row is not None
+        if row.actual_at is not None:
+            # Already terminal -- a needless market-data call must never
+            # happen for an invocation with nothing left to record
+            # (P4-R5), matching quote_jobs._execute_and_record_probe.
+            return row
         position = await session.get(ShadowPosition, row.shadow_position_id)
         assert position is not None
         mint = position.output_mint
         entry_price_usd = position.entry_price_usd
+        observed_generation = (
+            _claim_generation if _claim_generation is not None else row.claim_generation
+        )
 
     price_usd: Decimal | None = None
     try:
@@ -101,10 +118,17 @@ async def _execute_and_record_mark_outcome(
         raise SimulatedWorkerCrash(f"simulated crash after price lookup (outcome_id={outcome_id})")
 
     async with session_factory() as session, session.begin():
-        row = await session.get(ShadowMarkOutcome, outcome_id)
-        assert row is not None
-        if row.actual_at is not None:
-            return row  # already recorded -- idempotent no-op (section 84)
+        row = (
+            await session.execute(
+                select(ShadowMarkOutcome)
+                .where(ShadowMarkOutcome.shadow_mark_outcome_id == outcome_id)
+                .with_for_update()
+            )
+        ).scalar_one()
+        if row.actual_at is not None or row.claim_generation != observed_generation:
+            # Already recorded, or this attempt's claim was superseded by
+            # a fresher reclaim -- idempotent no-op (section 84, P4-R5).
+            return row
 
         row.actual_at = actual_at
         row.provider = provider_name
@@ -138,20 +162,21 @@ async def run_due_mark_outcomes(
     claim/execute/record restart-safe shape as
     ``argus.shadow.quote_jobs.run_due_entry_probes``."""
     async with session_factory() as session, session.begin():
-        claimed_ids = await _claim_due_mark_outcomes(
+        claimed = await _claim_due_mark_outcomes(
             session, now=now, worker_id=worker_id, stale_after=stale_after, limit=limit
         )
     if _simulate_crash_after == "claim":
         raise SimulatedWorkerCrash("simulated crash after claim")
 
     results = []
-    for outcome_id in claimed_ids:
+    for outcome_id, generation in claimed:
         results.append(
             await _execute_and_record_mark_outcome(
                 session_factory,
                 outcome_id=outcome_id,
                 market_provider=market_provider,
                 clock=clock,
+                _claim_generation=generation,
                 _simulate_crash_after=_simulate_crash_after,
             )
         )

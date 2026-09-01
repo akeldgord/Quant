@@ -26,6 +26,7 @@ from argus.domain.chain_events import ChainEvent
 from argus.domain.commitment import COMMITMENT_CONFIRMED, CommitmentObservation
 from argus.domain.swaps import Swap
 from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
+from argus.domain.wallet_tier_history import WalletTierTransition
 from argus.domain.wallets import Wallet
 from argus.reports.daily import build_daily_report
 from argus.shadow.monitor import run_prospective_monitoring_pass
@@ -82,6 +83,9 @@ async def _cleanup_wallet(admin_engine: Any, wallet_address: str) -> None:
                 text("DELETE FROM prospective_events WHERE wallet_id = :w"), {"w": wid}
             )
             await conn.execute(
+                text("DELETE FROM wallet_tier_history WHERE wallet_id = :w"), {"w": wid}
+            )
+            await conn.execute(
                 text("DELETE FROM wallet_score_snapshots WHERE wallet_id = :w"), {"w": wid}
             )
             await conn.execute(
@@ -116,9 +120,10 @@ async def _seed_tracked_wallet_with_buy_swap(
         )
     )
     await session.flush()
+    score_id = uuid.uuid4()
     session.add(
         WalletScoreSnapshot(
-            score_id=uuid.uuid4(),
+            score_id=score_id,
             wallet_id=wallet_id,
             as_of=at,
             score_version="test-v1",
@@ -134,6 +139,18 @@ async def _seed_tracked_wallet_with_buy_swap(
             config_hash="test-config",
             master_spec_hash="test-spec",
             git_commit=_TEST_GIT_COMMIT,
+            created_at=at,
+        )
+    )
+    session.add(
+        WalletTierTransition(
+            transition_id=uuid.uuid4(),
+            wallet_id=wallet_id,
+            source_score_id=score_id,
+            from_tier=None,
+            to_tier="A",
+            reason="test",
+            transitioned_at=at,
             created_at=at,
         )
     )

@@ -9,6 +9,20 @@ instruction's own explicit "preserve existing live thresholds rather than
 manufacturing qualified wallets"). This is research/shadow eligibility
 only: it authorizes nothing about real trading, and every live safety
 flag remains unaffected by anything in this module.
+
+P4-R2 remediation (argus-phase-4-remediation-001): each entry-delay
+probe's ``target_due_at`` is now anchored to ``event.first_seen_at`` --
+the moment ARGUS actually first observed the leader's transaction --
+never to whatever wall-clock time the monitoring pass happened to reach
+this event at. A confirmation delay, a queue backlog, or simply calling
+``argus prospective run`` less often than every second must never push a
+probe's nominal target later; a probe found overdue when it is finally
+scheduled is honestly late (``scheduling_delay_seconds`` reflects the
+real gap from ``event.first_seen_at + target_seconds``), never silently
+re-based to look on-time. ``ShadowIntent.created_at``/each probe's own
+``created_at`` still honestly record the real row-creation instant
+(``now``) -- a distinct concept from the due-time origin, never
+backdated.
 """
 
 from __future__ import annotations
@@ -46,9 +60,14 @@ async def _schedule_entry_delay_probes(
     session: AsyncSession,
     *,
     intent: ShadowIntent,
-    observed_at: datetime,
+    due_origin: datetime,
+    created_at: datetime,
     delays_seconds: Sequence[int],
 ) -> list[ShadowQuoteProbe]:
+    """``due_origin`` is ``event.first_seen_at`` (P4-R2: the immutable
+    knowledge cutoff every target due time is anchored to) --
+    ``created_at`` is the real, honest instant these rows are actually
+    being created (``now``), never backdated to ``due_origin``."""
     probes: list[ShadowQuoteProbe] = []
     for seconds in delays_seconds:
         probe = ShadowQuoteProbe(
@@ -61,10 +80,10 @@ async def _schedule_entry_delay_probes(
             input_mint=intent.input_mint,
             output_mint=intent.output_mint,
             notional_input_amount_raw=intent.notional_input_amount_raw,
-            target_due_at=observed_at + timedelta(seconds=seconds),
+            target_due_at=due_origin + timedelta(seconds=seconds),
             outcome=OUTCOME_PENDING,
             algorithm_version=ALGORITHM_VERSION,
-            created_at=observed_at,
+            created_at=created_at,
         )
         session.add(probe)
         probes.append(probe)
@@ -126,6 +145,10 @@ async def create_shadow_intent_for_event(
 
     delays_seconds = config.get("copyability_delay_probes_seconds") or [1, 5, 15, 30, 60, 300]
     await _schedule_entry_delay_probes(
-        session, intent=intent, observed_at=now, delays_seconds=delays_seconds
+        session,
+        intent=intent,
+        due_origin=event.first_seen_at,
+        created_at=now,
+        delays_seconds=delays_seconds,
     )
     return intent

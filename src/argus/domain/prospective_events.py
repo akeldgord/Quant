@@ -39,6 +39,7 @@ class ProspectiveEvent(Base):
     __tablename__ = "prospective_events"
     __table_args__ = (
         UniqueConstraint("swap_id", name="uq_prospective_events_swap_id"),
+        UniqueConstraint("event_id", name="uq_prospective_events_event_id"),
         CheckConstraint(
             "length(wallet_tier_snapshot) > 0",
             name="ck_prospective_events_tier_snapshot_nonempty",
@@ -57,6 +58,16 @@ class ProspectiveEvent(Base):
     swap_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("swaps.swap_id"), nullable=False, index=True
     )
+    # P4-R3 remediation: the true "one prospective event per canonical
+    # wallet transaction" identity boundary -- a denormalized copy of
+    # ``swaps.event_id``, unique here, so two different parser-artifact
+    # rows for the SAME raw transaction can never both become prospective
+    # events (the pre-existing ``swap_id`` uniqueness alone did not catch
+    # this, since a reparse can produce a new ``swap_id`` for the same
+    # ``event_id``).
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chain_events.event_id"), nullable=False, index=True
+    )
     token_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tokens.token_id"), nullable=True, index=True
     )
@@ -74,6 +85,18 @@ class ProspectiveEvent(Base):
     # reflect a later re-score (section 44's own explicit rule).
     wallet_score_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(6, 3), nullable=True)
     wallet_tier_snapshot: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # P4-R1 remediation: "preserve selected source identities so the
+    # snapshot can be checked" -- the exact score/tier-transition row (if
+    # any existed by ``first_seen_at``) that was actually used to compute
+    # the two fields above. Nullable: no qualifying row may have existed
+    # yet at that cutoff, which is itself an honest, auditable fact.
+    score_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("wallet_score_snapshots.score_id"), nullable=True
+    )
+    tier_transition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("wallet_tier_history.transition_id"), nullable=True
+    )
 
     token_state_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
     position_size_context: Mapped[dict] = mapped_column(JSONB, nullable=False)

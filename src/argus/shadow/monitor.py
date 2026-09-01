@@ -19,9 +19,10 @@ from typing import TYPE_CHECKING
 
 from argus.domain.swaps import Swap
 from argus.shadow.intents import create_shadow_intent_for_event
-from argus.shadow.prospective import scan_for_new_prospective_events
+from argus.shadow.prospective import revisit_pending_confirmations, scan_for_new_prospective_events
 
 if TYPE_CHECKING:
+    import uuid
     from collections.abc import Sequence
     from datetime import datetime
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 class MonitoringPassResult:
     prospective_events: tuple[ProspectiveEvent, ...]
     shadow_intents: tuple[ShadowIntent, ...]
+    confirmed_event_ids: tuple[uuid.UUID, ...] = ()
 
 
 async def run_prospective_monitoring_pass(
@@ -47,13 +49,17 @@ async def run_prospective_monitoring_pass(
     tier_allowed: Sequence[str] | None = None,
     limit: int = 100,
 ) -> MonitoringPassResult:
-    """One pass: scan for new tracked-wallet swaps, create their
-    prospective events, and create a shadow intent (with its scheduled
-    entry-delay probes) for every one that passes the honest eligibility
-    gate. Call repeatedly (a bounded loop, a cron tick, or as part of
-    ``argus ingest run``'s own periodic cadence)."""
+    """One pass: first revisits already-created events still missing
+    confirmation evidence (P4-R3 -- exposes a late-arriving real
+    confirmation exactly once, never touching any other frozen field),
+    then scans for new tracked-wallet swaps, creates their prospective
+    events, and creates a shadow intent (with its scheduled entry-delay
+    probes) for every one that passes the honest eligibility gate. Call
+    repeatedly (a bounded loop, a cron tick, or as part of ``argus ingest
+    run``'s own periodic cadence)."""
     resolved_tier_allowed = tier_allowed or config.get("thresholds.wallet_tier_allowed") or []
     async with session_factory() as session, session.begin():
+        confirmed_ids = await revisit_pending_confirmations(session, limit=limit)
         new_events = await scan_for_new_prospective_events(
             session, tier_allowed=resolved_tier_allowed, now=now, limit=limit
         )
@@ -68,5 +74,7 @@ async def run_prospective_monitoring_pass(
                 intents_created.append(intent)
 
     return MonitoringPassResult(
-        prospective_events=tuple(new_events), shadow_intents=tuple(intents_created)
+        prospective_events=tuple(new_events),
+        shadow_intents=tuple(intents_created),
+        confirmed_event_ids=tuple(confirmed_ids),
     )
