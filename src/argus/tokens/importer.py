@@ -79,17 +79,22 @@ async def import_bootstrap_token(
     now: datetime,
     config: ArgusConfig,
     git_commit: str,
+    commitment: str | None = None,
 ) -> TokenImportResult:
     """Import (or re-validate) one candidate token mint against real
     committed evidence. Idempotent on ``mint``: calling this twice for the
     same mint never creates a second ``tokens`` row, and always appends a
     new ``token_mint_validations`` attempt (the append-only ledger
-    convention -- a later attempt never overwrites an earlier one)."""
+    convention -- a later attempt never overwrites an earlier one).
+    ``commitment`` is only meaningful for ``evidence_kind="account_info"``
+    (the commitment level the live RPC call was itself made at -- P2-R8);
+    ignored for ``"token_balance"`` evidence, which derives its own
+    ``chain_time`` from the cited transaction's ``blockTime`` instead."""
     token = await _get_or_create_token(session, mint=mint, now=now)
 
     if evidence_kind == "account_info":
         result = validate_from_account_info(
-            evidence, mint=mint, evidence_reference=evidence_reference
+            evidence, mint=mint, evidence_reference=evidence_reference, commitment=commitment
         )
     else:
         if evidence is None:
@@ -112,8 +117,8 @@ async def import_bootstrap_token(
         validation_status=result.status,
         validation_source=result.validation_source,
         observed_at=now,
-        chain_time=None,
-        commitment=None,
+        chain_time=result.chain_time,
+        commitment=result.commitment,
         evidence_reference=result.evidence_reference,
         reason=result.reason,
         algorithm_version=ALGORITHM_VERSION,

@@ -161,7 +161,7 @@ def _current_revision(database: str) -> str:
 def test_migration_from_zero_to_head_creates_identity_columns(scratch_database: str) -> None:
     command.upgrade(_alembic_config(), "head")
 
-    assert _current_revision(scratch_database) == "0008"
+    assert _current_revision(scratch_database) == "0009"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -190,7 +190,7 @@ def test_upgrade_from_0003_through_head_creates_table_and_columns_together(
     assert "parse_attempts" not in existing_tables
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0008"
+    assert _current_revision(scratch_database) == "0009"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
 
@@ -293,7 +293,7 @@ def test_upgrade_head_is_idempotent_and_restart_safe(scratch_database: str) -> N
 
     command.upgrade(cfg, "head")  # simulated restart
 
-    assert _current_revision(scratch_database) == "0008"
+    assert _current_revision(scratch_database) == "0009"
     assert _column_names(scratch_database, "parse_attempts") == first_columns
 
 
@@ -307,7 +307,7 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0008"
+    assert _current_revision(scratch_database) == "0009"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -433,7 +433,7 @@ def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
 
     # Refused before touching anything: still at head, build_hash column
     # and both append-only rows still present and unmodified.
-    assert _current_revision(scratch_database) == "0008"
+    assert _current_revision(scratch_database) == "0009"
     assert "build_hash" in _column_names(scratch_database, "swaps")
     rows = _query(
         scratch_database,
@@ -444,3 +444,271 @@ def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
         (swap_id_a, "build-a"),
         (swap_id_b, "build-b"),
     ]
+
+
+# --- Phase 2 remediation (argus-phase-2-remediation-001), finding P2-R7:
+# --- supply_raw/amount_raw widened from signed BIGINT to an exact
+# --- unsigned-64-bit-capable NUMERIC(39,10) with range/integrality CHECK
+# --- constraints (migration 0009). See src/argus/domain/u64.py.
+
+_U64_MAX = 2**64 - 1
+_BIGINT_MAX = 2**63 - 1
+
+
+def _insert_token(database: str, token_id: str, mint: str) -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _execute(
+        database,
+        """
+        INSERT INTO tokens (token_id, mint, chain, first_observed_at, mint_validated, created_at)
+        VALUES (:token_id, :mint, 'solana', :now, false, :now)
+        """,
+        {"token_id": token_id, "mint": mint, "now": now},
+    )
+
+
+def test_p2r7_upgrade_to_0009_round_trips_u64_boundary_values(scratch_database: str) -> None:
+    """0/1/2**63/2**64-1 all store and read back exactly, unchanged, in
+    the widened ``token_market_snapshots.supply_raw`` column -- values
+    that (2**63 and above) could never even be stored under the
+    pre-0009 signed BIGINT column at all."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    token_id = str(uuid.uuid4())
+    _insert_token(scratch_database, token_id, f"P2R7Mint{uuid.uuid4().hex[:36]}")
+
+    boundary_values = [0, 1, 2**63, _U64_MAX]
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    for i, value in enumerate(boundary_values):
+        _execute(
+            scratch_database,
+            """
+            INSERT INTO token_market_snapshots (
+                snapshot_id, token_id, observed_at, lifecycle_stage, supply_raw,
+                source, algorithm_version, build_hash, created_at
+            ) VALUES (
+                :snapshot_id, :token_id, :now, 'TOKEN_CREATION', :supply_raw,
+                'p2r7-test', 'v1', 'deadbeef', :now
+            )
+            """,
+            {
+                "snapshot_id": str(uuid.uuid4()),
+                "token_id": token_id,
+                "now": now.replace(microsecond=i),
+                "supply_raw": value,
+            },
+        )
+
+    rows = _query(
+        scratch_database,
+        "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t ORDER BY supply_raw",
+        {"t": token_id},
+    )
+    stored = [int(r[0]) for r in rows]
+    assert stored == sorted(boundary_values)
+    for value in stored:
+        assert isinstance(value, int)
+
+
+def test_p2r7_0009_rejects_negative_and_out_of_range_supply_raw(scratch_database: str) -> None:
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    token_id = str(uuid.uuid4())
+    _insert_token(scratch_database, token_id, f"P2R7Mint{uuid.uuid4().hex[:36]}")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _insert(value: Any) -> None:
+        _execute(
+            scratch_database,
+            """
+            INSERT INTO token_market_snapshots (
+                snapshot_id, token_id, observed_at, lifecycle_stage, supply_raw,
+                source, algorithm_version, build_hash, created_at
+            ) VALUES (
+                :snapshot_id, :token_id, :now, 'TOKEN_CREATION', :supply_raw,
+                'p2r7-test', 'v1', 'deadbeef', :now
+            )
+            """,
+            {
+                "snapshot_id": str(uuid.uuid4()),
+                "token_id": token_id,
+                "now": now,
+                "supply_raw": value,
+            },
+        )
+
+    with pytest.raises(Exception, match="u64_range|violates check"):
+        _insert(-1)
+    with pytest.raises(Exception, match="u64_range|violates check"):
+        _insert(_U64_MAX + 1)
+    with pytest.raises(Exception, match="u64_integral|violates check"):
+        _insert("1.5")
+
+    # Nothing from the three rejected attempts was persisted.
+    count = _query(
+        scratch_database,
+        "SELECT COUNT(*) FROM token_market_snapshots WHERE token_id = :t",
+        {"t": token_id},
+    )[0][0]
+    assert count == 0
+
+
+def test_p2r7_downgrade_from_0009_fails_closed_when_value_exceeds_bigint_range(
+    scratch_database: str,
+) -> None:
+    """A supply_raw value between 2**63 and 2**64-1 (genuinely storable
+    only since 0009) cannot be represented by the pre-0009 signed
+    BIGINT column -- the downgrade must refuse, not silently truncate
+    or corrupt the value."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    token_id = str(uuid.uuid4())
+    _insert_token(scratch_database, token_id, f"P2R7Mint{uuid.uuid4().hex[:36]}")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _execute(
+        scratch_database,
+        """
+        INSERT INTO token_market_snapshots (
+            snapshot_id, token_id, observed_at, lifecycle_stage, supply_raw,
+            source, algorithm_version, build_hash, created_at
+        ) VALUES (
+            :snapshot_id, :token_id, :now, 'TOKEN_CREATION', :supply_raw,
+            'p2r7-test', 'v1', 'deadbeef', :now
+        )
+        """,
+        {
+            "snapshot_id": str(uuid.uuid4()),
+            "token_id": token_id,
+            "now": now,
+            "supply_raw": _BIGINT_MAX + 1,
+        },
+    )
+
+    with pytest.raises(Exception, match="cannot downgrade past revision 0009"):
+        command.downgrade(cfg, "0008")
+
+    # Refused before touching anything: still at head, value unchanged.
+    assert _current_revision(scratch_database) == "0009"
+    stored = _query(
+        scratch_database,
+        "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t",
+        {"t": token_id},
+    )[0][0]
+    assert int(stored) == _BIGINT_MAX + 1
+
+
+def test_p2r7_downgrade_from_0009_succeeds_when_values_fit_bigint_range(
+    scratch_database: str,
+) -> None:
+    """A downgrade with no out-of-BIGINT-range data present succeeds
+    cleanly, restoring the pre-0009 BIGINT column and dropping the
+    0009 CHECK constraints -- proving the fails-closed test above is
+    about the *data*, not the migration being broken outright."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    token_id = str(uuid.uuid4())
+    _insert_token(scratch_database, token_id, f"P2R7Mint{uuid.uuid4().hex[:36]}")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _execute(
+        scratch_database,
+        """
+        INSERT INTO token_market_snapshots (
+            snapshot_id, token_id, observed_at, lifecycle_stage, supply_raw,
+            source, algorithm_version, build_hash, created_at
+        ) VALUES (
+            :snapshot_id, :token_id, :now, 'TOKEN_CREATION', 1000000,
+            'p2r7-test', 'v1', 'deadbeef', :now
+        )
+        """,
+        {"snapshot_id": str(uuid.uuid4()), "token_id": token_id, "now": now},
+    )
+
+    command.downgrade(cfg, "0008")
+
+    assert _current_revision(scratch_database) == "0008"
+    constraints = _check_constraint_names(scratch_database, "token_market_snapshots")
+    assert "ck_token_market_snapshots_supply_raw_u64_range" not in constraints
+    assert "ck_token_market_snapshots_supply_raw_u64_integral" not in constraints
+    rows = _query(
+        scratch_database,
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_name = 'token_market_snapshots' AND column_name = 'supply_raw'",
+    )
+    assert rows[0][0] == "bigint"
+    stored = _query(
+        scratch_database,
+        "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t",
+        {"t": token_id},
+    )[0][0]
+    assert stored == 1_000_000
+
+    command.upgrade(cfg, "head")
+    assert _current_revision(scratch_database) == "0009"
+
+
+def test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening(scratch_database: str) -> None:
+    """``early_buyers.amount_raw`` (the second P2-R7 column) gets the
+    identical treatment: widened type, both CHECK constraints, and a
+    genuine 2**64-1 round trip."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    token_id = str(uuid.uuid4())
+    _insert_token(scratch_database, token_id, f"P2R7Mint{uuid.uuid4().hex[:36]}")
+    wallet_id = str(uuid.uuid4())
+    _execute(
+        scratch_database,
+        "INSERT INTO wallets (wallet_id, wallet_address, first_discovered_at, created_at) "
+        "VALUES (:w, :addr, :now, :now)",
+        {"w": wallet_id, "addr": f"P2R7Wallet{uuid.uuid4().hex[:34]}", "now": now},
+    )
+    run_id = str(uuid.uuid4())
+    _execute(
+        scratch_database,
+        """
+        INSERT INTO archaeology_runs (
+            run_id, token_id, run_type, source_provider_set, input_evidence_reference,
+            completeness_statement, status, started_at, algorithm_version, build_hash,
+            config_hash, master_spec_hash, git_commit, created_at
+        ) VALUES (
+            :run_id, :token_id, 'HISTORICAL_WINNER', 'p2r7-test', 'p2r7-test',
+            'p2r7-test', 'COMPLETED', :now, 'v1', 'deadbeef', 'deadbeef', 'deadbeef',
+            'deadbeef', :now
+        )
+        """,
+        {"run_id": run_id, "token_id": token_id, "now": now},
+    )
+
+    constraints = _check_constraint_names(scratch_database, "early_buyers")
+    assert "ck_early_buyers_amount_raw_u64_range" in constraints
+    assert "ck_early_buyers_amount_raw_u64_integral" in constraints
+
+    _execute(
+        scratch_database,
+        """
+        INSERT INTO early_buyers (
+            early_buyer_id, token_id, wallet_id, source_run_id, first_buy_slot,
+            sequence_number, amount_raw, amount_decimals, evidence_reference,
+            algorithm_version, created_at
+        ) VALUES (
+            :id, :token_id, :wallet_id, :run_id, 1, 1, :amount_raw, 6, 'p2r7-test',
+            'v1', :now
+        )
+        """,
+        {
+            "id": str(uuid.uuid4()),
+            "token_id": token_id,
+            "wallet_id": wallet_id,
+            "run_id": run_id,
+            "amount_raw": _U64_MAX,
+            "now": now,
+        },
+    )
+    stored = _query(
+        scratch_database,
+        "SELECT amount_raw FROM early_buyers WHERE token_id = :t",
+        {"t": token_id},
+    )[0][0]
+    assert int(stored) == _U64_MAX

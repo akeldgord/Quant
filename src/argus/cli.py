@@ -664,6 +664,13 @@ def tokens_import_bootstrap(
         "'token_balance' (a committed getTransaction response -- this sandbox's free-first "
         "evidence path; see argus.tokens.mint_validation).",
     ),
+    commitment: str = typer.Option(
+        "",
+        "--commitment",
+        help="Only meaningful for --evidence-kind account_info: the commitment level "
+        "('processed'/'confirmed'/'finalized') the live getAccountInfo call was itself "
+        "made at, persisted as this validation attempt's provenance (P2-R8).",
+    ),
 ) -> None:
     """Deterministic bootstrap-token importer (MASTER_SPEC.md Phase 2 build
     item 5): creates or reuses a ``tokens`` row for ``mint`` and runs
@@ -706,6 +713,7 @@ def tokens_import_bootstrap(
                     now=datetime.now(UTC),
                     config=config,
                     git_commit=git_commit,
+                    commitment=commitment or None,
                 )
         finally:
             await engine.dispose()
@@ -713,6 +721,7 @@ def tokens_import_bootstrap(
             f"token_id={result.token_id} mint={result.mint} "
             f"status={result.validation.status} source={result.validation.validation_source} "
             f"decimals={result.validation.decimals} mint_validated={result.mint_validated} "
+            f"chain_time={result.validation.chain_time} commitment={result.validation.commitment} "
             f"reason={result.validation.reason}"
         )
         return 0
@@ -802,53 +811,60 @@ def discover_archaeology_run(
                     )
                 )
 
-            async with sessionmaker() as session, session.begin():
+            async with sessionmaker() as session:
                 token = (
                     await session.execute(select(Token).where(Token.mint == mint))
                 ).scalar_one_or_none()
-                if token is None:
-                    console.print(
-                        f"[red]no tokens row for mint {mint!r} -- run "
-                        f"'argus tokens import-bootstrap --mint {mint}' first[/red]"
-                    )
-                    return 1
+            if token is None:
+                console.print(
+                    f"[red]no tokens row for mint {mint!r} -- run "
+                    f"'argus tokens import-bootstrap --mint {mint}' first[/red]"
+                )
+                return 1
 
-                from argus.domain.wallet_discovery_events import (
-                    DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                    DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY,
-                )
+            from argus.domain.wallet_discovery_events import (
+                DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+                DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY,
+            )
 
-                discovery_channel = (
-                    DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY
-                    if run_type == "HISTORICAL_WINNER"
-                    else DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY
-                )
-                result = await run_archaeology(
-                    session,
-                    token_id=token.token_id,
-                    mint=mint,
-                    run_type=run_type,
-                    transactions=transactions,
-                    discovery_channel=discovery_channel,
-                    source_provider_set=source_provider_set,
-                    input_evidence_reference=", ".join(evidence_file),
-                    time_range_start=None,
-                    time_range_end=None,
-                    known_gaps=known_gaps or None,
-                    completeness_statement=completeness_statement,
-                    config=config,
-                    git_commit=git_commit,
-                    now=now,
-                    trigger_id=uuid_module.UUID(trigger_id) if trigger_id else None,
-                    deployer_wallet=deployer_wallet or None,
-                    is_partial=partial,
-                )
+            discovery_channel = (
+                DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY
+                if run_type == "HISTORICAL_WINNER"
+                else DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY
+            )
+            # P2-R6: run_archaeology manages its own durable, independently
+            # -committing transaction phases (claim / extract+persist
+            # outputs / terminalize) -- it takes the sessionmaker itself,
+            # never one already-open caller transaction, so a crash mid-run
+            # leaves genuine, queryable evidence rather than everything
+            # rolling back together.
+            result = await run_archaeology(
+                sessionmaker,
+                token_id=token.token_id,
+                mint=mint,
+                run_type=run_type,
+                transactions=transactions,
+                discovery_channel=discovery_channel,
+                source_provider_set=source_provider_set,
+                input_evidence_reference=", ".join(evidence_file),
+                time_range_start=None,
+                time_range_end=None,
+                known_gaps=known_gaps or None,
+                completeness_statement=completeness_statement,
+                config=config,
+                git_commit=git_commit,
+                now=now,
+                trigger_id=uuid_module.UUID(trigger_id) if trigger_id else None,
+                deployer_wallet=deployer_wallet or None,
+                is_partial=partial,
+            )
         finally:
             await engine.dispose()
         console.print(
             f"run_id={result.run_id} status={result.status} "
             f"early_buyers_recovered={result.early_buyers_recovered} "
-            f"wallets_discovered={result.wallets_discovered}"
+            f"wallets_discovered={result.wallets_discovered} "
+            f"unresolved_ownership_count={result.unresolved_ownership_count}"
         )
         return 0
 
@@ -937,6 +953,302 @@ def discover_watch_replay(
                 f"milestone_id={evaluation.milestone_id} trigger_id={evaluation.trigger_id} "
                 f"(newly_recorded={evaluation.milestone_newly_recorded})"
             )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@discover_app.command("run-pending-trigger")
+def discover_run_pending_trigger(
+    mint: str = typer.Option(
+        ..., "--mint", help="Must already be imported via 'tokens import-bootstrap'."
+    ),
+    evidence_file: list[str] = typer.Option(  # noqa: B008 - required Typer CLI-option idiom
+        ...,
+        "--evidence-file",
+        help="Path to a genuine getTransaction-shaped JSON file (repeatable) -- evidence "
+        "for whichever pending trigger(s) are consumed.",
+    ),
+    known_gaps: str = typer.Option(
+        "", "--known-gaps", help="Free-text disclosure of what this evidence set does NOT cover."
+    ),
+    completeness_statement: str = typer.Option(
+        ..., "--completeness-statement", help="Required honest statement of evidence completeness."
+    ),
+    source_provider_set: str = typer.Option(
+        "committed_evidence_replay",
+        "--source-provider-set",
+        help="Free-text description of where --evidence-file came from.",
+    ),
+    trigger_type: str = typer.Option(
+        "", "--trigger-type", help="Restrict to 'HISTORICAL_WINNER' or 'PROSPECTIVE_WINNER' only."
+    ),
+    max_triggers: int = typer.Option(
+        10, "--max-triggers", help="Bounded sweep ceiling -- never an unbounded loop (P2-R5)."
+    ),
+    partial: bool = typer.Option(
+        False,
+        "--partial",
+        help="Mark each consumed run PARTIAL (evidence set is known incomplete).",
+    ),
+) -> None:
+    """P2-R5 automatic trigger execution: finds and runs whichever
+    archaeology_triggers are pending for this token itself -- never a
+    human copying a trigger ID from one command's output into another's
+    input. Reports 'no pending triggers' honestly when there is nothing
+    to do, which is a normal outcome, not an error."""
+    import json
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.domain.tokens import Token
+    from argus.wallets.archaeology import run_all_pending_triggers_for_token
+    from argus.wallets.early_buyer_extraction import RawTransactionEvidence
+
+    if trigger_type and trigger_type not in ("HISTORICAL_WINNER", "PROSPECTIVE_WINNER"):
+        console.print("[red]--trigger-type must be HISTORICAL_WINNER or PROSPECTIVE_WINNER[/red]")
+        raise typer.Exit(code=1)
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            now = datetime.now(UTC)
+            transactions: list[RawTransactionEvidence] = []
+            for path in evidence_file:
+                raw = json.loads(Path(path).read_text())
+                if isinstance(raw, list):
+                    raw = raw[0]
+                sig = raw["transaction"]["signatures"][0]
+                block_time = raw.get("blockTime")
+                transactions.append(
+                    RawTransactionEvidence(
+                        raw=raw,
+                        signature=sig,
+                        slot=raw["slot"],
+                        block_time=(
+                            datetime.fromtimestamp(block_time, tz=UTC) if block_time else None
+                        ),
+                        evidence_reference=path,
+                    )
+                )
+
+            async with sessionmaker() as session:
+                token = (
+                    await session.execute(select(Token).where(Token.mint == mint))
+                ).scalar_one_or_none()
+            if token is None:
+                console.print(
+                    f"[red]no tokens row for mint {mint!r} -- run "
+                    f"'argus tokens import-bootstrap --mint {mint}' first[/red]"
+                )
+                return 1
+
+            results = await run_all_pending_triggers_for_token(
+                sessionmaker,
+                token_id=token.token_id,
+                mint=mint,
+                transactions=transactions,
+                source_provider_set=source_provider_set,
+                known_gaps=known_gaps or None,
+                completeness_statement=completeness_statement,
+                config=config,
+                git_commit=git_commit,
+                now=now,
+                max_triggers=max_triggers,
+                trigger_type=trigger_type or None,
+                is_partial=partial,
+            )
+        finally:
+            await engine.dispose()
+
+        if not results:
+            console.print("no pending triggers for this token")
+            return 0
+        for result in results:
+            console.print(
+                f"run_id={result.run_id} status={result.status} "
+                f"early_buyers_recovered={result.early_buyers_recovered} "
+                f"wallets_discovered={result.wallets_discovered} "
+                f"unresolved_ownership_count={result.unresolved_ownership_count}"
+            )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@discover_app.command("acquire-and-run-archaeology")
+def discover_acquire_and_run_archaeology(
+    mint: str = typer.Option(
+        ..., "--mint", help="Must already be imported via 'tokens import-bootstrap'."
+    ),
+    address: str = typer.Option(
+        ...,
+        "--address",
+        help="Address whose signature history to walk live via Helius "
+        "getSignaturesForAddress -- typically the mint account itself or its "
+        "bonding-curve/pool address. This is the P2-R2 live acquisition path; the "
+        "offline --evidence-file path ('argus discover archaeology-run') remains "
+        "available for deterministic replay demonstrations.",
+    ),
+    run_type: str = typer.Option(
+        "HISTORICAL_WINNER", "--run-type", help="'HISTORICAL_WINNER' or 'PROSPECTIVE_WINNER'."
+    ),
+    max_pages: int = typer.Option(
+        50,
+        "--max-pages",
+        help="Safety ceiling on paginated getSignaturesForAddress calls (P2-R2) -- never "
+        "an unbounded walk. Default matches historical_acquisition.DEFAULT_MAX_PAGES.",
+    ),
+    page_size: int = typer.Option(
+        1000,
+        "--page-size",
+        help="Signatures requested per page. Default matches "
+        "historical_acquisition.DEFAULT_PAGE_SIZE.",
+    ),
+    deployer_wallet: str = typer.Option(
+        "", "--deployer-wallet", help="Optional: tag this wallet possible_deployer if recovered."
+    ),
+    known_gaps: str = typer.Option(
+        "",
+        "--known-gaps",
+        help="Additional free-text disclosure, appended to whatever gaps the live "
+        "acquisition walk itself detected (pagination faults, fetch failures, ...).",
+    ),
+    completeness_statement: str = typer.Option(
+        "",
+        "--completeness-statement",
+        help="Optional override of the acquisition service's own honest completeness "
+        "statement; leave empty to use the one it derives from the actual walk outcome.",
+    ),
+    trigger_id: str = typer.Option(
+        "", "--trigger-id", help="Optional: consume a specific pending archaeology_triggers row."
+    ),
+) -> None:
+    """P2-R2: the real, live acquisition path -- opens a Helius RPC client
+    (same credential/usage-recorder wiring as 'argus ingest run'), walks
+    ADDRESS's signature history back to genesis (bounded, cursor-based,
+    fault-detecting -- MASTER_SPEC.md section 27-33), fetches every
+    transaction, and feeds the result directly into the same
+    run_archaeology() path 'argus discover archaeology-run' uses. Never
+    reports the archaeology run COMPLETE when the acquisition walk itself
+    was PARTIAL/FAILED -- that status flows straight into is_partial."""
+    import uuid
+    from datetime import UTC, datetime
+
+    import httpx
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from argus.config import resolve_production_git_commit
+    from argus.db.connection import connection_for_role
+    from argus.db.roles import DbRole
+    from argus.domain.tokens import Token
+    from argus.domain.wallet_discovery_events import (
+        DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+        DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY,
+    )
+    from argus.providers.credentials import MissingProviderCredentialError
+    from argus.providers.helius.client import HeliusRpcClient, resolve_helius_api_key
+    from argus.providers.retry import retry_policy_from_config
+    from argus.providers.usage import SqlUsageRecorder
+    from argus.tokens.historical_acquisition import (
+        STATUS_COMPLETE,
+        acquire_historical_transactions,
+    )
+    from argus.wallets.archaeology import run_archaeology
+
+    if run_type not in ("HISTORICAL_WINNER", "PROSPECTIVE_WINNER"):
+        console.print("[red]--run-type must be HISTORICAL_WINNER or PROSPECTIVE_WINNER[/red]")
+        raise typer.Exit(code=1)
+
+    async def _run() -> int:
+        config = load_config()
+        try:
+            api_key = resolve_helius_api_key(config.env)
+        except MissingProviderCredentialError as exc:
+            console.print(str(exc))
+            return 1
+
+        db_info = connection_for_role(config, DbRole.INGEST)
+        db_engine = create_async_engine(db_info.as_asyncpg_url())
+        sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            now = datetime.now(UTC)
+
+            async with sessionmaker() as session:
+                token = (
+                    await session.execute(select(Token).where(Token.mint == mint))
+                ).scalar_one_or_none()
+            if token is None:
+                console.print(
+                    f"[red]no tokens row for mint {mint!r} -- run "
+                    f"'argus tokens import-bootstrap --mint {mint}' first[/red]"
+                )
+                return 1
+
+            retry_policy = retry_policy_from_config(config)
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                usage_recorder = SqlUsageRecorder(sessionmaker)
+                rpc_client = HeliusRpcClient(
+                    api_key,
+                    http_client=http_client,
+                    retry_policy=retry_policy,
+                    usage_recorder=usage_recorder,
+                )
+                acquisition = await acquire_historical_transactions(
+                    rpc_client, address=address, max_pages=max_pages, page_size=page_size
+                )
+
+            console.print(
+                f"acquisition: status={acquisition.status} "
+                f"pages_fetched={acquisition.pages_fetched} "
+                f"signatures_seen={acquisition.signatures_seen} "
+                f"transactions_recovered={len(acquisition.transactions)} "
+                f"transaction_fetch_failures={acquisition.transaction_fetch_failures}"
+            )
+            if acquisition.known_gaps:
+                console.print(f"acquisition known_gaps: {acquisition.known_gaps}")
+
+            combined_known_gaps = "; ".join(
+                part for part in (known_gaps or None, acquisition.known_gaps) if part
+            )
+            discovery_channel = (
+                DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY
+                if run_type == "HISTORICAL_WINNER"
+                else DISCOVERY_CHANNEL_PROSPECTIVE_WINNER_ARCHAEOLOGY
+            )
+            result = await run_archaeology(
+                sessionmaker,
+                token_id=token.token_id,
+                mint=mint,
+                run_type=run_type,
+                transactions=acquisition.transactions,
+                discovery_channel=discovery_channel,
+                source_provider_set="helius_live_acquisition",
+                input_evidence_reference=f"live_acquisition:{address}",
+                time_range_start=None,
+                time_range_end=None,
+                known_gaps=combined_known_gaps or None,
+                completeness_statement=completeness_statement or acquisition.completeness_statement,
+                config=config,
+                git_commit=git_commit,
+                now=now,
+                trigger_id=uuid.UUID(trigger_id) if trigger_id else None,
+                deployer_wallet=deployer_wallet or None,
+                is_partial=acquisition.status != STATUS_COMPLETE,
+            )
+        finally:
+            await db_engine.dispose()
+        console.print(
+            f"run_id={result.run_id} status={result.status} "
+            f"early_buyers_recovered={result.early_buyers_recovered} "
+            f"wallets_discovered={result.wallets_discovered} "
+            f"unresolved_ownership_count={result.unresolved_ownership_count}"
+        )
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))

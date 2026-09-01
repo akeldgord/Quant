@@ -1,0 +1,660 @@
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: Phase 2 remediation round 1 -- remediate the 8 frozen findings
+  (P2-R1 through P2-R8) in orchestrator instruction
+  `argus-phase-2-remediation-001`, which independently audited the Phase 2
+  (TOKEN + WALLET DISCOVERY) build and found it not approved: a mint-
+  discrimination false positive, a missing historical acquisition/provider
+  boundary, non-deterministic and semantically wrong early-buyer output, a
+  confidence-blind winner evaluator, a manually-wired archaeology trigger,
+  a non-crash-safe archaeology state machine, signed-`BIGINT` raw-quantity
+  columns, and mint-validation evidence handling that did not fail closed
+  on conflicting evidence or persist available chain-time provenance.
+STATUS: All 8 findings (P2-R1 through P2-R8) remediated with real,
+  independently-tested code. All 8 frozen remediation acceptance tests
+  (R1-R7 plus the regression item) pass. Phase 2 remains NOT
+  orchestrator-approved.
+UTC_TIMESTAMP: 2026-09-01T02:17:23Z
+GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+TARGET_COMMIT: 6bde9fdf6d56c38517854700e8863d9103e831aa
+AUTHORIZED_PHASE: 2
+APPROVES_PHASE: NONE
+
+B. What was built (per finding)
+
+1. **P2-R1 + P2-R8** (mint discrimination + evidence provenance,
+   `src/argus/tokens/mint_validation.py`, `ALGORITHM_VERSION` bumped
+   `token_mint_validation_v1` -> `v2`) --
+
+   - `_classify_mint_account_layout(decoded, *, owner)` replaces the old
+     bare `len(decoded) < 82` check. A legacy SPL Token account (program
+     `SPL_TOKEN_PROGRAM_ID`) must decode to exactly 82 bytes -- any other
+     length (165-byte token account, 355-byte multisig, a >165-byte
+     payload under a program with no extension mechanism at all) fails
+     closed. A Token-2022 account (`SPL_TOKEN_2022_PROGRAM_ID`) may be the
+     bare 82-byte struct OR >=166 bytes, in which case the byte
+     immediately following the 165-byte padded base struct is read as the
+     real SPL Token-2022 `AccountType` discriminator (`1`=Mint, `2`=Account)
+     -- never inferred from length alone. `validate_from_account_info` now
+     calls this classifier instead of the old length-only check.
+   - `validate_from_token_balance_evidence` rewritten: rejects evidence
+     whose transaction has `meta.err` set (a failed transaction proves
+     nothing about a mint's real state); evaluates **every** matching
+     pre/post token-balance entry (not `entries[0]` alone) and returns
+     `UNAVAILABLE` with an explicit reason on conflicting decimals or
+     conflicting owning program across entries; derives `chain_time` from
+     the evidence's own `blockTime` whenever present.
+   - `MintValidationResult` gained `chain_time: datetime | None` and
+     `commitment: str | None` fields, threaded through
+     `import_bootstrap_token` (`src/argus/tokens/importer.py`) and the CLI
+     (`argus tokens import-bootstrap --commitment`, `src/argus/cli.py`)
+     instead of being hardcoded `None`.
+   - **Adversarial tests** (`tests/unit/test_phase2_discovery.py`):
+     `test_p2t1_valid_shaped_non_mint_account_is_invalid` -- the exact
+     165-byte legacy-Token-*Account* shape with byte 45 set to 1 (the
+     literal false-positive the frozen finding names) now fails closed;
+     `test_p2t1_valid_token2022_mint_no_extensions_is_valid`,
+     `test_p2t1_valid_token2022_extended_mint_is_valid` (positive Token-2022
+     cases); `test_p2t1_malformed_token2022_extension_account_type_is_invalid`
+     (AccountType::Account under Token-2022, must fail);
+     `test_p2t1_extended_length_under_legacy_program_is_invalid`,
+     `test_p2t1_multisig_account_length_is_invalid`; P2-R8:
+     `test_p2t8_conflicting_decimals_across_entries_is_unavailable`,
+     `test_p2t8_conflicting_owner_program_across_entries_is_unavailable`,
+     `test_p2t8_failed_transaction_evidence_is_unavailable`,
+     `test_p2t8_chain_time_is_derived_from_block_time`,
+     `test_p2t1_real_evidence_persists_chain_time` (chain_time populated
+     from the real pump.fun creation-transaction evidence, no longer
+     `None`), plus `test_p2t8_caller_asserted_partial_evidence_is_marked_
+     partial`, `test_p2t8_empty_evidence_set_completes_honestly_with_zero_
+     candidates`, `test_p2t8_malformed_evidence_fails_the_run_closed_not_
+     silently`.
+
+2. **P2-R2** (historical acquisition/provider boundary,
+   `src/argus/tokens/historical_acquisition.py`, new file,
+   `ALGORITHM_VERSION = "historical_acquisition_v1"`) --
+
+   - `acquire_historical_transactions(provider: ChainProvider, *, address,
+     max_pages=50, page_size=1000) -> AcquisitionResult` built directly on
+     Phase 1's existing `ChainProvider` protocol (no new provider
+     abstraction). Paginates `get_signatures_for_address` (bounded by
+     `max_pages`, never unbounded), detecting: a provider exception calling
+     the listing endpoint (timeout/rate-limit/malformed response --
+     downgrades to `PARTIAL`, exact exception type+message recorded in
+     `known_gaps`); a pagination ordering fault (a later page returning a
+     newer slot than already observed); a duplicate signature across pages
+     (an immediately-repeated cursor and a multi-step cursor cycle are the
+     same observable symptom -- both caught by one `seen_signatures` set
+     check, mirroring `argus.ingestion.reconciliation.ReconciliationEngine.
+     _fetch_all_pages`'s own precedent); safety-ceiling (`max_pages`)
+     exhaustion; and a short/empty final page as the ordinary successful
+     "reached genesis" outcome. Then fetches each collected signature's
+     transaction individually, catching per-item fetch failures without
+     discarding the rest of the batch (`transaction_fetch_failures`
+     counter). Never reports `STATUS_COMPLETE` when any fault occurred.
+     Provider usage accounting flows through the `ChainProvider`
+     implementation itself (e.g. `HeliusRpcClient`'s own `usage_recorder`,
+     already exhaustively tested in `test_provider_adapters.py`) -- this
+     module makes no separate accounting call, by design (see the module's
+     own docstring).
+   - **Wired through a real CLI command, not a test-only helper**: `argus
+     discover acquire-and-run-archaeology --mint --address [--run-type]
+     [--max-pages] [--page-size] [--deployer-wallet] [--known-gaps]
+     [--completeness-statement] [--trigger-id]` (`src/argus/cli.py`) --
+     opens a real `HeliusRpcClient` using the exact same construction
+     `argus ingest run`'s live path already uses (API key resolution,
+     `httpx.AsyncClient`, `retry_policy_from_config`, `SqlUsageRecorder`),
+     calls `acquire_historical_transactions`, then feeds its output
+     directly into the unmodified `run_archaeology` path -- the
+     acquisition's own `status`/`known_gaps`/`completeness_statement` flow
+     straight into the archaeology run's `is_partial`/`known_gaps`, never
+     silently promoted to a caller-asserted claim.
+   - **Provider failure-matrix contract suite**
+     (`tests/unit/test_historical_acquisition.py`, new file, 14 tests, 100%
+     line coverage on the module -- see section C): a deterministic
+     scripted fake `ChainProvider`
+     (`ScriptedChainProvider`, call-index-ordered pages/exceptions, never
+     honoring the cursor value, so each fault is provoked directly rather
+     than emergently) proves, with exact `status`/`known_gaps`/
+     `pages_fetched`/`signatures_seen`/`transaction_fetch_failures`/
+     `evidence_reference` assertions (never a source-text assertion or a
+     bare `--partial` flag alone):
+     `test_multiple_full_pages_then_short_page_completes`,
+     `test_empty_history_is_complete_with_zero_transactions`,
+     `test_immediately_repeated_cursor_duplicate_is_detected`,
+     `test_multi_step_cursor_cycle_is_detected_by_the_same_check`,
+     `test_pagination_ordering_fault_is_detected`,
+     `test_safety_ceiling_exhaustion_reports_partial`,
+     `test_provider_timeout_downgrades_to_partial_and_preserves_prior_pages`,
+     `test_provider_rate_limit_downgrades_to_partial`,
+     `test_malformed_provider_response_downgrades_to_partial`,
+     `test_transaction_fetch_failure_is_partial_but_preserves_the_rest`,
+     `test_partial_success_combines_multiple_faults_honestly`,
+     `test_every_provider_call_is_individually_accounted_for_exactly_once`
+     (a per-call `usage_log` on the fake proves every listing page fetch
+     and every transaction fetch reaches the provider exactly once, no
+     call silently skipped, retried, or duplicated by the service),
+     `test_default_page_bounds_are_the_documented_constants`,
+     `test_evidence_reference_and_identity_fields_are_carried_through`.
+   - **Live-credential path proven fail-closed, not mocked**: `argus
+     discover acquire-and-run-archaeology --mint FAKEMINT --address
+     FAKEADDR --completeness-statement test` (no `HELIUS_API_KEY`
+     configured in this sandbox) produces the exact section-108 `LOCAL
+     CREDENTIAL REQUIRED` notice and exits without attempting a network
+     call -- the same fail-closed behavior `argus ingest run`'s live path
+     already has, never a fabricated live-acceptance claim (section C).
+
+3. **P2-R3** (deterministic + semantically meaningful early buyers,
+   `src/argus/wallets/early_buyer_extraction.py`, `ALGORITHM_VERSION`
+   bumped `early_buyer_extraction_v1` -> `v2`) --
+
+   - `_transaction_signers(raw) -> frozenset[str] | None` reads
+     `transaction.message.header.numRequiredSignatures` +
+     `transaction.message.accountKeys` -- the first N account keys are
+     genuine transaction signers; a PDA/program-derived account can never
+     be a signer, making signer-set membership a real, evidence-grounded
+     classifier (chosen over a name-based/heuristic denylist -- see the
+     module's own docstring for the reasoning) rather than a guess.
+   - Every `BuyerCandidate` now carries an explicit
+     `ownership_classification`: `OWNERSHIP_SIGNER_WALLET` or
+     `OWNERSHIP_UNRESOLVED_NON_SIGNER`. The pure extraction function still
+     returns **every** candidate, unresolved ones included -- "tag, don't
+     delete" is preserved at this layer; promotion-filtering happens only
+     at the DB-persistence layer (`archaeology.py`, below).
+   - **Determinism**: first-seen tracking now uses a frozen `_FirstSeen`
+     dataclass and a full `(slot, signature, wallet_address)` sort key
+     (previously ties on `(slot, signature)` fell back to Python `set`/
+     `dict` iteration order, which is `PYTHONHASHSEED`-dependent for `str`
+     keys) -- results are now byte-identical across processes regardless
+     of hash seed.
+   - **Tests** (`tests/unit/test_phase2_discovery.py`):
+     `test_p2r3_ordering_is_independent_of_pythonhashseed` -- a real
+     subprocess proof (`subprocess.run([sys.executable, "-c", <script>],
+     env={"PYTHONHASHSEED": ...})`) spawning the actual extractor under two
+     different hash seeds and asserting byte-identical output, not merely
+     asserting sortedness; `test_p2r3_ties_on_slot_and_signature_break_
+     deterministically_on_wallet_address`;
+     `test_p2r3_signer_owner_is_classified_as_signer_wallet`,
+     `test_p2r3_non_signer_owner_is_classified_as_unresolved_non_signer`,
+     `test_p2r3_missing_message_shape_fails_closed_to_unresolved`;
+     `test_p2r3_real_pumpfun_evidence_classifies_creator_as_signer_and_
+     curve_as_unresolved` -- the real, previously-imported pump.fun
+     creation-transaction evidence, proving the genuine dev-buy signer
+     classifies `OWNERSHIP_SIGNER_WALLET` and the bonding-curve reserve PDA
+     classifies `OWNERSHIP_UNRESOLVED_NON_SIGNER`, matching the frozen
+     finding's exact named scenario.
+   - **Real fixture re-run** (updated, not merely re-asserted -- see item 3
+     of section E and `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md`,
+     a fresh file, section D): the reserve PDA is no longer promoted into
+     `wallets`/`early_buyers`/discovery events; the genuine signer/dev-buy
+     remains a tagged buyer.
+
+4. **P2-R4** (confidence-aware winner evaluation,
+   `src/argus/wallets/winner_watcher.py`, `ALGORITHM_VERSION` bumped
+   `winner_watcher_v1` -> `v2`, `WINNER_DEFINITION_VERSION` bumped
+   `winner_definition_v1` -> `v2`) --
+
+   - `_RELIABLY_TRADABLE_CONFIDENCE_LEVELS = frozenset({HIGH, MEDIUM})` --
+     chosen by elimination: the frozen finding explicitly names LOW/
+     UNKNOWN/`NULL`-confidence as insufficient, implying HIGH and MEDIUM
+     are the two acceptable tiers. `_is_reliably_tradable(snapshot)` gates
+     both `select_baseline` and `select_peak`; a LOW/UNKNOWN/`None`-
+     confidence observation (however extreme its price) can no longer
+     create a baseline, a peak, a milestone, or a trigger.
+   - `reason_codes` on a milestone crossing now records
+     `LOW_CONFIDENCE_SNAPSHOTS_EXCLUDED` alongside the pre-existing
+     `ZERO_LIQUIDITY_SNAPSHOTS_EXCLUDED_FROM_BASELINE` whenever applicable
+     -- an explicit persisted reason, not a silent reinterpretation.
+   - Versioned-baseline and no-rewrite-of-already-recorded-milestones
+     behavior is unchanged (regression-verified, section D).
+   - **Tests**: `test_p2r4_low_confidence_peak_never_creates_a_milestone`,
+     `test_p2r4_null_confidence_is_excluded_from_baseline_and_peak`,
+     `test_p2r4_unknown_confidence_baseline_is_skipped`,
+     `test_p2r4_medium_confidence_is_reliably_tradable`,
+     `test_p2r4_high_confidence_peak_at_lower_price_beats_low_confidence_
+     spike` -- a 100x LOW-confidence spike loses to a much smaller
+     HIGH-confidence peak, directly proving the frozen finding's exact
+     "an independent 12x probe produced MAJOR_WINNER even though the
+     evaluation surface had no confidence field" scenario is now closed;
+     `test_p2r4_low_confidence_snapshots_never_create_a_milestone_via_
+     full_db_path` (real-DB integration path, not unit-only).
+
+5. **P2-R5** (automatic trigger consumer/executor,
+   `src/argus/wallets/archaeology.py`) --
+
+   - `find_pending_archaeology_trigger(session_factory, *, token_id,
+     trigger_type=None)`, `run_next_pending_trigger(...)`, and
+     `run_all_pending_triggers_for_token(session_factory, *, ...,
+     max_triggers=10, trigger_type=None, ...)` -- a bounded (never
+     unbounded), restart-safe sweep that finds and executes a token's own
+     pending trigger(s) without a human ever copying a trigger ID between
+     two commands. Exactly-once canonical output is enforced by the
+     pre-existing `archaeology_runs.trigger_id` partial unique index (a DB
+     constraint, not application-level locking) -- a losing concurrent
+     claim's `IntegrityError` is benign, matching the frozen finding's own
+     "duplicate delivery is expected and safe" requirement.
+   - **Wired through a real CLI command**: `argus discover run-pending-
+     trigger --mint --evidence-file ... [--max-triggers] [--trigger-type]`
+     (`src/argus/cli.py`) -- no `--trigger-id` option exists on this
+     command at all; the token's own pending trigger(s) are found and
+     consumed automatically.
+   - **Deterministic replay test, end-to-end**:
+     `test_p2r5_automatic_trigger_consumption_without_manual_trigger_id`
+     crosses a milestone via `evaluate_token`, invokes the normal trigger
+     processor (`run_next_pending_trigger`), and asserts the linked
+     archaeology run reaches a terminal state automatically, with the
+     trigger's `consumed_at` set and zero trade/signal/order/signer/
+     broadcast/paid-provider/phase-advance side effects (`test_p2t11_*`,
+     section D, regression-confirms this holds project-wide);
+     `test_p2r5_no_pending_trigger_returns_none`;
+     `test_p2r5_bounded_sweep_consumes_multiple_triggers_up_to_max` --
+     proves the `max_triggers` bound is real (checked before the two
+     genuinely-distinct HISTORICAL_WINNER/PROSPECTIVE_WINNER triggers for
+     one token are ever consumed, not merely asserted after the fact).
+   - **Real end-to-end CLI re-run** (not merely unit/integration-tested):
+     `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md` section
+     "Automatic trigger consumption" -- `argus discover watch-replay` then
+     `argus discover run-pending-trigger` (no `--trigger-id` anywhere),
+     confirmed via direct Postgres query that the trigger's `consumed_at`
+     is genuinely set.
+
+6. **P2-R6** (crash-safe archaeology state machine,
+   `src/argus/wallets/archaeology.py`, `ALGORITHM_VERSION` bumped
+   `archaeology_run_v1` -> `v2`) --
+
+   - `run_archaeology` signature changed from `session: AsyncSession` to
+     `session_factory: async_sessionmaker[AsyncSession]` and its body
+     restructured into three **independently committing** transaction
+     phases: **claim** (creates the `RUNNING` run row, commits alone --
+     durable run/claim provenance visible before any output work begins);
+     **extract + persist outputs** (early buyers, wallets, discovery
+     events; commits alone); **terminalize** (commits alone). A process
+     crash between any two phases leaves genuine, queryable evidence --
+     never an all-or-nothing rollback of the whole attempt.
+   - `reap_stale_archaeology_runs(session, *, older_than, now)` -- a
+     restart-recovery reaper that scans for RUNNING rows older than a
+     threshold and marks them `FAILED` with an honest, explicit
+     `error_reason` (`"reaped as stale"`, never a guessed partial
+     completion). A fresh retry after reaping is safe: it neither loses
+     nor duplicates already-durable outputs (the pre-existing
+     `token_id`+`wallet_id` unique constraint on `early_buyers` is the
+     mechanism).
+   - A test-only `_SimulatedWorkerCrash` fault-injection exception, raised
+     at `_simulate_crash_after in {"claim", "outputs", "terminalize"}` --
+     for `"terminalize"`, the raise happens **after** the terminalize
+     `async with` block exits, so the commit has already durably landed
+     before the caller ever observes the crash (a real commit is atomic;
+     no genuine partial-commit state is externally observable, so this
+     models "crash in the narrow window after a successful commit but
+     before the caller learns of it" -- the only meaningfully distinct
+     "during terminal commit" scenario, per the module's own docstring).
+   - **Crash-injection matrix, all 4 required points, real Postgres**
+     (`tests/integration/test_phase2_discovery.py`):
+     `test_p2r6_crash_after_claim_leaves_running_row_with_no_outputs`
+     (covers both "after durable run creation/claim" and "during
+     extraction" -- operationally indistinguishable from the outside, both
+     leave a genuine RUNNING row with zero outputs) --
+     asserts `run.status == RUNNING`, zero output rows, reaper recovers it
+     to `FAILED` with `"reaped as stale"` in `error_reason`, and a fresh
+     retry then completes normally with the correct output count;
+     `test_p2r6_crash_after_outputs_leaves_running_row_with_durable_
+     outputs` -- asserts the output row already exists and is queryable
+     while the run is still `RUNNING`, the reaper terminalizes it to
+     `FAILED` **without touching the already-durable output**, and a fresh
+     retry recovers 0 *new* buyers (proving no duplication, the unique
+     constraint holding);
+     `test_p2r6_crash_during_terminal_commit_state_is_already_durable` --
+     asserts the terminal state does not depend on the caller ever
+     learning the run finished;
+     `test_p2r6_reaper_ignores_runs_within_the_grace_window` -- a run still
+     inside its grace window is never falsely reaped.
+
+7. **P2-R7** (u64-capable raw integer columns,
+   `migrations/versions/0009_phase2_u64_raw_quantities.py`, new forward
+   migration from head, `src/argus/domain/u64.py`, new file) --
+
+   - `U64Numeric` (`sa.types.TypeDecorator`, `impl = sa.Numeric(39, 10)`) --
+     a nonzero-scale storage type chosen after direct empirical psql
+     verification that `NUMERIC(p, 0)` **silently rounds** a fractional
+     input at storage/coercion time rather than rejecting it (`INSERT INTO
+     t(n NUMERIC(20,0)) VALUES (1.5)` -> stores `2`, no error) -- a
+     nonzero scale (`NUMERIC(39, 10)`) is required so a fractional value
+     genuinely survives coercion long enough for a `CHECK (value =
+     trunc(value))` constraint to actually see and reject it. Enforces
+     plain-`int` and `[0, 2**64 - 1]` range at the Python/ORM boundary too
+     (`process_bind_param`/`process_result_value`), so application code
+     still only ever sees a plain Python `int`.
+   - `u64_check_constraints(table_name, column_name)` -- range
+     (`>=0 AND <= 18446744073709551615`) and integrality
+     (`value = trunc(value)`) `CheckConstraint`s, applied to
+     `token_market_snapshots.supply_raw` and `early_buyers.amount_raw`
+     (the two new Phase 2 raw-quantity columns the frozen finding names --
+     Phase 1's own pre-existing `swaps.input_amount_raw`/
+     `output_amount_raw` `BigInteger` columns are explicitly out of this
+     remediation's scope, per the instruction's own "New Phase 2
+     `supply_raw` and `amount_raw` columns" wording).
+   - `0009_phase2_u64_raw_quantities.py`: `upgrade()` alters both columns
+     to `Numeric(39, 10)` via `postgresql_using` casts, adds the 4 CHECK
+     constraints. `downgrade()` fails closed
+     (`Downgrade0009IncompatibleDataError`) if any stored value exceeds
+     `2**63 - 1` (the `BigInteger` range) before attempting the ALTER back
+     -- mirroring migration 0007's precedent for the exact same reasoning.
+   - **Tests** (`tests/integration/test_migrations.py`, real, disposable
+     scratch-database fixture, never the shared dev database):
+     `test_p2r7_upgrade_to_0009_round_trips_u64_boundary_values` (0, 1,
+     `2**63`, `2**64 - 1` all round-trip correctly -- values `BigInteger`
+     could never have represented);
+     `test_p2r7_0009_rejects_negative_and_out_of_range_supply_raw`;
+     `test_p2r7_downgrade_from_0009_fails_closed_when_value_exceeds_
+     bigint_range`;
+     `test_p2r7_downgrade_from_0009_succeeds_when_values_fit_bigint_range`;
+     `test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening`.
+
+C. Commands actually run
+
+All commands below were run against this exact commit (this checkpoint's
+own `GIT_COMMIT`, filled in by the second commit per this project's
+established two-commit convention -- see section K) after all 8 findings
+were complete:
+
+- `uv run ruff check .` -- All checks passed.
+- `uv run ruff format --check .` -- 190 files already formatted (6 files
+  needed reformatting mid-session after this round's own edits; fixed via
+  `uv run ruff format .`, then re-verified clean).
+- `uv run mypy` (bare -- `[tool.mypy]` `packages = ["argus"]` scopes this
+  to `src/argus` only, matching every prior round's invocation) --
+  Success: no issues found in 98 source files.
+- `uv run pytest tests/unit -q` -- 519 passed, 0 failed, 0 skipped
+  (includes `test_historical_acquisition.py`'s 14 new P2-R2 tests).
+- `uv run pytest tests/integration -q` -- 71 passed, 0 failed, 0 skipped
+  (real local PostgreSQL 16).
+- `uv run pytest tests/golden -q` -- 95 passed, 0 failed, 0 skipped
+  (unchanged from Phase 2's own build -- regression-confirmed).
+- `uv run pytest tests/replay -q` -- 10 passed, 0 failed, 0 skipped
+  (unchanged).
+- `uv run pytest tests/phase_1_5 -q` -- 7 passed, 0 failed, 0 skipped
+  (unchanged).
+- `uv run pytest tests/ -q` -- 702 passed, 0 failed, 0 skipped (full
+  repository suite, sum of the above).
+- `uv run pytest --cov --cov-report=term-missing -q` -- 702 passed, 85%
+  overall coverage (4915 statements, 689 missed, 1016 branches, 125
+  partial); `src/argus/tokens/historical_acquisition.py` at 100% line
+  coverage (new P2-R2 module); lowest-covered modules unchanged for the
+  same structural reasons as every prior round
+  (`src/argus/ingestion/test_mode.py` 0%,
+  `src/argus/providers/helius/websocket_connector.py` 0%,
+  `src/argus/tokens/reference_prices.py` 0% -- exercised only via real
+  CLI/process paths, none newly introduced by this round).
+- `uv run argus fixtures validate-real-chain` -- all 12 real-chain
+  fixtures independently rebuild from preserved raw bytes and validate
+  `ok` (unaffected by this round's changes -- regression-confirmed).
+- `uv run argus discover acquire-and-run-archaeology --mint FAKEMINT
+  --address FAKEADDR --completeness-statement test` (no `HELIUS_API_KEY`
+  configured) -- produces the exact section-108 `LOCAL CREDENTIAL
+  REQUIRED` notice, exit code 1, no network call attempted -- proves the
+  new P2-R2 CLI command's fail-closed live-credential path is real, not
+  merely claimed.
+- `uv run python -m argus.cli discover acquire-and-run-archaeology
+  --help` -- confirms the command's full option surface loads cleanly
+  (no import/wiring error).
+- Real end-to-end CLI re-run against the real dev PostgreSQL 16 database
+  and the real pump.fun creation-transaction evidence (mint rows fully
+  cleaned before this re-run, confirmed via a direct `SELECT` returning 0
+  rows): `argus tokens import-bootstrap` -> `argus discover
+  archaeology-run --run-type HISTORICAL_WINNER` -> `argus discover
+  watch-replay` -> `argus discover run-pending-trigger` (no `--trigger-id`
+  anywhere) -- full commands, outputs, and direct-Postgres-query
+  confirmations in `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md`
+  (new file; the original `orchestration/phase_2/DEMONSTRATION.md` is left
+  unmodified as immutable historical record, per this instruction's own
+  "do not overwrite Phase 2 evidence").
+- `git ls-files -z | xargs -0 grep` secret scan (AWS-style keys, PEM
+  private-key headers, inline password/api-key/secret literal patterns)
+  across all tracked files -- one match,
+  `tests/unit/test_orchestrator_watch.py:730`
+  (`secret = "FAKE_API_KEY=sk-should-never-appear-in-logs"`), a
+  pre-existing (not introduced by this round), obviously-fake test string
+  used to prove the watcher never leaks secrets into logs -- not a real
+  credential. `.env` confirmed untracked and gitignored
+  (`git check-ignore -v .env`).
+- `git grep -n "sign_transaction\|send_transaction\|sendRawTransaction\|
+  private_key\|Keypair(\|broadcast" -- src/argus/` -- every match is a
+  docstring/comment stating the prohibition; no executable signing/
+  broadcast code exists anywhere, including in the new
+  `historical_acquisition.py`/`u64.py` modules and the new CLI command.
+- `git diff --stat 6bde9fdf6d56c38517854700e8863d9103e831aa HEAD --
+  . ':!orchestration'` -- 16 files changed, 3557 insertions(+), 379
+  deletions(-); every changed file is inside the existing Phase 2 module
+  set (`src/argus/{cli.py,domain/{early_buyers,token_market_snapshots,u64}
+  .py,tokens/{historical_acquisition,importer,mint_validation}.py,wallets/
+  {archaeology,early_buyer_extraction,watcher_service,winner_watcher}.py}`,
+  `migrations/versions/0009_*.py`, `tests/`); zero `config/` changes; no
+  new top-level trade/execution module.
+- `uv run alembic current` (against the shared dev database) -- `0009
+  (head)`.
+
+D. Test results
+
+- unit: 519 passed (includes `test_historical_acquisition.py`'s 14 new)
+- integration: 71 passed (real PostgreSQL 16)
+- golden: 95 passed (unchanged -- regression)
+- replay: 10 passed (unchanged -- regression)
+- phase_1_5: 7 passed (unchanged -- regression)
+- full suite: 702 passed, 0 failed, 0 unexplained skipped
+- full suite with coverage: 702 passed, 85% overall coverage
+- ruff check: clean
+- ruff format --check: clean
+- mypy: clean, 98 source files (`src/argus` scope, per `[tool.mypy]`)
+- real-chain fixtures: 12/12 ok
+- secret scan: clean (one pre-existing, obviously-fake test string,
+  unrelated to this round -- see section C)
+
+E. Frozen remediation acceptance-test disposition (per
+   `argus-phase-2-remediation-001`'s "Frozen remediation acceptance
+   tests" section, items 1-8)
+
+1. **R1 mint discriminator** -- PASS. The independent 165-byte
+   token-account false positive now fails closed
+   (`test_p2t1_valid_shaped_non_mint_account_is_invalid`); valid legacy
+   and Token-2022 mints pass
+   (`test_p2t1_valid_committed_mint_evidence_is_valid`,
+   `test_p2t1_valid_token2022_mint_no_extensions_is_valid`,
+   `test_p2t1_valid_token2022_extended_mint_is_valid`); malformed,
+   wrong-owner, non-mint, conflicting-entry, unavailable, and missing
+   evidence never persist `mint_validated=True`
+   (`test_p2t1_wrong_owner_is_invalid`,
+   `test_p2t1_missing_account_is_invalid`,
+   `test_p2t1_malformed_provider_response_is_unavailable`,
+   `test_p2t8_conflicting_decimals_across_entries_is_unavailable`,
+   `test_p2t8_conflicting_owner_program_across_entries_is_unavailable`);
+   available chain/commitment provenance is stored
+   (`test_p2t1_real_evidence_persists_chain_time`,
+   `test_p2t8_chain_time_is_derived_from_block_time`; the real
+   demonstration re-run in section B item 1 confirms `chain_time` is
+   genuinely populated, `commitment=None` only because this evidence kind
+   has none to persist).
+2. **R2 provider matrix** -- PASS. `tests/unit/test_historical_
+   acquisition.py`'s 14-test suite covers every named case (multiple
+   pages, duplicate item/page including both the immediately-repeated
+   and multi-step-cycle forms, premature empty/short page, max-page/cap
+   exhaustion, timeout, rate limit, malformed response,
+   transaction-fetch failure, partial success), asserting exact terminal
+   `status`/`known_gaps`/evidence-reference/usage-call-count -- never a
+   source-text assertion or a bare `--partial` flag alone (section B
+   item 2 lists every test by name).
+3. **R3 deterministic meaningful buyers** -- PASS.
+   `test_p2r3_ordering_is_independent_of_pythonhashseed` is a genuine
+   subprocess/hash-seed proof (not an assertion about sortedness); the
+   real pump.fun fixture re-run
+   (`test_p2r3_real_pumpfun_evidence_classifies_creator_as_signer_and_
+   curve_as_unresolved`, plus the live CLI re-run in section C) produces
+   no reserve-PDA wallet candidate while preserving the raw observation
+   (`unresolved_ownership_count=1`) and the genuine signer/dev-buy.
+4. **R4 confidence** -- PASS. A 100x LOW-confidence peak creates no
+   milestone or trigger and loses to a HIGH-confidence peak at a much
+   lower multiple
+   (`test_p2r4_high_confidence_peak_at_lower_price_beats_low_confidence_
+   spike`); an otherwise-identical accepted-confidence observation
+   produces the expected one-time milestone and trigger (the real
+   replay demonstration re-run, section B item 4/section C); replay/
+   restart idempotency is unchanged and regression-verified
+   (`test_p2t7_replayed_evaluation_never_creates_duplicate_milestone_or_
+   trigger`, still passing).
+5. **R5 automatic execution** -- PASS. Normal production wiring (`argus
+   discover run-pending-trigger`, no `--trigger-id` option at all)
+   consumes a newly generated trigger into one linked terminal
+   archaeology run without manual trigger-ID transport, proven both by
+   `test_p2r5_automatic_trigger_consumption_without_manual_trigger_id`
+   and by the real end-to-end CLI re-run (section C).
+6. **R6 crash matrix** -- PASS. Injected crashes at all 4 required
+   boundaries (after claim/during extraction, after outputs before
+   terminalization, during terminal commit, plus the reaper's grace-
+   window negative case) recover deterministically with preserved
+   attempt provenance and no duplicate output (section B item 6 lists
+   every test by name).
+7. **R7 u64 persistence** -- PASS. Migration from current head (0008 ->
+   0009), zero-to-head, downgrade/fail-closed-on-incompatible-data/
+   re-upgrade, and exact u64 boundary round trips (0, 1, `2**63`,
+   `2**64 - 1`) all pass on the real local PostgreSQL 16 substitute
+   (section B item 7 lists every test by name).
+8. **Regression** -- PASS. All original P2-T1 through P2-T11 tests
+   remain and pass, corrected where the underlying behavior changed
+   (`early_buyers_recovered`/`unresolved_ownership_count` assertions in
+   `test_p2t4_historical_archaeology_on_real_evidence` updated to reflect
+   the R3 fix; `market_state_confidence` added to previously-bare
+   `MarketSnapshotDraft` fixtures for the R4 fix; `transaction.message`
+   signer shapes added to previously-bare synthetic evidence dicts for
+   the R3 fix); Phase 1.5 semantic/golden suites, the full repository
+   suite, ruff, mypy, secret scan, and real-chain fixture validation all
+   pass or carry only the previously-approved environmental deferrals
+   (section F) -- none newly introduced by this round.
+
+F. Environmental deferrals (unchanged from every prior round, plus one
+   newly exercised and confirmed still-deferred by this round's own P2-R2
+   work)
+
+- Live Helius RPC connectivity -- NOT TESTED (no `HELIUS_API_KEY`
+  configured in this sandbox). This round's new P2-R2
+  `argus discover acquire-and-run-archaeology` live-acquisition path was
+  built, ruff/mypy-clean, CLI-wired, and directly exercised against this
+  exact deferral -- it produces the honest section-108 `LOCAL CREDENTIAL
+  REQUIRED` notice (section C), never a mocked live-acceptance claim. The
+  path's own internal logic (pagination, fault detection, usage
+  accounting) is proven against a deterministic fake provider instead
+  (section B item 2), per the instruction's own explicit allowance.
+- Real PostgreSQL 17 Compose validation
+  (`PG17_COMPOSE_VALIDATION = DEFERRED_ENVIRONMENTAL_CHECK`) -- unchanged;
+  this sandbox's egress policy still blocks Docker Hub's image CDN. All
+  migration/application logic this round (migration 0009 included) was
+  verified against the same substitute local PostgreSQL 16 server used
+  throughout this project, never described as PostgreSQL 17 validation.
+- DexScreener/GeckoTerminal/Jupiter live reachability -- unchanged,
+  UNREACHABLE (general RPC/market-data egress remains blocked).
+
+None of these deferrals is claimed as PASS, and none authorizes live
+readiness by itself.
+
+G. Deviation from the audit instruction
+
+One deliberate, disclosed deviation from prior-round precedent (not from
+this instruction's own authorized scope): earlier rounds ran a full
+`alembic downgrade base` / `upgrade head` cycle directly against the
+shared dev database as additional migration-cycle evidence, after first
+confirming via direct `SELECT count(*)` that the relevant tables were
+empty (making the cycle non-destructive). This round's dev database now
+holds real Phase 2 build and remediation demonstration evidence (`tokens`,
+`wallets`, `early_buyers`, `archaeology_runs`, etc. -- including this same
+round's own fresh re-run, section C) that a destructive downgrade-to-base
+cycle would irreversibly erase. Running that cycle against the dev
+database was therefore deliberately **not** done this round; the full
+upgrade/downgrade/round-trip/boundary-value/fail-closed-incompatible-data
+proof instead comes entirely from `tests/integration/test_migrations.py`'s
+disposable-scratch-database fixture (unchanged precedent for *that*
+file's own tests, now including 5 new P2-R7 tests -- section B item 7,
+section E item 7), which is the safer and, for boundary/downgrade-failure
+testing specifically, more thorough mechanism (it can populate genuinely
+out-of-BigInteger-range values to prove the fail-closed downgrade path,
+which the dev database's real data cannot safely be made to do). No other
+deviation from `AUTHORIZED_ACTION: REMEDIATE_FROZEN_PHASE_2_BLOCKERS_ONLY`
+occurred: work was strictly limited to P2-R1 through P2-R8; no additional
+hardening was made blocking; no phase was self-approved;
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified; no live
+trade, signing, credential disclosure, paid-provider upgrade, or threshold
+relaxation was performed or attempted.
+
+H. Known bugs / debt
+
+- No new known bugs are introduced by this round's changes.
+- Existing structural coverage gaps
+  (`src/argus/ingestion/test_mode.py`,
+  `src/argus/providers/helius/websocket_connector.py`,
+  `src/argus/tokens/reference_prices.py`, all 0%) are unchanged from every
+  prior round and are not new debt; none is touched by this remediation.
+- Phase 1's own pre-existing `swaps.input_amount_raw`/`output_amount_raw`
+  `BigInteger` columns share the same theoretical u64-overflow risk P2-R7
+  fixed for the two new Phase 2 columns, but are explicitly out of this
+  remediation's scope (section B item 7) -- left as known, disclosed,
+  pre-existing debt for a future round to address if ever required.
+- The single remaining honest limitation carried forward from the
+  original Phase 2 demonstration -- historical-evidence breadth for the
+  demonstrated pump.fun token is still limited to its own creation
+  transaction in this sandbox, since exercising the new P2-R2 live
+  acquisition path against it requires a `HELIUS_API_KEY` this sandbox
+  does not have (section F) -- is re-disclosed, not silently treated as
+  resolved, in `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md`.
+
+I. Security state
+
+- `LIVE_READY_SOFTWARE=false`, `LIVE_CANARY_PASSED=false`,
+  `LIVE_ARMED=false` -- unaffected by this round.
+- No signing, signer, private-key, seed-phrase, live-arm, or broadcast
+  path exists anywhere in `src/argus/`, including the two new modules
+  added this round (section C).
+- Credential handling for `HELIUS_API_KEY` is unchanged and was directly
+  re-exercised by this round's new live-acquisition CLI command: missing
+  credential raises the exact section-108 `LOCAL CREDENTIAL REQUIRED`
+  notice, never a mocked fallback claiming live acceptance (section C).
+- Secret scan clean aside from one pre-existing, obviously-fake test
+  string (section C); `.env` confirmed untracked and gitignored.
+- No paid-provider feature enabled; no Phase 3 or later-phase code
+  started; `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` not modified.
+
+J. Cost confirmation
+
+No real provider call was made anywhere in this round: the new P2-R2 CLI
+command's only live-network attempt (section C) failed closed on the
+missing credential before any HTTP request was constructed; every test
+proving the acquisition service's own logic uses the deterministic fake
+provider in `tests/unit/test_historical_acquisition.py`, never a real or
+paid provider. Provider usage/cost accounting therefore recorded zero new
+rows this round -- consistent with every prior round's own zero-cost
+disposition.
+
+K. Next specified phase
+
+Per orchestrator instruction `argus-phase-2-remediation-001`, this
+instruction approves no phase and authorizes remediation of exactly
+P2-R1 through P2-R8 only.
+`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified.
+`docs/BUILD_STATE.md`'s `last_orchestrator_approved_phase` (`1.5`) and
+`approved_commit` are left unchanged, exactly as the instruction requires
+-- this session does not and cannot self-approve Phase 2. Per this
+project's established two-commit convention (see
+`orchestration/checkpoints/phase_2.md`/`orchestration/bundles/phase_2.txt`
+and their own follow-up "fill in commit hash" commit), this checkpoint,
+the paired bundle, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
+`orchestration/AGENT_HANDOFF.md` are committed once with every
+commit-hash-bearing field set to the literal placeholder
+`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+following commit fills in that first commit's own real hash in every one
+of those fields -- both commits carry the sole terminal trailer
+`ARGUS-INSTRUCTION-ID: argus-phase-2-remediation-001`, verified via
+`git interpret-trailers --parse` before push.
+
+STOP. Await orchestrator review of this checkpoint before any further
+phase work.
+
+================ END ARGUS CHECKPOINT =========================

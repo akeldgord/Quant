@@ -90,6 +90,7 @@ async def evaluate_token(
             observed_at=row.observed_at,
             price_usd=row.price_usd,
             liquidity_usd=row.liquidity_usd,
+            market_state_confidence=row.market_state_confidence,
         )
         for row in rows
     ]

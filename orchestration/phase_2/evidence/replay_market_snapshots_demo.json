@@ -1,6 +1,6 @@
 [
   {
-    "_disclosure": "REPLAY / SYNTHETIC DEMONSTRATION DATA. These four observations are NOT a real recovered price history for mint 5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump. No live market-data provider (Helius, DexScreener, GeckoTerminal, Jupiter) or historical price archive is reachable in this sandbox, so this file exists solely to exercise the prospective winner-milestone watcher's real, deterministic detection/persistence code path end-to-end, per orchestrator instruction argus-phase-2-001's explicit allowance: 'The watcher may be demonstrated with deterministic REPLAY data when live provider access remains environmentally unavailable ... must be labeled as replay.' Every snapshot's 'source' field is 'replay_synthetic_demo' (never a real provider name) so these rows can never be confused with a genuine market observation in the database.",
+    "_disclosure": "REPLAY / SYNTHETIC DEMONSTRATION DATA. These four observations are NOT a real recovered price history for mint 5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump. No live market-data provider (Helius, DexScreener, GeckoTerminal, Jupiter) or historical price archive is reachable in this sandbox, so this file exists solely to exercise the prospective winner-milestone watcher's real, deterministic detection/persistence code path end-to-end, per orchestrator instruction argus-phase-2-001's explicit allowance: 'The watcher may be demonstrated with deterministic REPLAY data when live provider access remains environmentally unavailable ... must be labeled as replay.' Every snapshot's 'source' field is 'replay_synthetic_demo' (never a real provider name) so these rows can never be confused with a genuine market observation in the database. P2-R4 (Phase 2 remediation) added confidence-gating to winner-milestone detection: only HIGH/MEDIUM confidence observations may serve as a baseline or peak. The three tradable observations below are therefore labeled MEDIUM (not LOW, this file's original pre-remediation value) -- a deliberate, disclosed choice for this synthetic demonstration to keep exercising the milestone-crossing code path; it is not a claim of any genuine confidence assessment methodology.",
     "observed_at": "2024-09-29T19:52:26+00:00",
     "lifecycle_stage": "TOKEN_CREATION",
     "source": "replay_synthetic_demo",
@@ -20,7 +20,7 @@
     "pool_or_curve_address": "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r",
     "price_usd": "0.00003000",
     "liquidity_usd": "5000.00",
-    "market_state_confidence": "LOW",
+    "market_state_confidence": "MEDIUM",
     "evidence_reference": "SYNTHETIC baseline: chosen as a plausible early bonding-curve price/liquidity pair for demonstration purposes only, not a recovered on-chain observation"
   },
   {
@@ -32,7 +32,7 @@
     "pool_or_curve_address": "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r",
     "price_usd": "0.00015000",
     "liquidity_usd": "18000.00",
-    "market_state_confidence": "LOW",
+    "market_state_confidence": "MEDIUM",
     "evidence_reference": "SYNTHETIC intermediate point"
   },
   {
@@ -44,7 +44,7 @@
     "pool_or_curve_address": "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r",
     "price_usd": "0.00036000",
     "liquidity_usd": "40000.00",
-    "market_state_confidence": "LOW",
+    "market_state_confidence": "MEDIUM",
     "evidence_reference": "SYNTHETIC peak: 12x the SYNTHETIC baseline price, chosen to cross the MAJOR_WINNER (>=10x) threshold but not MONSTER (>=20x), for demonstration purposes only"
   }
 ]

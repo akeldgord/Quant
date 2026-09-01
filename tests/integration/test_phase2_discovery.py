@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,8 @@ from argus.domain.archaeology_runs import (
     RUN_STATUS_COMPLETED,
     RUN_STATUS_FAILED,
     RUN_STATUS_PARTIAL,
+    RUN_STATUS_RUNNING,
+    ArchaeologyRun,
 )
 from argus.domain.archaeology_triggers import (
     TRIGGER_TYPE_HISTORICAL_WINNER,
@@ -50,7 +52,9 @@ from argus.tokens.importer import import_bootstrap_token
 from argus.tokens.market_snapshots import MarketSnapshotDraft, record_snapshot
 from argus.tokens.negative_controls import NegativeControlDraft, record_negative_control
 from argus.wallets.archaeology import (
+    _SimulatedWorkerCrash,
     get_or_create_historical_trigger,
+    reap_stale_archaeology_runs,
     run_archaeology,
 )
 from argus.wallets.early_buyer_extraction import RawTransactionEvidence
@@ -372,6 +376,7 @@ async def test_p2t3_zero_liquidity_baseline_excluded_and_milestone_versioned(adm
                     source="src",
                     price_usd=Decimal("0.00000001"),
                     liquidity_usd=Decimal("0"),
+                    market_state_confidence="HIGH",
                 ),
                 MarketSnapshotDraft(
                     token_id=token_id,
@@ -380,6 +385,7 @@ async def test_p2t3_zero_liquidity_baseline_excluded_and_milestone_versioned(adm
                     source="src",
                     price_usd=Decimal("1"),
                     liquidity_usd=Decimal("5000"),
+                    market_state_confidence="HIGH",
                 ),
                 MarketSnapshotDraft(
                     token_id=token_id,
@@ -388,6 +394,7 @@ async def test_p2t3_zero_liquidity_baseline_excluded_and_milestone_versioned(adm
                     source="src",
                     price_usd=Decimal("15"),
                     liquidity_usd=Decimal("50000"),
+                    market_state_confidence="HIGH",
                 ),
             ):
                 await record_snapshot(session, draft, now=now)
@@ -415,6 +422,103 @@ async def test_p2t3_zero_liquidity_baseline_excluded_and_milestone_versioned(adm
             assert row.winner_definition_version == crossing.winner_definition_version
             assert row.baseline_timestamp == datetime(2026, 1, 2, tzinfo=UTC)
             assert row.peak_timestamp == datetime(2026, 1, 3, tzinfo=UTC)
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p2r4_low_confidence_snapshots_never_create_a_milestone_via_full_db_path(
+    admin_engine,
+) -> None:
+    """P2-R4, exercised through the real DB path (``record_snapshot`` +
+    ``evaluate_token``), not just the pure function: a 100x observation
+    recorded with LOW confidence must never produce a milestone or
+    trigger row, and a later HIGH-confidence observation that genuinely
+    crosses a threshold must still work normally afterward."""
+    mint = _unique_mint()
+    _config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    try:
+        async with sessionmaker() as session, session.begin():
+            token = Token(
+                token_id=uuid.uuid4(),
+                mint=mint,
+                chain="solana",
+                first_observed_at=now,
+                mint_validated=False,
+                current_lifecycle_stage=None,
+                created_at=now,
+            )
+            session.add(token)
+            await session.flush()
+            token_id = token.token_id
+
+            await record_snapshot(
+                session,
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    lifecycle_stage="BONDING_CURVE",
+                    source="src",
+                    price_usd=Decimal("1"),
+                    liquidity_usd=Decimal("1000"),
+                    market_state_confidence="HIGH",
+                ),
+                now=now,
+            )
+            await record_snapshot(
+                session,
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 2, tzinfo=UTC),
+                    lifecycle_stage="AMM_POOL",
+                    source="src",
+                    price_usd=Decimal("100"),
+                    liquidity_usd=Decimal("50000"),
+                    market_state_confidence="LOW",
+                ),
+                now=now,
+            )
+            no_crossings = await evaluate_token(session, token_id=token_id, now=now)
+        assert no_crossings == []
+
+        async with sessionmaker() as session:
+            from argus.domain.token_winner_milestones import TokenWinnerMilestone
+
+            rows = (
+                (
+                    await session.execute(
+                        select(TokenWinnerMilestone).where(
+                            TokenWinnerMilestone.token_id == token_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert rows == []
+
+        # A subsequent genuine HIGH-confidence 12x observation still
+        # works normally -- the fix narrows eligibility, not detection.
+        async with sessionmaker() as session, session.begin():
+            await record_snapshot(
+                session,
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 3, tzinfo=UTC),
+                    lifecycle_stage="AMM_POOL",
+                    source="src",
+                    price_usd=Decimal("12"),
+                    liquidity_usd=Decimal("20000"),
+                    market_state_confidence="HIGH",
+                ),
+                now=now,
+            )
+            crossings = await evaluate_token(session, token_id=token_id, now=now)
+        assert len(crossings) == 1
+        assert crossings[0].crossing.category == "MAJOR_WINNER"
+        assert crossings[0].crossing.peak_price == Decimal("12.000000000000000000")
     finally:
         await _cleanup_token(admin_engine, mint)
         await engine.dispose()
@@ -448,31 +552,50 @@ async def test_p2t4_historical_archaeology_on_real_evidence(admin_engine) -> Non
                 git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
             )
         assert import_result.mint_validated is True
+        assert import_result.validation.chain_time is not None  # P2-R8
         token_id = import_result.token_id
 
-        async with sessionmaker() as session, session.begin():
-            result = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[tx],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="0xjeffro/tx-parser@475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
-                input_evidence_reference=PUMPFUN_EVIDENCE_PATH,
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps="only the creation transaction is available in this sandbox",
-                completeness_statement="1 of an unknown total transaction count for this mint",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-                deployer_wallet=PUMPFUN_CREATOR,
-            )
+        async with sessionmaker() as session:
+            from argus.domain.token_mint_validations import TokenMintValidation
+
+            persisted = (
+                await session.execute(
+                    select(TokenMintValidation).where(
+                        TokenMintValidation.validation_id == import_result.validation_id
+                    )
+                )
+            ).scalar_one()
+            assert persisted.chain_time is not None  # P2-R8: no longer hardcoded None
+            assert persisted.chain_time == import_result.validation.chain_time
+
+        result = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[tx],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="0xjeffro/tx-parser@475b1ebff79a2f41ec966919fdefa01f11f6c5d7",
+            input_evidence_reference=PUMPFUN_EVIDENCE_PATH,
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps="only the creation transaction is available in this sandbox",
+            completeness_statement="1 of an unknown total transaction count for this mint",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+            deployer_wallet=PUMPFUN_CREATOR,
+        )
 
         assert result.status == RUN_STATUS_COMPLETED
-        assert result.early_buyers_recovered == 2
-        assert result.wallets_discovered == 2
+        # P2-R3: only the real signer (the creator's dev-buy) is promoted
+        # to buyer candidacy; the bonding-curve reserve PDA (never a
+        # transaction signer) is excluded, not silently invented into a
+        # wallet -- unresolved_ownership_count proves it was seen and
+        # deliberately not promoted, not simply missed.
+        assert result.early_buyers_recovered == 1
+        assert result.wallets_discovered == 1
+        assert result.unresolved_ownership_count == 1
 
         async with sessionmaker() as session:
             from argus.domain.archaeology_runs import ArchaeologyRun
@@ -496,7 +619,7 @@ async def test_p2t4_historical_archaeology_on_real_evidence(admin_engine) -> Non
                 .scalars()
                 .all()
             )
-            assert len(buyers) == 2
+            assert len(buyers) == 1
             deployer_row = next(b for b in buyers if b.possible_deployer)
             assert deployer_row.amount_raw > 0
 
@@ -511,7 +634,8 @@ async def test_p2t4_historical_archaeology_on_real_evidence(admin_engine) -> Non
                 .scalars()
                 .all()
             )
-            assert len(discovery_events) == 2
+            assert len(discovery_events) == 1
+            assert "P2-R3" in (run_row.known_gaps or "")  # unresolved-ownership note appended
     finally:
         wallets_to_clean = [PUMPFUN_CREATOR, "CQrqvWERJtEjw2rCCQV6EqfM6V6jzTuKjhJjKNFmGB7r"]
         await _cleanup_token(admin_engine, mint)
@@ -552,50 +676,54 @@ async def test_p2t4_retry_does_not_erase_or_duplicate_prior_run(admin_engine) ->
                         "uiTokenAmount": {"amount": "1000", "decimals": 6},
                     }
                 ],
-            }
+            },
+            "transaction": {
+                "message": {
+                    "header": {"numRequiredSignatures": 1},
+                    "accountKeys": [buyer],
+                }
+            },
         }
         tx = RawTransactionEvidence(
             raw=raw, signature="sig1", slot=1, block_time=None, evidence_reference="x"
         )
 
-        async with sessionmaker() as session, session.begin():
-            first = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[tx],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="test",
-                input_evidence_reference="x",
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps=None,
-                completeness_statement="complete",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-            )
+        first = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[tx],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="x",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps=None,
+            completeness_statement="complete",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+        )
         assert first.early_buyers_recovered == 1
 
-        async with sessionmaker() as session, session.begin():
-            retry = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[tx],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="test",
-                input_evidence_reference="x",
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps=None,
-                completeness_statement="complete",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-            )
+        retry = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[tx],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="x",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps=None,
+            completeness_statement="complete",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+        )
         assert retry.run_id != first.run_id  # a genuine new run row, not erased
         assert retry.early_buyers_recovered == 0  # but no duplicate output row
 
@@ -661,30 +789,35 @@ async def test_p2t6_discovery_provenance_is_complete_and_marked_contaminated(adm
                         "uiTokenAmount": {"amount": "1000", "decimals": 6},
                     }
                 ],
-            }
+            },
+            "transaction": {
+                "message": {
+                    "header": {"numRequiredSignatures": 1},
+                    "accountKeys": [buyer],
+                }
+            },
         }
         tx = RawTransactionEvidence(
             raw=raw, signature="sig-t6", slot=1, block_time=None, evidence_reference="x"
         )
 
-        async with sessionmaker() as session, session.begin():
-            result = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[tx],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="test",
-                input_evidence_reference="x",
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps=None,
-                completeness_statement="complete",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-            )
+        result = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[tx],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="x",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps=None,
+            completeness_statement="complete",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+        )
 
         async with sessionmaker() as session:
             wallet_row = (
@@ -745,6 +878,7 @@ async def test_p2t7_replayed_evaluation_never_creates_duplicate_milestone_or_tri
                     source="src",
                     price_usd=Decimal("1"),
                     liquidity_usd=Decimal("1000"),
+                    market_state_confidence="HIGH",
                 ),
                 MarketSnapshotDraft(
                     token_id=token_id,
@@ -753,6 +887,7 @@ async def test_p2t7_replayed_evaluation_never_creates_duplicate_milestone_or_tri
                     source="src",
                     price_usd=Decimal("11"),
                     liquidity_usd=Decimal("5000"),
+                    market_state_confidence="HIGH",
                 ),
             ):
                 await record_snapshot(session, draft, now=now)
@@ -876,24 +1011,23 @@ async def test_p2t8_empty_evidence_set_completes_honestly_with_zero_candidates(
             await session.flush()
             token_id = token.token_id
 
-        async with sessionmaker() as session, session.begin():
-            result = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="test",
-                input_evidence_reference="none",
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps="no evidence located",
-                completeness_statement="zero transactions found for this mint",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-            )
+        result = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="none",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps="no evidence located",
+            completeness_statement="zero transactions found for this mint",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+        )
         assert result.status == RUN_STATUS_COMPLETED  # honest zero-result completion
         assert result.early_buyers_recovered == 0
     finally:
@@ -921,25 +1055,24 @@ async def test_p2t8_caller_asserted_partial_evidence_is_marked_partial(admin_eng
             await session.flush()
             token_id = token.token_id
 
-        async with sessionmaker() as session, session.begin():
-            result = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="test",
-                input_evidence_reference="partial-page-1-of-3",
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps="provider pagination truncated after page 1 of an unknown total",
-                completeness_statement="only page 1 was recoverable before a rate limit",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-                is_partial=True,
-            )
+        result = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="partial-page-1-of-3",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps="provider pagination truncated after page 1 of an unknown total",
+            completeness_statement="only page 1 was recoverable before a rate limit",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+            is_partial=True,
+        )
         assert result.status == RUN_STATUS_PARTIAL  # never silently reported COMPLETED
     finally:
         await _cleanup_token(admin_engine, mint)
@@ -986,24 +1119,23 @@ async def test_p2t8_malformed_evidence_fails_the_run_closed_not_silently(admin_e
             raw=raw, signature="malformed-sig", slot=1, block_time=None, evidence_reference="x"
         )
 
-        async with sessionmaker() as session, session.begin():
-            result = await run_archaeology(
-                session,
-                token_id=token_id,
-                mint=mint,
-                run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                transactions=[tx],
-                discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                source_provider_set="test",
-                input_evidence_reference="x",
-                time_range_start=None,
-                time_range_end=None,
-                known_gaps=None,
-                completeness_statement="complete",
-                config=config,
-                git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                now=now,
-            )
+        result = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[tx],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="x",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps=None,
+            completeness_statement="complete",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+        )
         assert result.status == RUN_STATUS_FAILED
 
         async with sessionmaker() as session:
@@ -1156,15 +1288,44 @@ async def test_p2t10_duplicate_trigger_delivery_cannot_create_two_runs(admin_eng
                         "uiTokenAmount": {"amount": "500", "decimals": 6},
                     }
                 ],
-            }
+            },
+            "transaction": {
+                "message": {
+                    "header": {"numRequiredSignatures": 1},
+                    "accountKeys": [buyer],
+                }
+            },
         }
         tx = RawTransactionEvidence(
             raw=raw, signature="sig-concurrent", slot=1, block_time=None, evidence_reference="x"
         )
 
-        async with sessionmaker() as session, session.begin():
-            winner_result = await run_archaeology(
-                session,
+        winner_result = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
+            transactions=[tx],
+            discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+            source_provider_set="test",
+            input_evidence_reference="x",
+            time_range_start=None,
+            time_range_end=None,
+            known_gaps=None,
+            completeness_statement="complete",
+            config=config,
+            git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+            now=now,
+            trigger_id=trigger_id,
+        )
+        assert winner_result.early_buyers_recovered == 1
+
+        # The "loser" concurrent worker attempts the same trigger_id --
+        # its own "claim" phase (P2-R6) is what raises here, before any
+        # extraction/output work even begins.
+        with pytest.raises(Exception, match="(?i)unique|duplicate"):
+            await run_archaeology(
+                sessionmaker,
                 token_id=token_id,
                 mint=mint,
                 run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
@@ -1181,29 +1342,6 @@ async def test_p2t10_duplicate_trigger_delivery_cannot_create_two_runs(admin_eng
                 now=now,
                 trigger_id=trigger_id,
             )
-        assert winner_result.early_buyers_recovered == 1
-
-        # The "loser" concurrent worker attempts the same trigger_id.
-        with pytest.raises(Exception, match="(?i)unique|duplicate"):
-            async with sessionmaker() as session, session.begin():
-                await run_archaeology(
-                    session,
-                    token_id=token_id,
-                    mint=mint,
-                    run_type=TRIGGER_TYPE_HISTORICAL_WINNER,
-                    transactions=[tx],
-                    discovery_channel=DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
-                    source_provider_set="test",
-                    input_evidence_reference="x",
-                    time_range_start=None,
-                    time_range_end=None,
-                    known_gaps=None,
-                    completeness_statement="complete",
-                    config=config,
-                    git_commit="TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
-                    now=now,
-                    trigger_id=trigger_id,
-                )
 
         async with sessionmaker() as session:
             from argus.domain.archaeology_runs import ArchaeologyRun
@@ -1272,3 +1410,548 @@ async def test_p2t10_phase2_tables_have_role_grants_matching_immutability_conven
                 )
             ).fetchall()
             assert {r[0] for r in research_rows} == {"SELECT"}, f"{table}: research grants"
+
+
+# ---------------------------------------------------------------------
+# P2-R6 -- durable, crash-safe archaeology state machine
+# ---------------------------------------------------------------------
+
+
+def _signed_tx(*, mint: str, buyer: str, signature: str = "sig-r6") -> RawTransactionEvidence:
+    raw = {
+        "meta": {
+            "err": None,
+            "postTokenBalances": [
+                {
+                    "accountIndex": 0,
+                    "mint": mint,
+                    "owner": buyer,
+                    "uiTokenAmount": {"amount": "1000", "decimals": 6},
+                }
+            ],
+        },
+        "transaction": {
+            "message": {
+                "header": {"numRequiredSignatures": 1},
+                "accountKeys": [buyer],
+            }
+        },
+    }
+    return RawTransactionEvidence(
+        raw=raw, signature=signature, slot=1, block_time=None, evidence_reference="x"
+    )
+
+
+async def _make_token(sessionmaker, *, mint: str, now: datetime) -> uuid.UUID:
+    async with sessionmaker() as session, session.begin():
+        token = Token(
+            token_id=uuid.uuid4(),
+            mint=mint,
+            chain="solana",
+            first_observed_at=now,
+            mint_validated=True,
+            current_lifecycle_stage=None,
+            created_at=now,
+        )
+        session.add(token)
+        await session.flush()
+        return token.token_id
+
+
+async def _run_row(sessionmaker, run_id: uuid.UUID) -> ArchaeologyRun:
+    async with sessionmaker() as session:
+        return (
+            await session.execute(select(ArchaeologyRun).where(ArchaeologyRun.run_id == run_id))
+        ).scalar_one()
+
+
+_RUN_KWARGS: dict[str, Any] = {
+    "run_type": TRIGGER_TYPE_HISTORICAL_WINNER,
+    "discovery_channel": DISCOVERY_CHANNEL_HISTORICAL_WINNER_ARCHAEOLOGY,
+    "source_provider_set": "test",
+    "input_evidence_reference": "x",
+    "time_range_start": None,
+    "time_range_end": None,
+    "known_gaps": None,
+    "completeness_statement": "complete",
+    "git_commit": "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB",
+}
+
+
+@pytest.mark.asyncio
+async def test_p2r6_crash_after_claim_leaves_running_row_with_no_outputs(admin_engine) -> None:
+    """Covers both required crash points 'after durable run creation/
+    claim' and 'during extraction' -- they are operationally
+    indistinguishable from the outside: a crash anywhere between the
+    claim phase's own commit and the outputs phase's own commit leaves
+    exactly the same observable state (a genuine RUNNING row, zero
+    outputs), which is exactly what this test proves and the reaper
+    recovers from."""
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+        tx = _signed_tx(mint=mint, buyer=buyer)
+
+        run_id: uuid.UUID | None = None
+        with pytest.raises(_SimulatedWorkerCrash) as exc_info:
+            await run_archaeology(
+                sessionmaker,
+                token_id=token_id,
+                mint=mint,
+                transactions=[tx],
+                config=config,
+                now=now,
+                _simulate_crash_after="claim",
+                **_RUN_KWARGS,
+            )
+        run_id = uuid.UUID(str(exc_info.value).rsplit("run_id=", 1)[1].rstrip(")"))
+
+        run = await _run_row(sessionmaker, run_id)
+        assert run.status == RUN_STATUS_RUNNING
+        assert run.completed_at is None
+
+        async with sessionmaker() as session:
+            outputs = (
+                (await session.execute(select(EarlyBuyer).where(EarlyBuyer.token_id == token_id)))
+                .scalars()
+                .all()
+            )
+            assert outputs == []
+
+        # Restart recovery: reap the stale RUNNING row.
+        async with sessionmaker() as session, session.begin():
+            reaped = await reap_stale_archaeology_runs(
+                session, older_than=timedelta(seconds=-1), now=datetime.now(UTC)
+            )
+        assert run_id in reaped
+        reaped_run = await _run_row(sessionmaker, run_id)
+        assert reaped_run.status == RUN_STATUS_FAILED
+        assert reaped_run.completed_at is not None
+        assert "reaped as stale" in (reaped_run.error_reason or "")
+
+        # A fresh retry is safe and completes normally.
+        retry = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            config=config,
+            now=datetime.now(UTC),
+            **_RUN_KWARGS,
+        )
+        assert retry.status == RUN_STATUS_COMPLETED
+        assert retry.early_buyers_recovered == 1
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p2r6_crash_after_outputs_leaves_running_row_with_durable_outputs(
+    admin_engine,
+) -> None:
+    """The required 'after output insertion but before terminalization'
+    crash point: outputs are already durable and queryable even though
+    the run row is still RUNNING."""
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+        tx = _signed_tx(mint=mint, buyer=buyer)
+
+        with pytest.raises(_SimulatedWorkerCrash) as exc_info:
+            await run_archaeology(
+                sessionmaker,
+                token_id=token_id,
+                mint=mint,
+                transactions=[tx],
+                config=config,
+                now=now,
+                _simulate_crash_after="outputs",
+                **_RUN_KWARGS,
+            )
+        run_id = uuid.UUID(str(exc_info.value).rsplit("run_id=", 1)[1].rstrip(")"))
+
+        run = await _run_row(sessionmaker, run_id)
+        assert run.status == RUN_STATUS_RUNNING  # not yet terminalized
+
+        async with sessionmaker() as session:
+            wallet_row = (
+                await session.execute(select(Wallet).where(Wallet.wallet_address == buyer))
+            ).scalar_one()
+            outputs = (
+                (
+                    await session.execute(
+                        select(EarlyBuyer).where(EarlyBuyer.wallet_id == wallet_row.wallet_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(outputs) == 1  # durable despite the run itself not being terminal yet
+
+        # Reap: terminalizes the stale run without touching the
+        # already-durable outputs.
+        async with sessionmaker() as session, session.begin():
+            reaped = await reap_stale_archaeology_runs(
+                session, older_than=timedelta(seconds=-1), now=datetime.now(UTC)
+            )
+        assert run_id in reaped
+
+        async with sessionmaker() as session:
+            outputs_after = (
+                (await session.execute(select(EarlyBuyer).where(EarlyBuyer.token_id == token_id)))
+                .scalars()
+                .all()
+            )
+            assert len(outputs_after) == 1  # unchanged, not deleted, not duplicated
+
+        # A fresh retry never duplicates the already-durable output.
+        retry = await run_archaeology(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            config=config,
+            now=datetime.now(UTC),
+            **_RUN_KWARGS,
+        )
+        assert retry.early_buyers_recovered == 0  # already existed, not a new row
+        async with sessionmaker() as session:
+            final_outputs = (
+                (await session.execute(select(EarlyBuyer).where(EarlyBuyer.token_id == token_id)))
+                .scalars()
+                .all()
+            )
+            assert len(final_outputs) == 1  # still exactly one, never duplicated
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p2r6_crash_during_terminal_commit_state_is_already_durable(admin_engine) -> None:
+    """The required 'during terminal commit' crash point: by the time
+    the caller observes the crash, the terminalization commit has
+    already landed durably in the database -- proving the terminal
+    state does not depend on the caller ever learning the run finished."""
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+        tx = _signed_tx(mint=mint, buyer=buyer)
+
+        with pytest.raises(_SimulatedWorkerCrash) as exc_info:
+            await run_archaeology(
+                sessionmaker,
+                token_id=token_id,
+                mint=mint,
+                transactions=[tx],
+                config=config,
+                now=now,
+                _simulate_crash_after="terminalize",
+                **_RUN_KWARGS,
+            )
+        run_id = uuid.UUID(str(exc_info.value).rsplit("run_id=", 1)[1].rstrip(")"))
+
+        run = await _run_row(sessionmaker, run_id)
+        assert run.status == RUN_STATUS_COMPLETED  # already durable, despite the "crash"
+        assert run.completed_at is not None
+
+        # The reaper correctly leaves an already-terminal run alone.
+        async with sessionmaker() as session, session.begin():
+            reaped = await reap_stale_archaeology_runs(
+                session, older_than=timedelta(seconds=-1), now=datetime.now(UTC)
+            )
+        assert run_id not in reaped
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p2r6_reaper_ignores_runs_within_the_grace_window(admin_engine) -> None:
+    """A genuinely still-active RUNNING run (started recently) must
+    never be reaped -- only ``older_than`` distinguishes "still working"
+    from "the worker is gone.\""""
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+        tx = _signed_tx(mint=mint, buyer=buyer)
+
+        with pytest.raises(_SimulatedWorkerCrash) as exc_info:
+            await run_archaeology(
+                sessionmaker,
+                token_id=token_id,
+                mint=mint,
+                transactions=[tx],
+                config=config,
+                now=now,
+                _simulate_crash_after="claim",
+                **_RUN_KWARGS,
+            )
+        run_id = uuid.UUID(str(exc_info.value).rsplit("run_id=", 1)[1].rstrip(")"))
+
+        async with sessionmaker() as session, session.begin():
+            reaped = await reap_stale_archaeology_runs(
+                session, older_than=timedelta(hours=1), now=datetime.now(UTC)
+            )
+        assert run_id not in reaped
+        run = await _run_row(sessionmaker, run_id)
+        assert run.status == RUN_STATUS_RUNNING  # left alone, still within the grace window
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P2-R5 -- automatic trigger consumer/executor (no manual trigger-ID copy)
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_p2r5_automatic_trigger_consumption_without_manual_trigger_id(
+    admin_engine,
+) -> None:
+    """The required proof: normal production wiring (``run_next_pending_
+    trigger``) consumes a newly generated PROSPECTIVE_WINNER trigger into
+    one linked terminal archaeology run -- the test never reads the
+    trigger_id out of the watcher's own result and passes it back in,
+    exactly the manual step the frozen finding named."""
+    from argus.wallets.archaeology import run_next_pending_trigger
+
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+
+        async with sessionmaker() as session, session.begin():
+            for draft in (
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    lifecycle_stage="BONDING_CURVE",
+                    source="src",
+                    price_usd=Decimal("1"),
+                    liquidity_usd=Decimal("1000"),
+                    market_state_confidence="HIGH",
+                ),
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 2, tzinfo=UTC),
+                    lifecycle_stage="AMM_POOL",
+                    source="src",
+                    price_usd=Decimal("11"),
+                    liquidity_usd=Decimal("5000"),
+                    market_state_confidence="HIGH",
+                ),
+            ):
+                await record_snapshot(session, draft, now=now)
+            evaluations = await evaluate_token(session, token_id=token_id, now=now)
+        assert len(evaluations) == 1  # a real PROSPECTIVE_WINNER trigger now exists
+
+        tx = _signed_tx(mint=mint, buyer=buyer)
+        result = await run_next_pending_trigger(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            config=config,
+            now=datetime.now(UTC),
+            source_provider_set=_RUN_KWARGS["source_provider_set"],
+            known_gaps=_RUN_KWARGS["known_gaps"],
+            completeness_statement=_RUN_KWARGS["completeness_statement"],
+            git_commit=_RUN_KWARGS["git_commit"],
+        )
+        assert result is not None
+        assert result.status == RUN_STATUS_COMPLETED
+        assert result.early_buyers_recovered == 1
+
+        # The trigger this run consumed is the exact one the watcher
+        # created -- never a human-supplied ID.
+        async with sessionmaker() as session:
+            from argus.domain.archaeology_triggers import ArchaeologyTrigger
+
+            trigger_row = (
+                await session.execute(
+                    select(ArchaeologyTrigger).where(
+                        ArchaeologyTrigger.trigger_id == evaluations[0].trigger_id
+                    )
+                )
+            ).scalar_one()
+            assert trigger_row.consumed_at is not None
+
+            run_row = (
+                await session.execute(
+                    select(ArchaeologyRun).where(ArchaeologyRun.run_id == result.run_id)
+                )
+            ).scalar_one()
+            assert run_row.trigger_id == evaluations[0].trigger_id
+
+        # No second pending trigger remains.
+        again = await run_next_pending_trigger(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            config=config,
+            now=datetime.now(UTC),
+            source_provider_set=_RUN_KWARGS["source_provider_set"],
+            known_gaps=_RUN_KWARGS["known_gaps"],
+            completeness_statement=_RUN_KWARGS["completeness_statement"],
+            git_commit=_RUN_KWARGS["git_commit"],
+        )
+        assert again is None
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p2r5_no_pending_trigger_returns_none(admin_engine) -> None:
+    from argus.wallets.archaeology import run_next_pending_trigger
+
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+        tx = _signed_tx(mint=mint, buyer=buyer)
+        result = await run_next_pending_trigger(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            config=config,
+            now=now,
+            source_provider_set=_RUN_KWARGS["source_provider_set"],
+            known_gaps=_RUN_KWARGS["known_gaps"],
+            completeness_statement=_RUN_KWARGS["completeness_statement"],
+            git_commit=_RUN_KWARGS["git_commit"],
+        )
+        assert result is None
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_p2r5_bounded_sweep_consumes_multiple_triggers_up_to_max(admin_engine) -> None:
+    """Two genuinely distinct pending triggers (a HISTORICAL_WINNER and a
+    PROSPECTIVE_WINNER for the same token) are both consumed by one
+    bounded sweep call, and the sweep is bounded by ``max_triggers``, not
+    unbounded."""
+    from argus.wallets.archaeology import (
+        get_or_create_historical_trigger,
+        run_all_pending_triggers_for_token,
+    )
+
+    config, engine, sessionmaker = _sessionmaker()
+    now = datetime.now(UTC)
+    mint = _unique_mint()
+    buyer = _unique_wallet()
+    try:
+        token_id = await _make_token(sessionmaker, mint=mint, now=now)
+
+        async with sessionmaker() as session, session.begin():
+            await get_or_create_historical_trigger(
+                session, token_id=token_id, trigger_reason="test", now=now
+            )
+            for draft in (
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    lifecycle_stage="BONDING_CURVE",
+                    source="src",
+                    price_usd=Decimal("1"),
+                    liquidity_usd=Decimal("1000"),
+                    market_state_confidence="HIGH",
+                ),
+                MarketSnapshotDraft(
+                    token_id=token_id,
+                    observed_at=datetime(2026, 1, 2, tzinfo=UTC),
+                    lifecycle_stage="AMM_POOL",
+                    source="src",
+                    price_usd=Decimal("11"),
+                    liquidity_usd=Decimal("5000"),
+                    market_state_confidence="HIGH",
+                ),
+            ):
+                await record_snapshot(session, draft, now=now)
+            evaluations = await evaluate_token(session, token_id=token_id, now=now)
+        assert len(evaluations) == 1
+
+        tx = _signed_tx(mint=mint, buyer=buyer)
+
+        # A bounded max_triggers=0 consumes nothing, even though two
+        # pending triggers exist -- proves the ceiling is real, not
+        # merely "however many happen to be pending."
+        bounded = await run_all_pending_triggers_for_token(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            max_triggers=0,
+            config=config,
+            now=datetime.now(UTC),
+            source_provider_set=_RUN_KWARGS["source_provider_set"],
+            known_gaps=_RUN_KWARGS["known_gaps"],
+            completeness_statement=_RUN_KWARGS["completeness_statement"],
+            git_commit=_RUN_KWARGS["git_commit"],
+        )
+        assert bounded == []
+
+        results = await run_all_pending_triggers_for_token(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            max_triggers=10,
+            config=config,
+            now=datetime.now(UTC),
+            source_provider_set=_RUN_KWARGS["source_provider_set"],
+            known_gaps=_RUN_KWARGS["known_gaps"],
+            completeness_statement=_RUN_KWARGS["completeness_statement"],
+            git_commit=_RUN_KWARGS["git_commit"],
+        )
+        assert len(results) == 2  # both triggers consumed, one call
+        assert {r.status for r in results} == {RUN_STATUS_COMPLETED}
+
+        # Nothing left to consume on a subsequent sweep.
+        final = await run_all_pending_triggers_for_token(
+            sessionmaker,
+            token_id=token_id,
+            mint=mint,
+            transactions=[tx],
+            max_triggers=10,
+            config=config,
+            now=datetime.now(UTC),
+            source_provider_set=_RUN_KWARGS["source_provider_set"],
+            known_gaps=_RUN_KWARGS["known_gaps"],
+            completeness_statement=_RUN_KWARGS["completeness_statement"],
+            git_commit=_RUN_KWARGS["git_commit"],
+        )
+        assert final == []
+    finally:
+        await _cleanup_token(admin_engine, mint)
+        await _cleanup_wallets(admin_engine, [buyer])
+        await engine.dispose()

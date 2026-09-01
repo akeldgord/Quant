@@ -40,6 +40,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from argus.db.base import Base
 from argus.domain.token_market_snapshots import MARKET_STATE_CONFIDENCE_LEVELS
+from argus.domain.u64 import U64Numeric, u64_check_constraints
 
 _MARKET_STATE_CONFIDENCE_LIST_SQL = ", ".join(
     f"'{level}'" for level in MARKET_STATE_CONFIDENCE_LEVELS
@@ -60,6 +61,7 @@ class EarlyBuyer(Base):
         ),
         CheckConstraint("amount_raw > 0", name="ck_early_buyers_amount_positive"),
         CheckConstraint("sequence_number >= 1", name="ck_early_buyers_sequence_positive"),
+        *u64_check_constraints("early_buyers", "amount_raw"),
     )
 
     early_buyer_id: Mapped[uuid.UUID] = mapped_column(
@@ -89,7 +91,7 @@ class EarlyBuyer(Base):
     entry_market_state_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
     token_age_seconds: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
-    amount_raw: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_raw: Mapped[int] = mapped_column(U64Numeric, nullable=False)
     amount_decimals: Mapped[int] = mapped_column(Integer, nullable=False)
     usd_estimate: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
 

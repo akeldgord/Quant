@@ -26,7 +26,6 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
-    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -39,6 +38,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from argus.db.base import Base
 from argus.domain.tokens import LIFECYCLE_STAGES
+from argus.domain.u64 import U64Numeric, u64_check_constraints
 
 MARKET_STATE_CONFIDENCE_HIGH = "HIGH"
 MARKET_STATE_CONFIDENCE_MEDIUM = "MEDIUM"
@@ -78,6 +78,7 @@ class TokenMarketSnapshot(Base):
             f"market_state_confidence IN ({_MARKET_STATE_CONFIDENCE_LIST_SQL})",
             name="ck_token_market_snapshots_market_state_confidence",
         ),
+        *u64_check_constraints("token_market_snapshots", "supply_raw"),
     )
 
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
@@ -98,7 +99,7 @@ class TokenMarketSnapshot(Base):
     pool_or_curve_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     price_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
-    supply_raw: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    supply_raw: Mapped[int | None] = mapped_column(U64Numeric, nullable=True)
     liquidity_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     fdv_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     market_cap_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)

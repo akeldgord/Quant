@@ -32,12 +32,26 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final
 
+from argus.domain.token_market_snapshots import (
+    MARKET_STATE_CONFIDENCE_HIGH,
+    MARKET_STATE_CONFIDENCE_MEDIUM,
+)
 from argus.domain.token_winner_milestones import WINNER_CATEGORIES, WINNER_CATEGORY_THRESHOLDS
 
-ALGORITHM_VERSION: Final[str] = "winner_watcher_v1"
+ALGORITHM_VERSION: Final[str] = "winner_watcher_v2"
 BUILD_HASH: Final[str] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
-WINNER_DEFINITION_VERSION: Final[str] = "winner_definition_v1"
+WINNER_DEFINITION_VERSION: Final[str] = "winner_definition_v2"
+
+# P2-R4: a winner-milestone decision may only rest on an observation this
+# project itself has already rated reliably tradable. LOW, UNKNOWN, and
+# NULL confidence are all excluded from baseline/peak selection -- an
+# uncertain or unrated observation must never be treated as evidence a
+# token genuinely reached (or started from) a given price, however large
+# the resulting multiple would look.
+_RELIABLY_TRADABLE_CONFIDENCE_LEVELS: Final[frozenset[str]] = frozenset(
+    {MARKET_STATE_CONFIDENCE_HIGH, MARKET_STATE_CONFIDENCE_MEDIUM}
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -50,6 +64,7 @@ class SnapshotView:
     observed_at: datetime
     price_usd: Decimal | None
     liquidity_usd: Decimal | None
+    market_state_confidence: str | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -68,29 +83,44 @@ class MilestoneCrossing:
     reason_codes: str | None
 
 
+def _is_reliably_tradable(snapshot: SnapshotView) -> bool:
+    """P2-R4: LOW/UNKNOWN/NULL-confidence, missing-price, missing-
+    liquidity, and zero-liquidity observations are never reliably
+    tradable market state, regardless of what multiple they would imply
+    -- excluded from both baseline and peak selection uniformly."""
+    return (
+        snapshot.market_state_confidence in _RELIABLY_TRADABLE_CONFIDENCE_LEVELS
+        and snapshot.price_usd is not None
+        and snapshot.price_usd > 0
+        and snapshot.liquidity_usd is not None
+        and snapshot.liquidity_usd > 0
+    )
+
+
 def select_baseline(snapshots: list[SnapshotView]) -> SnapshotView | None:
     """The earliest reliably tradable market state: the first
     chronological snapshot with a real, positive price AND positive
-    liquidity. An untradeable zero-liquidity launch-instant snapshot is
-    deliberately skipped -- never used merely to inflate the multiple
-    (MASTER_SPEC.md section 32's explicit rule)."""
+    liquidity AND HIGH/MEDIUM confidence. An untradeable zero-liquidity
+    launch-instant snapshot, and any LOW/UNKNOWN/NULL-confidence
+    observation, are both deliberately skipped -- never used merely to
+    inflate the multiple (MASTER_SPEC.md section 32's explicit rule;
+    P2-R4 extends it from "tradable" to "tradable AND reliably
+    observed")."""
     ordered = sorted(snapshots, key=lambda s: s.observed_at)
     for snapshot in ordered:
-        if (
-            snapshot.price_usd is not None
-            and snapshot.price_usd > 0
-            and snapshot.liquidity_usd is not None
-            and snapshot.liquidity_usd > 0
-        ):
+        if _is_reliably_tradable(snapshot):
             return snapshot
     return None
 
 
 def select_peak(snapshots: list[SnapshotView], *, at_or_after: datetime) -> SnapshotView | None:
-    """The highest-price snapshot at or after the baseline. Ties broken
-    by earliest ``observed_at`` (stable, deterministic: the peak is
-    "first time this price was reached," not an arbitrary later repeat)."""
-    candidates = [s for s in snapshots if s.observed_at >= at_or_after and s.price_usd is not None]
+    """The highest-price snapshot at or after the baseline, restricted to
+    the same reliably-tradable observations the baseline itself requires
+    (P2-R4) -- a LOW/UNKNOWN/NULL-confidence spike must never be reported
+    as the peak. Ties broken by earliest ``observed_at`` (stable,
+    deterministic: the peak is "first time this price was reached," not
+    an arbitrary later repeat)."""
+    candidates = [s for s in snapshots if s.observed_at >= at_or_after and _is_reliably_tradable(s)]
     if not candidates:
         return None
     return max(candidates, key=lambda s: (s.price_usd, -s.observed_at.timestamp()))
@@ -143,13 +173,29 @@ def compute_new_milestone_crossings(
                 peak_snapshot_id=peak.snapshot_id,
                 multiple_x=multiple_x,
                 reason_codes=(
-                    "ZERO_LIQUIDITY_SNAPSHOTS_EXCLUDED_FROM_BASELINE"
-                    if any(
-                        s.observed_at < baseline.observed_at
-                        and (s.liquidity_usd is None or s.liquidity_usd == 0)
-                        for s in snapshots
+                    ",".join(
+                        code
+                        for code, present in (
+                            (
+                                "ZERO_LIQUIDITY_SNAPSHOTS_EXCLUDED_FROM_BASELINE",
+                                any(
+                                    s.observed_at < baseline.observed_at
+                                    and (s.liquidity_usd is None or s.liquidity_usd == 0)
+                                    for s in snapshots
+                                ),
+                            ),
+                            (
+                                "LOW_CONFIDENCE_SNAPSHOTS_EXCLUDED",
+                                any(
+                                    s.market_state_confidence
+                                    not in _RELIABLY_TRADABLE_CONFIDENCE_LEVELS
+                                    for s in snapshots
+                                ),
+                            ),
+                        )
+                        if present
                     )
-                    else None
+                    or None
                 ),
             )
         )

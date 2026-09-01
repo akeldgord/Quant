@@ -1647,3 +1647,76 @@ Entries are appended chronologically. Do not rewrite or delete prior entries.
   disposition and `orchestration/phase_2/DEMONSTRATION.md` for the
   required real historical-token demonstration report.
 - git_commit: bd35f3a7a95d6c6b977be9e421c5ea16779e472c
+
+### 2026-09-01 — Phase 2 remediation round 1: 8 frozen findings fixed, Phase 2 still not approved
+- requirement_id: MASTER_SPEC.md section 8 (build-state/session-recovery
+  discipline); Phase 2 -- TOKEN + WALLET DISCOVERY (sections 24-33);
+  section 109 (orchestrator-delegated phase-approval authority).
+- decision: Orchestrator instruction `argus-phase-2-remediation-001`
+  independently audited the Phase 2 build and found it not approved,
+  freezing 8 SPEC_BLOCKING/SAFETY_OR_INTEGRITY_BLOCKING findings
+  (P2-R1 through P2-R8): a mint-account discrimination false positive
+  (a 165-byte legacy SPL token *account* could validate as a Mint); no
+  real historical acquisition/provider boundary (the CLI accepted only
+  already-collected evidence files); non-deterministic
+  (`PYTHONHASHSEED`-dependent) and semantically wrong early-buyer output
+  (a pump.fun bonding-curve reserve PDA promoted as a buyer wallet);
+  winner evaluation ignoring snapshot confidence; a manually-wired
+  archaeology trigger (a human copying a trigger ID between two CLI
+  commands); a non-crash-safe archaeology state machine (a single
+  caller transaction for claim+outputs+terminalize); signed `BIGINT`
+  raw-quantity columns unable to represent the full unsigned 64-bit
+  Solana/SPL domain; and mint-validation evidence handling that did not
+  fail closed on conflicting evidence or persist available chain-time
+  provenance. `AUTHORIZED_ACTION: REMEDIATE_FROZEN_PHASE_2_BLOCKERS_ONLY`,
+  `APPROVES_PHASE: NONE` -- explicitly authorizing remediation of exactly
+  these 8 findings, nothing else, and explicitly forbidding any
+  additional hardening from being made blocking. All 8 findings were
+  fixed with real, independently-tested code (see
+  `orchestration/checkpoints/phase_2_remediation.md` for the full
+  finding-to-code/test mapping and the 8-item frozen-acceptance-test
+  disposition). Per this instruction's own explicit requirement, Phase 2
+  itself is NOT marked approved by this entry or by
+  `docs/BUILD_STATE.md` -- only the orchestrator may do that in a future
+  instruction; `last_orchestrator_approved_phase` remains `1.5`,
+  unchanged.
+- reason: MASTER_SPEC.md section 8 requires `docs/BUILD_STATE.md` to
+  reflect the actual, orchestrator-verified project state for session
+  recovery; `last_orchestrator_approved_phase`/`approved_commit` may only
+  advance on an explicit orchestrator instruction, which
+  `argus-phase-2-remediation-001` explicitly declines to grant
+  (`APPROVES_PHASE: NONE`). Each of the 8 frozen findings named a real,
+  independently-verified defect against the frozen Phase 2 gate (not a
+  new product requirement), so remediating them was required before
+  Phase 2 could be considered for approval in any future round.
+- requested_by: ARGUS ORCHESTRATOR, via
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` instruction
+  `argus-phase-2-remediation-001` (`STATUS: ACTIVE`,
+  `TARGET_COMMIT: 6bde9fdf6d56c38517854700e8863d9103e831aa`,
+  `AUTHORIZED_ACTION: REMEDIATE_FROZEN_PHASE_2_BLOCKERS_ONLY`,
+  `AUTHORIZED_PHASE: 2`, `APPROVES_PHASE: NONE`; all mandatory
+  session-start preconditions -- instruction-only-commit parentage,
+  Phase 2 awaiting review and not orchestrator-approved, clean/synced
+  worktree -- independently verified before this task began).
+- impact: New files
+  `src/argus/tokens/historical_acquisition.py`,
+  `src/argus/domain/u64.py`,
+  `migrations/versions/0009_phase2_u64_raw_quantities.py`,
+  `tests/unit/test_historical_acquisition.py`,
+  `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md`. Modified
+  `src/argus/{cli.py,tokens/{importer,mint_validation}.py,domain/
+  {early_buyers,token_market_snapshots}.py,wallets/{archaeology,
+  early_buyer_extraction,watcher_service,winner_watcher}.py}` and their
+  corresponding unit/integration test files. Two new production CLI
+  commands (`argus discover acquire-and-run-archaeology`, `argus discover
+  run-pending-trigger`). `docs/BUILD_STATE.md` gained a new "2
+  (remediation round 1)" phase-history row (round-1 build's own row left
+  unmodified as immutable history); `last_orchestrator_approved_phase`/
+  `approved_commit` unchanged. 702 tests passing (up from 653), 85%
+  coverage, ruff+mypy+format clean, 12/12 real-chain fixtures ok, secret
+  scan clean. See `orchestration/checkpoints/phase_2_remediation.md` for
+  the full 8-finding/8-acceptance-test disposition and
+  `orchestration/phase_2/DEMONSTRATION_REMEDIATION.md` for the fresh,
+  from-clean-database, real end-to-end CLI re-run confirming the
+  corrected behavior directly via Postgres queries.
+- git_commit: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
