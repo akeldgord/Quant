@@ -1,46 +1,227 @@
 # ARGUS Orchestrator Instructions
 
 OWNER: ARGUS ORCHESTRATOR. Claude must not edit this file.
-MASTER_SPEC.md remains authoritative. Read orchestration/AUDITOR_POLICY.md before implementing or auditing.
+MASTER_SPEC.md remains authoritative. Read orchestration/AUDITOR_POLICY.md before acting.
 
-INSTRUCTION_ID: argus-phase-5-001
-ISSUED_AT: 2026-09-02T18:30:00Z
-TARGET_COMMIT: 354ed229eb4ba8c16622b008b7494b3687da525e
-AUTHORIZED_ACTION: BUILD_PHASE_5_COPYABILITY_AND_FORWARD_INFORMATION
+INSTRUCTION_ID: argus-phase-5-remediation-001
+ISSUED_AT: 2026-09-02T20:30:00Z
+TARGET_COMMIT: 63e5610d091aec132da23b95313a0d15d0d7d3fe
+AUTHORIZED_ACTION: REMEDIATE_PHASE_5_EXISTING_SEALED_CRITERIA
 AUTHORIZED_PHASE: 5
-APPROVES_PHASE: 4
+APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
-## Decision and independent Phase 4 disposition
+## Decision, scope and seal
 
-Phase 4 is approved at 354ed229eb4ba8c16622b008b7494b3687da525e as PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION. Implement Phase 5 immediately. Phase 6 is not authorized by this instruction.
+Phase 5: FAIL_EXISTING_CRITERION / REMEDIATION_REQUIRED. This is its FIRST consolidated ordinary remediation, not another Phase 4 repair. Implement the complete packet below now. Phase 6 remains unauthorized. No human approval pause is needed for this bounded work.
 
-Audited submission: handoff-0031-phase-4-recovery-5, implementation a6922ac8df812f48a34ff637ddc17e45f3c5afab, final evidence 354ed229eb4ba8c16622b008b7494b3687da525e, responding to argus-phase-4-recovery-005 at 3250313c2e5a424ec4f438350ca63780276224c2. Ancestry is the instruction followed by the implementation followed by its hash-fill evidence commit. Both Claude commits carry the exact terminal instruction trailer.
+Audited handoff: handoff-0032-phase-5-001 at final evidence commit 63e5610d091aec132da23b95313a0d15d0d7d3fe, implementation aac910cee873851f266d6d98eb60d90c4be3d49a, responding to instruction argus-phase-5-001 at 102e6a49b159af76b9cde677cb24ed79b09b523f. Ancestry and both terminal instruction trailers match. Reads, code inspection and executions were pinned to that final evidence commit.
 
-The audit was bounded to ASSERT-01, ASSERT-02 and the twelve listed checks. No new proof obligation was added:
-- ASSERT-01 PASS: actual parent IDs reach the shared TC-01/03/04 helper; parent-scoped probe counts and wallet-scoped position counts are read before execution, after committed terminal execution, and after a fresh-session repeat. Equality, selected snapshot equality, and one HTTP call remain asserted. TC-02 success does not use the no-new-position helper.
-- ASSERT-02 PASS: all 44 TC-04 cases capture DEBUG-and-above across both calls and reload; actual formatted captured text is checked for the existing fake sentinels and nonempty unsafe raw/escaped strings. Status-only persisted evidence remains exact. This is not a requirement for empty logs.
-- Check 1 PASS: 94 collected nodes, identical node inventory to recovery-003.
-- Checks 2–4 PASS with the existing environmental limitation: pinned builder output reports 162 combined, 128 affected integration, and 1073 full-suite passes. This auditor independently ran 610 unit cases, 96 passing golden/replay cases and 7 feasibility cases. Nine database replay cases and the attempted matrix execution stop at missing ARGUS_DB_ADMIN_PASSWORD, before product execution. These are environmental setup errors, not demonstrated code failures. An initial auditor command named a nonexistent tests/sanity directory and ran no tests; it was corrected, not counted as a pass. No database credential was requested, entered or disclosed.
-- Checks 5–9 independently PASS: ruff check, ruff format (265 files in this environment), mypy src (128 source files), single Alembic head 0021, all 12 authentic chain fixtures.
-- Checks 10–11 independently PASS on actual final artifacts: validate_checkpoint_content == (True, ''), validate_bundle_content == (True, ''), exact checkpoint bytes embedded.
-- Check 12 PASS: clean pinned worktree; exact final trailers. Diff scope is tests, the permitted replay output-directory change, fresh artifacts, handoff/build state and append-only decision log. No src, migration, config, master, auditor policy, protocol, watcher or historical recovery-003 artifact changed.
+The ONLY functional acceptance contract remains phase-5-v1, P5-01 through P5-14 and M1-M7, published BEFORE implementation at 102e6a49b159af76b9cde677cb24ed79b09b523f. Original instruction blob cab1fbb6e6700bd7ab8cd38e8410d8ed07039ae1. Original sealed section is 25966 UTF-8 bytes, SHA256 d2291c823715a51e9c3aa92b8a758c2b703c57b88f03cb2d0637a5bbe2c294b5, offsets 6333:32299 in that instruction. This digest independently matches the submitted checkpoint. Its exact text is reproduced below. The findings below explain existing failures; they add no new criterion, case, threshold, proof standard or provider requirement.
 
-All previously closed Phase 4 production findings remain CLOSED. No emergency defect was demonstrated. Audit-of-audit: both frozen assertions were inspected at their actual call sites, claims distinguished from independently executed checks, evidence pinned, and no stronger oracle introduced after seal. Approval is engineering acceptance, not empirical alpha validation or live readiness.
+Administrative substitutions only: this remediation uses its own instruction ID/trailer, target commit and fresh evidence paths listed at the end. Where the reproduced original P5-13/P5-14 names original submission paths or argus-phase-5-001, use the remediation paths/ID for the NEW submission, while preserving the original artifacts and original seal. This does not alter any behavior/test obligation.
 
-Environmental deferrals remain: PG17_COMPOSE_VALIDATION, LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION, BQ_PUBLIC_DATASET_ACCESS. Builder PostgreSQL 16 evidence remains an explicitly limited substitute, not PostgreSQL 17 validation.
+Approved phases 0 through 4 remain approved; Phase 4 is PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION at 354ed229eb4ba8c16622b008b7494b3687da525e. Never reopen closed Phase 4 findings. MASTER_SPEC v2.0 SHA256 remains 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011. No config weight, threshold, risk allowance or authority relaxation. No new paid/source access, credential entry/disclosure, live/mainnet/canary/signing/private-key/seed work, destructive migration, raw/evidence rewrite or phase skip.
 
-NEXT_PHASE_CARRYFORWARD CF-P4-01: replay tests still invoke a script with a tracked report output default. The builder disclosed temporarily overwriting an old replay report before restoring it; the final historical bytes are unchanged. Consume this issue in P5-11 below. It does not reopen Phase 4.
+## Independent audit evidence and limitations
 
-## Authority, first action and scope
+Independently executed on pinned HEAD:
+- New Phase 5 unit files: 96 passed.
+- tests/unit tests/golden tests/phase_1_5: 808 passed.
+- Full uv run pytest -q --tb=no: 839 passed, 21 skipped, 314 setup errors. Database-backed cases cannot acquire the required local database credential in this audit environment. A separate attempted Phase 5 integration run with -x shows MissingCredentialError for ARGUS_DB_ADMIN_PASSWORD before product execution. No credential was requested, entered or disclosed. These unavailable executions are environmental rule E, not product failures or new blockers.
+- Existing Phase 4 recovery matrix: 94 nodes collected; its source and all old baseline test files are unchanged.
+- ruff check and format: PASS (290 files formatted); mypy src: PASS (141 source files).
+- Alembic: one head, 0022. This verifies graph shape, NOT a live upgrade.
+- Authentic fixture validation: all 12 PASS.
+- Final checkpoint validator and bundle validator both (True, ''); exact complete checkpoint bytes embedded.
+- Clean pinned worktree; unchanged master, policy, protocol, watcher, existing config and historical evidence. The diff is scoped to the new Phase 5 implementation/evidence and permitted replay/CLI work.
+- Read-only isolated probes executed the production pure functions/service and production loader transformations with controlled returned rows. They demonstrate the numerical/time failures described below without a live database. The concurrent-insert defect is supported by source inspection plus a real SQLAlchemy transaction-context reproduction without database I/O; a real concurrent database test remains required by original P5-09 and subject to E.
 
-Synchronize and verify the clean branch, the target, its direct-parent instruction-only relationship, and current authorization. Read MASTER_SPEC.md, docs/BUILD_STATE.md, docs/DECISION_LOG.md, orchestration/PROTOCOL.md, orchestration/AUDITOR_POLICY.md, this instruction and the handoff. Record Phase 4 approval above in build state and append the decision log; set current phase to 5, approved phase to 4 and approved commit to the target. Do not self-approve Phase 5.
+The builder's 839 passed / 335 skipped is its own environment's report, not this auditor's result. Missing infrastructure is accepted under E. Missing implementations or missing pre-specified test assertions are NOT E. No live action, secret exposure or destructive data loss was observed. This disposition does NOT invoke the policy's emergency exception.
 
-Use master v2.0, SHA256 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011. Phase 5 implements sections 46–53 and its named phase gate using the existing Phase 3/4 evidence. This instruction freezes ordinary V1 analytical mechanics where the master specifies a component but not its normalization. These are transparent research priors, not strategy optimization. Existing weights, A/S thresholds, risk settings and live boundaries remain unchanged.
+Audit command correction: an initial text lookup used nonexistent scripts/argus_watcher.py; corrected to scripts/argus_orchestrator_watch.py. An initial transaction probe had an unbound AsyncSession and yielded UnboundExecutionError; corrected by binding a nonconnecting async engine, where rollback then execute inside the same outer begin raises InvalidRequestError. Neither initial attempt is counted as proof.
 
-Build deterministic analytical modules under src/argus/copyability and src/argus/scoring, additive snapshot persistence, CLI/report wiring and the tests specified below. Reuse existing database/provider abstractions. No new provider, paid source, network acquisition requirement, model training, executor, signing or live order path. Phase 9 matched-universe controls, Phase 7 graph inference and Phase 8 calibrated convergence remain in their own phases.
+## Consolidated findings and authorized corrections
 
-Important current data limitation: Phase 4 creates one ShadowPosition per intent, at the first successful entry probe. Its reverse quotes are for THAT position's exact token quantity. Later entry-delay probes are not automatically independently valued positions. Do not scale that reverse quote to value another delay's different quantity. Use genuinely quantity-matched evidence where available; otherwise the cell is unavailable. Implement and test complete analytics on explicitly synthetic fixtures, but never label those as authentic prospective observations. No minimum number of genuine wallets, positive score, complete delay curve or A/S winner is required for Phase 5 acceptance.
+### F5-01 — Production knowledge-time, provenance and size-baseline selection
+
+Classification: SPEC_BLOCKING.
+Frozen IDs: P5-01, P5-05, P5-07; mechanics M1, M4, M7.
+Locations: src/argus/copyability/loaders.py and service.py; derived lineage models.
+
+Observed:
+- load_wallet_shadow_positions bounds position.created_at and probe.terminal_at but not probe.created_at/responded_at. A controlled probe created/responded one instant AFTER cutoff, with terminal_at equal to cutoff, is included (one selected observation instead of zero). _load_long_horizon_returns has the same incomplete source-time treatment.
+- load_prior_buy_sizes tests first_seen_at but not Swap.created_at. A buy first seen before C but recorded after C remains in the returned baseline. Dedup is swap_id rather than the underlying repeated buy/event identity.
+- compute_wallet_copyability passes token_id_by_mint={} to the real baseline loader. Consequently persisted discovery-excluded token IDs cannot exclude those buys by output mint.
+- The service substitutes current_size=None with zero, producing z=-2.023472278429785511938486443 for prior [1,2,3,4,5] instead of missing-current evidence. It uses as_of as signal time rather than an actual selected opportunity's signal/current-buy identity.
+- Table membership is assumed authentic in loader documentation; the production path does not establish evidence class from persisted provenance. identity.py constants do not enforce class separation. Full event/entry/outcome/score/history/exclusion lineage is not carried through the result.
+
+Failed pass condition: late/future evidence and discovery evidence cannot alter old selection inputs; actual prior-buy/evidence-class restrictions and explicit unavailable current size must hold through the loader, not just helper objects.
+
+Correction:
+- Load one provenance-bound, knowledge-time-bounded evidence set for each cutoff/decision; require applicable created/known AND response/terminal/effective times <= cutoff. Preserve frozen event score/tier/history references rather than substituting the wallet's current state. Explicitly exclude the current opportunity from its own readiness support.
+- Resolve token mint/ID joins from persisted records; apply persisted discovery exclusions to every selection-usable family, including sizes. Select the last at most 100 prior positive buys in the same quote mint and 90-day signal window; exclude current, duplicate and future-known/backdated buys.
+- Carry evidence class, subject/source IDs, actual times and exclusion reasons in the analytical data passed onward. Unknown origin is UNKNOWN and excluded from authentic prospective selection, not promoted because it resides in a production table. Historical priors remain separately labeled. Use synthetic fixtures for complete software behavior; do not relabel them authentic.
+- Preserve missing current size/portfolio valuation as unavailable, not zero or inferred wealth. Do not fabricate a signal for a wallet with no current opportunity.
+- Prove the original P5-01 temporal/frozen-snapshot cases, P5-05 query cases and full P5-07 secondary-aggregate/class case, with real production loader calls. Complete cases are in the unchanged seal below.
+
+### F5-02 — Executable outcomes, cohort matching and incorrect time labels
+
+Classification: SPEC_BLOCKING.
+Frozen IDs: P5-02, P5-03, P5-04; mechanics M1-M3.
+Locations: executable_returns.py, delay_curves.py, loaders.py, service.py.
+
+Observed:
+- A 5s delayed entry's 5m holding return .2 is labeled by the production service as an available first_seen+5s forward return .2. Long holding labels are similarly used as first_seen labels without entry/actual exit time adjustment. This contradicts the original explicit entry5s+holding5m case, not a newly requested clock convention.
+- The test named test_entry_delayed_5s_plus_5m_holding_reported_at_5m_not_first_seen_plus_5m_mislabel asserts a measured 5m cell instead of checking the forbidden relabel. The leader/first_seen test has no timestamps.
+- DelayObservation/DelayPoint retain nominal target seconds but not actual request/response delay, notional, unit, horizon and class needed for comparison. The target1/actual2.7 test never constructs or asserts 2.7.
+- compute_half_life accepts disjoint event cohorts: event A at1s=.4 and event B at5s=.2 yields PEAK_FOUND instead of INSUFFICIENT_COMPARABLE_EVIDENCE. Tests called matched use different event IDs at each delay.
+- Production loading collapses the six terminal failure classes into FAILED and omits missing/pending reverse observations from its outcome list; cost coverage/gross/net distinctions from the arithmetic helper are lost downstream.
+- A nonfinite denominator reaches <=0 before finite validation; Decimal('NaN') raises InvalidOperation instead of explicit unavailable. Valid 100/200/120 and known-cost arithmetic itself passes.
+
+Correction:
+- Retain exact entry/reverse source identity, mint/Q matching, target AND actual timings, class, notional, horizon, gross/net/cost coverage, individual failure classifications and pending/unavailable reasons through persistence/reporting.
+- Compute first_seen-relative evaluation times from actual evidence. Entry at +5s and a 5m holding exit at +305s is a retained +305s observation; absent a genuine +300s observation, the exact first_seen+5m cell is unavailable. It is not evidence at +5s either. Do not interpolate/relabel or reuse the first position's reverse quote for another entry quantity.
+- Partition comparable curves by the existing M2/M3 dimensions and same event cohort; compute observed crossings using actual delay, preserving nominal labels separately. Unmatched descriptive curves may exist but cannot support half-life or comparable latency. Preserve missing target cells/reasons.
+- Validate finite/positive/matching inputs before arithmetic; preserve the already correct Decimal and cost-once behavior.
+- Correct contradictory Phase 5 fixtures to the ORIGINAL expectations and complete the original P5-02/03/04 cases. Do not weaken or modify old Phase 4 tests.
+
+### F5-03 — Measured component wiring and event coverage are incomplete
+
+Classification: SPEC_BLOCKING.
+Frozen IDs: P5-06, with P5-02/P5-07 secondary-aggregate requirements; mechanic M5.
+Location: compute_wallet_copyability in service.py and its production inputs.
+
+Observed:
+- Starting from ShadowPosition drops entry failures, which have no position; missing reverse outcomes are also dropped. coverage_denominator is the remaining observation length, not all eligible terminal entry-event opportunities.
+- n is list length and k includes token IDs from failed observations, rather than the distinct events/tokens with usable primary outcomes.
+- Stability uses only the primary 5m outcome sign instead of the per-event fraction across the listed observed horizons.
+- Holding-duration pair counts are hardcoded zero, price impact None, history completeness UNKNOWN. Supplying available same-event 5m and 30m evidence still yields unavailable holding suitability. Current M5 confidence therefore never reflects available history evidence correctly.
+- Latency declares any two nominal points comparable; it inherits F5-02's cohort defect. Long-horizon evidence affecting output is missing from the contributing manifest.
+
+Failed pass condition: the actual loader/service must supply the frozen component definitions, denominator and measured/missing confidence facts, not merely expose a correct pure formula behind placeholder inputs.
+
+Correction:
+- Construct the primary opportunity population from eligible terminal events/entry outcomes, retaining entry failures and missing reverses in coverage and terminal reverse failures in executability. Deduplicate by actual event identity before n, k and other aggregates; k comes from usable primary events only.
+- Wire all evidenced horizons into per-event stability and comparable same-event 5m/30m holding pairs. Read actual point-in-time history completeness. Normalize explicitly evidenced impact units once; unknown unit stays unavailable, not guessed. M3 comparable evidence drives latency.
+- Preserve denominator, c, availability/available_weight, component values/prior contributions and all contributing source IDs in snapshots/report. Include every output-contributing horizon in identity evidence.
+- Keep existing frozen weights, robust math and neutral-prior/confidence formulas that already pass. Unknown genuinely absent data remains allowed; never hardcode unavailable for data the loader can establish.
+- Execute P5-06's original boundary, unsuccessful-opportunity, six-probes-one-event and impact-unit cases through the production aggregation seam, not just manually supplied n/k values.
+
+### F5-04 — Readiness is an unwired helper and does not enforce the frozen gates
+
+Classification: SAFETY_OR_INTEGRITY_BLOCKING, FAIL_EXISTING_CRITERION.
+Frozen ID: P5-08; related production-input/report clauses P5-01/P5-10; mechanic M6.
+Locations: scoring/readiness.py, service.py and OpportunityReadinessSnapshot wiring.
+
+Observed:
+- compute_readiness has no production service/CLI caller. OpportunityReadinessSnapshot is not built/persisted by the actual report path.
+- Six gate statuses are simply supplied by the caller; production evidence-based wallet tier/qualification/copyability/history/freshness/quote/risk evaluation and current-event exclusion are absent.
+- Qualification150 is clamped to100 and eligible=true under supplied PASS gates. QualificationNaN raises InvalidOperation. This is the opposite of the frozen invalid/nonfinite case.
+- Components are calculated before the gate decision. Tests toggle manually constructed PASS/FAIL/UNKNOWN values but do not exercise the required actual tier/85/75/90/default-risk boundaries.
+- A numerical diagnostic80 may be calculated under an all-PASS synthetic fixture, but that does not authorize an actionable readiness80. The original contract preserves readiness>=90 and the other stated constraints.
+
+Correction:
+- Implement the production opportunity-readiness entry point using frozen qualification (not descriptive), eligible as-of copyability excluding the current event, actual current quote/price/size evidence and conservative independence. Missing later-phase risk/independence information is UNKNOWN, not fabricated PASS. No Phase 7/8/9 module or executor is requested.
+- Evaluate all six gates and existing configured tier/confidence/risk constraints before eligible/actionable scoring; keep research diagnostic separately labeled. Validate known component inputs; do not silently clamp invalid pre-normalized score inputs or crash on nonfinite inputs. Formula-level clamping explicitly specified by M5/M6 remains valid.
+- Enforce original A/S versus B/unknown, 84.999/85, 74.999/75 and 89.999/90 boundaries without changing values. FAIL/UNKNOWN remains ineligible with NULL actionable score, even with otherwise100 components.
+- Persist/reuse per-opportunity analytical snapshots and emit gate evidence/reasons. Live permission/dispatch remains false regardless of research result.
+- Supply every original P5-08 case, including actual lower-tier/history/stale/invalid-quote/zero-risk/unproven-independence/current-future input paths. This is an existing sealed safety row; no emergency or actual live incident is asserted.
+
+### F5-05 — Snapshot identity and conflict recovery do not satisfy restart semantics
+
+Classification: SPEC_BLOCKING.
+Frozen ID: P5-09; M1/M7 lineage.
+Locations: copyability/persistence.py, both new snapshot models, migration0022, service manifest construction.
+
+Observed:
+- Both unique constraints and both existing-row queries use subject/as_of/algorithm_version/evidence_manifest_digest but omit config_hash. The config hash stored as metadata cannot prevent reuse under changed config.
+- The source manifest excludes long-horizon outcomes that change report values, so changed contributing evidence can reuse a stale snapshot.
+- Both get_or_create functions catch IntegrityError, call session.rollback(), then execute in the same outer session.begin() used by the real CLI. A bound SQLAlchemy AsyncSession reproduces InvalidRequestError after this rollback within the outer context. The error handler is not safe merely because a unique constraint exists.
+- The sole P5-09 integration test covers sequential wallet reuse and changed digest, not the original concurrent insert, rollback/retry, changed version and upgrade-with-completed-Phase4-row cases. The checkpoint incorrectly labels the concurrency concern HARDENING_BACKLOG despite P5-09 explicitly naming it.
+
+Correction:
+- Bind lookup AND unique identity to subject/as_of/algorithm/config and complete stable contributing evidence. Keep computed_at out of semantic identity; deterministic ordering/Decimal serialization and all output-contributing source IDs must be retained.
+- Resolve duplicate insertion without rolling back/invalidating the caller's outer transaction: use PostgreSQL INSERT ... ON CONFLICT DO NOTHING against the complete unique identity, then select the winning row within the still-active caller transaction and return accurate created/reused status. Do not catch-and-continue on the same closed transaction or suppress unrelated integrity errors.
+- Keep migrations additive and data-preserving. If schema correction is needed, append a new migration after0022; do not rewrite an already-published migration or delete old analytical/raw/Phase4 rows. Version newly computed semantics rather than overwriting prior snapshots.
+- Implement original P5-09 session, concurrency, rollback/retry, changed-version and upgrade-from0021-with-completed-row tests, including scoped counts/snapshot values. E may defer execution, not the existence of runnable tests. The concurrency item is covered by this existing criterion, not a new carryforward.
+
+### F5-06 — The real report omits required analyses and its integration fixture does not exercise them
+
+Classification: SPEC_BLOCKING.
+Frozen ID: P5-10; associated M1-M7 reporting.
+Locations: cli.copyability_report, service.py, test_phase5_persistence_and_report.py.
+
+Observed:
+- The command emits wallet copyability only. Missing required fields include frozen qualification, evidenced/unavailable leader result, actual follower timings, executable versus mark/cost/status families, opportunity readiness/gate reasons, evidence-class/coverage breakdown and explicit limitations.
+- The CLI test seeds only a wallet, not the specified persisted event/entry/reverse chain; no readiness snapshot is loaded. The empty-database test conditionally asserts only if exit_code==0, so any exception passes it.
+- The synthetic demonstration calls isolated functions; it cannot establish missing production-loader/CLI wiring. Lack of a genuine-current database report itself is already allowed by E and is NOT an additional blocker.
+
+Correction:
+- Wire the repaired wallet/opportunity production calculations into the documented argus copyability report path, persisting/reusing both analytical snapshot families without providers or earlier-evidence writes.
+- Emit every original P5-10 field, measured where supported, otherwise explicit null/unavailable with reason. Include separate selection/descriptive/class views and actual times; do not invent complete curves, positive returns or actual authentic samples.
+- Implement the ORIGINAL seeded persisted event/entry/reverse -> real CLI -> parsed report -> reload snapshot test; run twice and assert stable source IDs/results/scoped counts. Keep empty and partial-wallet cases. Required assertions must run on a successful invocation; infrastructure-unavailable execution is reported as E, not a vacuous pass.
+- Produce the actual-current-evidence report only if authorized infrastructure permits (zero/one wallet valid), plus the separately labeled deterministic synthetic demonstration. No new source or sample minimum.
+
+### F5-07 — Enumerated proof obligations were not implemented, despite an all-row PASS claim
+
+Classification: SPEC_BLOCKING under P5-13; the omitted secret/no-dispatch proof also fails the already-frozen P5-14 SAFETY_OR_INTEGRITY_BLOCKING row. This is NOT a newly discovered emergency.
+Frozen IDs: P5-01 through P5-11 and P5-13/P5-14; regression obligation P5-12 remains subject to E.
+
+Observed:
+- The 14-row table cites green helpers or aggregate counts where the seal requires loader/call-site assertions. Concrete examples are given F5-01 through F5-06.
+- P5-11's output-path helper change and six unit tests are valid, but existing replay integration tests still do not pass tmp_path and no required pre/post historical-artifact hash assertion wraps that suite.
+- No new-analytics fake-credential-sentinel/captured-DEBUG test or raising provider/signing-dispatch sentinel test required by P5-14 is present. Static no-import inspection is a useful scope check, not that pre-specified proof.
+- The checkpoint says all other subrequirements passed and concurrency is outside the contract. Those claims conflict with the actual original text. Validator syntax, seal digest and embedding themselves DO pass.
+
+Correction and finite completion map:
+- Expand the self-audit to EVERY exact case/assertion already enumerated in the reproduced seal, giving real node IDs and actual execution outcomes. Do not count a named test as proof when it omits the stated inputs/oracle. Environmental execution gaps remain explicit; do not call missing code/tests deferred environment.
+- For P5-01/05/07: production temporal/frozen-state/current-event, prior-window/mint/dedup/current-buy, full secondary aggregate and class separation cases.
+- For P5-02/03/04: actual nonfinite and quantity mismatch, preserved failure/mark disagreement, actual2.7 and same/mismatched cohort/notional/horizon, input permutation, and true first_seen timestamps with missing exact-horizon assertions.
+- For P5-06/08: production event population, component wiring, impact-unit normalization, frozen confidence boundaries, and actual readiness gate/threshold/invalid/current-event cases.
+- For P5-09/10: both snapshot semantics and all originally enumerated persistence cases; seeded real CLI/reload/counts; genuine-empty and partial data.
+- For P5-11: preserve accepted output-path refusal/fresh-default behavior and old isolated-database guards; pass explicit tmp_path from replay tests and check unchanged historical tracked artifact hashes before/after replay suite as originally specified. Never overwrite then restore old evidence.
+- For P5-14: run the new analytics command with relevant provider/signing dispatch replaced by raising sentinels; test inert fake credential fields through report/exception/log paths and assert omission from report and captured DEBUG text. Do not use real credentials, print environment values or dispatch a provider.
+- For P5-12: rerun precisely the frozen regression/tool command inventory below; preserve all94 old matrix nodes and old passing checks.
+- For P5-13: publish truthful complete case mapping and final validators/embedding in NEW artifacts. Correct previous claims by appending a new decision, not editing historical checkpoint/bundle/evidence. The existing seal/validator pass needs no new stronger oracle.
+
+This completion map references the original finite obligations; it does not authorize the next audit to add another missing-proof requirement. Once these original obligations pass, approve Phase 5 and move newly noticed non-emergency issues forward.
+
+## Accepted portions and row disposition
+
+Keep already correct code where possible. No rewrite for style or extra architecture:
+- P5-01 FAIL: production cutoffs/frozen inputs/lineage.
+- P5-02 PARTIAL: valid exact return/cost helper and named pure failures pass; finite handling and retained production outcomes fail.
+- P5-03 FAIL: actual timing/comparability missing; observed crossing arithmetic is usable once fed properly matched actual-time points.
+- P5-04 FAIL: production relabeling; nine-cell shape, named cash baseline and Phase9 NULL marker pass.
+- P5-05 PARTIAL: median/MAD/z/prior formula passes for supplied valid data; production baseline/current-size selection fails.
+- P5-06 FAIL: existing config-bound pure formula/prior/confidence mathematics retained; production evidence/population wiring fails.
+- P5-07 FAIL: persisted discovery token lookup for positions is useful, but sizes/full secondary aggregates/classes are not covered.
+- P5-08 FAIL: diagnostic weighted helper/gate status representation retained; actual entry point/invalid-input/threshold enforcement absent.
+- P5-09 FAIL: additive table creation/role restrictions and sequential-key concept retained; full identity/conflict handling and specified tests incomplete.
+- P5-10 FAIL: basic empty-wallet command exists; full pipeline/fields/test absent. Genuine sample execution alone is E.
+- P5-11 PARTIAL: fresh default/refusal/path validation PASS; exact replay test-output/hash proof remains incomplete.
+- P5-12 PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION for inspected unchanged baseline/static/fixture checks; rerun original inventory after corrections.
+- P5-13 PARTIAL: artifact format/digest/embedding/ancestry PASS; complete truthful case-level proof mapping fails.
+- P5-14 PARTIAL: scoped diff/unchanged settings/handoff/trailers PASS; pre-specified sentinel tests absent.
+
+No new NEXT_PHASE_CARRYFORWARD item was introduced in this bounded audit. CF-P4-01 remains mapped solely to original P5-11. Optional historical whitespace cleanup remains HARDENING_BACKLOG. Phase7 ancestry, Phase8 calibrated convergence and Phase9 matched controls remain out of scope. No new provider, live dataset, model tuning or empirical-alpha requirement.
+
+## Implementation order, self-audit and stopping condition
+
+1. Before editing code, enumerate every exact original sealed case and bind it to the real implementation seam/test oracle. The contract below is the fixed inventory; do not substitute a row name for the actual case.
+2. Correct the shared production evidence representation/cutoffs/provenance/event population (F5-01), retaining identity/times/class/status facts needed by all consumers.
+3. Correct quantity-matched outcomes, actual-time/cohort curves and forward grid (F5-02), then wire M5/size/history/impact aggregates (F5-03).
+4. Complete evidence-based research readiness and config/evidence-bound append-only persistence (F5-04/05).
+5. Wire the full real report and complete original integration/sentinel/replay proof (F5-06/07).
+6. Run the same frozen case inventory yourself; fix every non-environmental failure before handoff. A high passing test count is not row completion. Tests knowingly contradicting original expectations must be corrected to the original contract, never used to reinterpret it.
+7. Publish fresh evidence, verify final files/clean remote state, then STOP. No Phase6 work.
+
+There is no additional ordinary remediation budget after this one. If a frozen failure remains at the next audit, policy section6 requires root-cause review and a newly sealed bounded safe recovery, automatically authorized unless genuine new human authority is needed. This is not permission for blind patch chains or new goalposts.
+
+## Original sealed acceptance contract (verbatim)
+
+The following section is copied byte-for-byte from the original immutable instruction. Its 25966-byte SHA256 stated above remains the authority. Administrative substitutions were explicitly limited above.
 
 ## SEALED ACCEPTANCE CONTRACT — phase-5-v1
 
@@ -174,18 +355,20 @@ ARGUS-INSTRUCTION-ID: argus-phase-5-001
 Nothing after that trailer. Record this Phase4 approval but never self-approve Phase5.
 PASS: scoped diff, unchanged existing authority/strategy settings, no secret leakage/no dispatch under specified tests, valid unique handoff and exact terminal trailers. E applies.
 
-## Architect pre-seal review and carryforward disposition
+## Remediation handoff and artifact binding
 
-Before publication I checked this contract against the Phase5 build list and five acceptance statements, source schemas (including the one-position-per-intent limitation), existing config weights and the auditor policy. All eight build outputs and required report fields are mapped to numbered rows. Known malformed/missing/unit/time/sample/firewall/restart/gate/report/evidence/output-overwrite proof obligations are specified before code, not left for a later stronger oracle.
+Use NEW paths:
+- orchestration/checkpoints/phase_5_remediation_1.md
+- orchestration/bundles/phase_5_remediation_1.txt
+- orchestration/phase_5_remediation_1/evidence/
 
-Ordinary implementation choices are fixed: deterministic Decimal statistics, observed-point half-life, explicit cash baseline, neutral missing-component priors without redistribution, separate evidence classes, append-only snapshots and existing CLI/database stack. No current provider API assumption or new paid capability is required. No performance/alpha target is imposed.
+Preserve original phase_5.md, phase_5.txt and orchestration/phase_5/evidence/ byte-for-byte. Record original instruction commit and seal digest plus this remediation's carrying commit and content identity. Update only build state/current handoff and append a decision-log entry reflecting this audit; Phase4 remains the last approved phase.
 
-CF-P4-01 is consumed by P5-11. Matched-universe residual alpha is explicitly Phase9; calibrated convergence Phase8; ancestry Phase7; isolated executor Phase6. They are not hidden Phase5 requirements. Existing environmental deferrals and optional raw-output whitespace cleanup remain nonblocking. No other new carryforward is introduced by this audit.
+Final checkpoint: all original P5-01..P5-14 cases mapped to symbols/node IDs/commands/results/limitations, full source/report identities and actual count, changed paths, command output summaries, authority/carryforward state. Standard markers/sections; run validate_checkpoint_content and validate_bundle_content against FINAL hash-filled files and assert (True, '') and exact complete checkpoint inclusion. A genuine infrastructure inability may be E exactly as in the original seal; do not invent a successful execution, authentic sample or absent source.
 
-The contract is identified by argus-phase-5-001 / phase-5-v1 and the immutable instruction commit/blob. At session start Claude must record that carrying commit and SHA256 of the exact bytes between the SEALED ACCEPTANCE CONTRACT heading and the Architect pre-seal review heading in the checkpoint. This digest records the seal; it does not authorize editing this instruction. The subsequent auditor must compare that digest to the original instruction.
+Handoff: new unique HANDOFF_ID; CURRENT_PHASE 5; LAST_ORCHESTRATOR_INSTRUCTION_ID exactly argus-phase-5-remediation-001; run-local CURRENT_COMMIT and the new checkpoint/bundle paths; clean synchronized branch. Do not self-approve.
 
-If a frozen test reveals a genuine implementation failure, fix it within this one build before handoff. Do not call the work ready while a specified non-environmental row fails. Unlisted improvements go to NEXT_PHASE_CARRYFORWARD or HARDENING_BACKLOG. Later audit may issue at most one consolidated ordinary remediation against existing IDs; persistent failure requires root-cause review followed by a newly sealed safe recovery, not an unexplained approval pause.
+Every Claude implementation/evidence commit must end with the exact terminal line below and nothing after it:
+ARGUS-INSTRUCTION-ID: argus-phase-5-remediation-001
 
-## Handoff and STOP
-
-Implement the complete authorized Phase5 scope, self-audit the sealed rows, commit/push fresh evidence, verify clean synchronized HEAD, and STOP. Do not begin Phase6 or wait/poll inside the coding session. The orchestrator will independently audit exactly this seal and authorize the next safe phase after PASS.
+Implement, self-audit the complete unchanged seal, commit/push and STOP for independent review. Do not poll or begin another phase.
