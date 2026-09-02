@@ -1,120 +1,140 @@
 # ARGUS Orchestrator Instructions
 
 OWNER: ARGUS ORCHESTRATOR. The implementation agent must not edit this file.
+MASTER_SPEC.md remains authoritative. orchestration/AUDITOR_POLICY.md is mandatory audit governance and must be read before implementation self-audit and later independent audit.
 
-INSTRUCTION_ID: argus-phase-4-recovery-004
-ISSUED_AT: 2026-09-02T16:11:13Z
-TARGET_COMMIT: 410a6c0136a5930dedaa3c03615e08aa63312032
-AUTHORIZED_ACTION: PHASE_4_COMPLETE_SHARED_TEST_ASSERTIONS
+INSTRUCTION_ID: argus-phase-4-recovery-005
+ISSUED_AT: 2026-09-02T16:51:00Z
+TARGET_COMMIT: c0b774f5deb9898bb6e1cfa4f364a1b458242610
+AUTHORIZED_ACTION: PHASE_4_COMPLETE_TWO_SEALED_ASSERTIONS
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
 ## Decision
 
-Disposition: FAIL_REMEDIATION_REQUIRED. Only the two assertion gaps below remain in COV-01. All 94 frozen parameter cases are now present. Their production paths, amount/error classifications, persisted field snapshots, fresh-engine reload, and repeated-call HTTP guard have meaningful coverage. Do not add new case families or rework production code.
+Resume Phase 4 immediately. The prior recovery-004 instruction is superseded only because the human-approved auditor-governance policy was committed on top of it. No product requirement has changed.
 
-F-01/F-02/F-03, P4-REC-01/04/05 and all previously closed Phase 4 production findings remain CLOSED. No production defect was demonstrated in this submission. Phase 5 remains blocked solely pending completion of the already-frozen test/evidence obligations. The user has delegated automatic safe recovery after a completed root-cause review; this ACTIVE instruction is that continuation, not another human-approval pause.
+All Phase 4 production fixes and all 94 previously frozen parameter cases remain CLOSED. Phase 5 remains blocked only until the two sealed assertions below are implemented and handed back for audit.
 
-## Pinned audit and evidence
+This instruction is the complete SEALED Acceptance Contract for this cycle. After implementation begins, the auditor may not add another blocking test, proof requirement, evidence obligation, or acceptance row. Any legitimate newly noticed issue outside ASSERT-01/ASSERT-02 must be handled under orchestration/AUDITOR_POLICY.md as NEXT_PHASE_CARRYFORWARD or HARDENING_BACKLOG unless it is a demonstrated emergency safety/integrity defect.
 
-Repo/branch: akeldgord/Quant, claude/argus-folder-setup-77ahrk.
-Audit target: 410a6c0136a5930dedaa3c03615e08aa63312032.
-Implementation parent: 75e9ece07aa475e1ffc2413d110f5f0ee88f3134.
-Authorizing instruction: argus-phase-4-recovery-003 at cc6bfd4ecdbc241fcff7334ba43d7d839b00e2aa; its target was 87e8ba1b5a7969e5afe4a7e1e6c44eb392365f16.
-Handoff: handoff-0030-phase-4-recovery-3, exact matching instruction ID.
-Checkpoint/bundle: orchestration/checkpoints/phase_4_recovery_3.md and orchestration/bundles/phase_4_recovery_3.txt.
-MASTER_SPEC v2.0 SHA256: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011, unchanged.
+## SEALED ACCEPTANCE CONTRACT
 
-Independent audit results at the pinned target:
+### ASSERT-01 — unchanged scoped probe/position counts
 
-- Git parent chain, both terminal instruction trailers, clean worktree and authorized 12-file diff verified. src/, migrations/, config, MASTER_SPEC and PROTOCOL have no changes. Replay script changes only its evidence destination. Previous checkpoints/bundles/evidence are untouched.
-- `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py --collect-only -q`: 94 collected. Source parameter sets independently confirm TC-01=8, TC-02=26, TC-03=8, TC-04=44, TC-05=8. This closes the missing-case inventory gap; do not expand it.
-- Source inspection confirms real JupiterClient/MockTransport, production common executor, actual persisted probe reload using a fresh engine, open client across repeat, expected outcomes derived from the frozen constants, and meaningful same-field/one-HTTP assertions.
-- `uv run pytest tests/unit tests/golden tests/phase_1_5 -q`: 712 passed.
-- Fresh integration run stopped at fixture setup because the auditor environment lacks ARGUS_DB_ADMIN_PASSWORD. This is an environmental limitation, not a test-body failure; no credentials requested or entered. Builder raw evidence reports 162 combined tests passed, 128 focused regression tests passed and 1073 full-suite tests passed with 42 warnings. Those are builder results, not an independent PostgreSQL execution claim.
-- Both final production checkpoint/bundle validators returned `(True, '')`, and exact complete checkpoint embedding passed independently.
-- Ruff check passed; formatter 263 files already formatted; mypy 128 source files passed; alembic single head 0021; authentic fixtures 12/12; Python diff whitespace check clean. No new source regression found.
+Classification if failed: SPEC_BLOCKING.
 
-### Traceability / claim review
+Required behavior/evidence:
+- In the existing Phase 4 recovery matrix helper, observe test-owned scoped database counts before first execution, after the committed terminal result, and after fresh-session repeat.
+- For TC-01, TC-03, and TC-04 non-success cases, the same scoped ShadowQuoteProbe count and seeded-wallet ShadowPosition count must remain unchanged across all three observations.
+- Preserve the existing selected-row snapshot equality and exactly-one-provider-call/replay behavior.
+- Do not apply this no-new-position oracle to TC-02 success cases.
+- No production-code/schema change is authorized for this row.
 
-| Frozen obligation | Independent result |
-|---|---|
-| TC-01/02/03/04/05 input/status/kind inventory | PASS: all 94 nodes and values are present; accepted common-seam exemptions retained. |
-| TC-01/03/04 persisted identity/clocks/evidence and no second HTTP | PASS for the fields actually checked by `_snapshot` and `_process_and_reprocess`; no claim that every model column was compared. |
-| TC-01/03/04 unchanged scoped probe/position counts | FAIL: shared helper never queries probe count; TC-03/04 never query position count. TC-01's existing position count check is accepted. |
-| TC-04 unsafe evidence rejection | PASS: exact status-only failure_evidence and injected-value absence are checked across all 44 cases. |
-| TC-04 captured-log absence | FAIL: no caplog/log-capture assertion exists. Evidence serialization is not a log test. No actual production log leak is alleged. |
-| TC-06 artifact format, embedding, identity, scope | PASS; old evidence preserved. Entire-matrix PASS claim is narrower than stated because of the two missing assertions. |
-| Full PostgreSQL execution in auditor environment | DEFERRED environmental check; builder logs inspected, local setup unavailable. This does not excuse missing assertions. |
+Exact implementation/test method:
+- Reuse tests/integration/test_phase4_recovery_3_matrix.py and its existing 94-case inventory.
+- Pass the seeded wallet id into the shared process/reprocess helper for TC-01/03/04.
+- For entry probes, count ShadowQuoteProbe rows scoped by shadow_intent_id and ShadowPosition rows scoped by seeded wallet.
+- For reverse probes, count ShadowQuoteProbe rows scoped by shadow_position_id and ShadowPosition rows scoped by seeded wallet.
+- Use persisted fixture state for initial expected counts; do not use unrelated table-wide counts.
 
-Adversarial review is bounded to the frozen coverage: malformed amounts, boundaries, safe/unsafe code shapes and HTTP precedence are covered; reload and duplicate dispatch are covered; duplicate-row/fill and log-output assertions are not. Concurrency, earlier temporal/migration/stream behavior and real-provider environmental checks are unchanged and not reopened. Raw-output whitespace is HARDENING_BACKLOG and never blocks.
+PASS condition:
+- The existing 94-case inventory remains unchanged.
+- Every applicable TC-01/03/04 case executes without assertion failure.
+- before_counts == after_first_counts == after_repeat_counts for both scoped counts.
+- Existing selected-row persistence/reload assertions still pass.
+- Provider transport call count remains exactly one after repeat.
 
-## COV-01 remaining scope — SPEC_BLOCKING
+### ASSERT-02 — captured-log absence for unsafe TC-04 values
 
-Source: recovery-003 TC-01 requires unchanged row/position counts; TC-03 and TC-04 explicitly inherit TC-01's count assertions; TC-04 explicitly requires absence from captured logs. These requirements were frozen before the 94 tests were written. There is no new payload, safety threshold or product rule.
+Classification if failed: SPEC_BLOCKING.
 
-Observed source at target, tests/integration/test_phase4_recovery_3_matrix.py:
+Required behavior/evidence:
+- Add real pytest caplog or equivalent logging capture around both executor calls for all existing TC-04 cases.
+- Capture DEBUG and above through first execution, reload, and repeat.
+- Assert existing inert unsafe sentinels and nonempty unsafe string code values, including escaped control/newline representations where applicable, are absent from captured formatted log messages/arguments.
+- Keep exact status-only failure_evidence assertions and reload/idempotency behavior.
+- Do not require the entire log to be empty; safe method/status/timing metadata may exist.
+- No real credential may be injected, read, logged, or disclosed.
+- No production logger change is authorized unless the frozen test demonstrates an actual failure; if current production passes, make test/evidence changes only.
 
-- `_process_and_reprocess` (around lines 176-234) compares `_snapshot` dictionaries and `handler.calls` only. `_snapshot` does not count rows. Neither function can detect an extra probe or position that leaves the selected probe unchanged.
-- `test_tc03_status_and_code_mapping_worker_and_reload_idempotent` discards `_wallet_id` and checks only outcome/evidence after the shared helper.
-- `test_tc04_unsafe_provider_code_never_persisted_worker_and_reload_idempotent` does the same and checks `str(snapshot_after['failure_evidence'])`. It does not capture or inspect logs. No `caplog` or other logging capture exists in this module.
+Exact implementation/test method:
+- Reuse tests/integration/test_phase4_recovery_3_matrix.py and its existing 44 TC-04 cases.
+- Use only the already-existing fake literals/unsafe-code fixtures.
+- For empty-string/non-string unsafe values, retain exact evidence assertions and avoid generic substring checks that would create false positives.
 
-Required change: complete these assertions in the EXISTING shared test helper and TC-04. Keep the 94-case inventory; do not write another parallel matrix or change src/.
+PASS condition:
+- All existing TC-04 cases pass with real captured-log assertions.
+- Injected unsafe fake values are absent from formatted captured logs.
+- Existing persisted evidence, classification, fresh-session reload, and one-provider-call assertions continue to pass.
 
-## Completed root-cause review
+## Required regression/evidence checks
 
-1. Gate clarity: the assertions were explicit, but the architect's prior process correction emphasized Cartesian case counts more than assertion completeness. Correct that process by using the two assertion rows below and checking the helper body, not issuing a longer case list.
-2. Implementation failure: the builder added all input combinations but reused a helper that observes only one row; it also substituted evidence serialization for logging capture. The problem is test-oracle completeness, not a newly demonstrated production defect.
-3. Goalposts: no new requirement. Count and captured-log checks are verbatim obligations of the previously frozen TC rows. No optional fuzzing, full-model-column equality, new concurrency test or Phase 5 condition is added.
-4. Why green tests missed it: extra rows and log output are outside the current assertions. The correction is to observe those two outputs explicitly across the existing cases. New assertions may pass immediately against current correct production code; never manufacture a failing product test or patch production to create red/green evidence.
+These are part of the sealed contract; no additional blocking checks may be invented later:
 
-Attempt history remains visible: initial Phase 4 build, remediation-001, remediation-002, failure-review-001, recovery-001, recovery-review-001, recovery-002, recovery-003, this reviewed recovery-004. This is not a reset of the one-ordinary-remediation limit.
+1. `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py --collect-only -q` -> exactly the same 94-case inventory.
+2. `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py tests/integration/test_phase4_recovery_2.py tests/unit/test_phase4_recovery_2_contract.py -q` -> PASS, subject only to already-documented environmental setup limitations.
+3. Existing affected Phase 4 integration regression group from recovery-004 -> PASS, subject only to already-documented environmental setup limitations.
+4. `uv run pytest -q` -> PASS, subject only to already-documented environmental setup limitations.
+5. `uv run ruff check .` -> PASS.
+6. `uv run ruff format --check .` -> PASS.
+7. `uv run mypy src` -> PASS.
+8. `uv run alembic heads` -> exactly one head.
+9. `uv run argus fixtures validate-real-chain` -> authentic fixture validation PASS.
+10. Production checkpoint validator -> `(True, '')`.
+11. Production bundle validator -> `(True, '')` and bundle contains exact final checkpoint bytes.
+12. Final working tree clean; every Claude commit has the exact terminal trailer required below.
 
-Seven-part no-moving-goalposts justification: (1) source is recovery-003 at cc6bfd4..., TC-01/03/04; (2) failure is directly visible in the exact shared helper/test sources above; (3) existing assertions and parameters remain unchanged in meaning; (4) another bounded pass is needed only to complete mandatory test oracles; (5) earlier green suites could not observe extra rows/logs; (6) scope is two shared test assertions and new evidence, production closed; (7) the completed review plus the user's continuing safe-build authority permits immediate recovery, not live/paid/credential/destructive/strategy actions.
+Existing environmental deferrals remain exactly as already recorded. Lack of auditor credentials is not permission to request, enter, or disclose credentials and is not a new failure if the corresponding builder evidence is truthful and the limitation remains documented.
 
-## Frozen completion matrix and exact implementation directions
+## Builder self-audit before handoff
 
-Use the existing module tests/integration/test_phase4_recovery_3_matrix.py. Keep its 94 parameter cases and reuse its real adapter, common executor and fresh-session helper.
+Before READY_FOR_AUDIT, Claude must produce a two-row acceptance matrix containing ASSERT-01 and ASSERT-02 with:
+- production/test evidence location;
+- exact test/check run;
+- actual result;
+- pass condition;
+- PASS/FAIL.
 
-| ID | Required implementation and pass condition |
-|---|---|
-| ASSERT-01 / TC-01,03,04 | Extend the shared helper to observe scoped database counts before first execution, after its committed result, and after fresh-session repeat. Compare the SAME scope at all three points. For every failure case, probe-row count and wallet-position count must stay unchanged, in addition to existing selected-row snapshot equality and exactly one transport call. The TC-01/03/04 cases all return non-success; do not apply a no-new-position oracle to TC-02 success. |
-| ASSERT-02 / TC-04 | Add pytest caplog (or equivalent actual logging capture) around both executor calls for all 44 existing TC-04 cases. Capture DEBUG and above. Assert injected fake sibling/header values, nonempty unsafe code strings and their escaped representations are absent from captured formatted log messages/arguments. Retain exact status-only evidence and fresh-reload checks. Do not assert that the entire log is empty: safe HTTP method/status/timing messages are allowed. |
+Both rows must be PASS. A matching label or aggregate green count without the actual assertions is insufficient because that proof requirement is frozen here before implementation.
 
-ASSERT-01 implementation order:
+Do not add more case families. Do not expand fuzzing. Do not redesign production code. Do not touch previously closed production findings unless one of these two frozen tests directly demonstrates a regression.
 
-1. Pass the seeded wallet_id from TC-01/03/04 into `_process_and_reprocess`; stop discarding it in TC-03/04. Read the selected persisted probe's shadow_intent_id or shadow_position_id, and verify it belongs to that seeded wallet before taking counts. This gives the count queries the correct test-owned scope. Process the same probe_id as today; do not broadly process unrelated due work.
-2. For an entry probe, count ShadowQuoteProbe rows with that shadow_intent_id and count ShadowPosition rows for the seeded wallet. For a reverse probe, count ShadowQuoteProbe rows with that shadow_position_id and count ShadowPosition rows for the seeded wallet. Use `select(func.count())` on these scopes; never a table-wide production count. The expected initial counts come from persisted fixture state, not hard-coded totals for unrelated rows.
-3. Capture the two counts before `_execute_and_record_probe`. In fresh sessions, capture after the first execution and after repeat. Assert `before_counts == after_first_counts == after_repeat_counts`. Preserve the existing real first execution, snapshot checks, fresh engine and one-HTTP assertion. Retain the required non-null ordered request/response/terminal clocks on terminal non-success cases; putting the already-existing TC-01 clock assertion in the common helper is acceptable.
-4. Do not delete rows, reset counters or clean up between snapshots. Existing cleanup runs only in the test's finally block after assertions. No schema/product changes.
+## Allowed files
 
-ASSERT-02 implementation order:
+- tests/integration/test_phase4_recovery_3_matrix.py
+- new orchestration/checkpoints/phase_4_recovery_5.md
+- new orchestration/bundles/phase_4_recovery_5.txt
+- new orchestration/phase_4_recovery_5/evidence/ as needed for fresh evidence
+- docs/BUILD_STATE.md only as protocol permits
+- append-only docs/DECISION_LOG.md only as protocol permits
+- orchestration/AGENT_HANDOFF.md
+- scripts/argus_phase4_replay_demo.py only if needed to redirect evidence output to the new recovery-5 evidence directory before running commands that generate evidence; no other replay-script change
 
-1. Add the caplog fixture to TC-04 and enable DEBUG capture before calling the shared helper. Keep capture active through first execution, reload and repeat; clear before the case, not before assertions. No production logger change is needed.
-2. Inspect actual captured records/messages, including formatted arguments, for the existing inert test sentinels (`sk-live-should-never-be-stored`, `apiKey=SECRET`, `trace-should-not-be-stored-either`, `should-never-be-stored`, `AUDIT_ONLY_FAKE_SECRET`) and nonempty string unsafe-code values, including JSON-escaped newline/control forms. Empty string is NOT an absence sentinel; skip that literal when testing substring absence. For non-string unsafe values, retain the exact status-only evidence assertion rather than treating generic strings like `True` or `123` as secrets in unrelated safe log metadata.
-3. This remains the existing bounded identifier-format policy, not a new arbitrary-secret detector. Use only fake literals already in fixtures. Never inject a real credential or collect/disclose real provider headers.
+Do not modify MASTER_SPEC.md, orchestration/AUDITOR_POLICY.md, orchestration/PROTOCOL.md, watcher code, src/, migrations/, config, historical checkpoint/bundle/evidence files, scores, thresholds, or live/safety authority.
 
-Self-audit before handoff: point ASSERT-01 to the actual SQL count queries and three-way assertions, and ASSERT-02 to actual logging-capture assertions. A matching row label or test count is not sufficient. Do not claim byte-for-byte equality of the complete model when comparing only the named frozen snapshot fields.
+## Handoff contract
 
-## Allowed scope and evidence
+Create new checkpoint/bundle artifacts; never overwrite historical evidence. The checkpoint must include the standard markers and required project/status/commit/commands/results/acceptance/deviations/debt/security/STOP sections. Explicitly state that ASSERT-01 and ASSERT-02 are the complete sealed blocking contract for this cycle.
 
-Allowed files: the existing test module above; new orchestration/checkpoints/phase_4_recovery_4.md; new orchestration/bundles/phase_4_recovery_4.txt; new orchestration/phase_4_recovery_4/evidence/; docs/BUILD_STATE.md; append-only docs/DECISION_LOG.md; orchestration/AGENT_HANDOFF.md. Before regression commands invoke replay generation, change ONLY scripts/argus_phase4_replay_demo.py EVIDENCE_DIR to the new phase_4_recovery_4/evidence directory. No other replay-script change. Preserve every prior checkpoint, bundle and evidence byte. Do not run first and restore overwritten historical evidence afterward.
+AGENT_HANDOFF.md must contain exactly:
+LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-4-recovery-005
+CURRENT_PHASE: 4
+WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
+WORKING_TREE: clean
+and valid fresh checkpoint/bundle paths for this run.
 
-Keep src/, migrations/, config, MASTER_SPEC.md, PROTOCOL.md, watcher scripts and old test assertions unchanged except for the specific shared-helper/capture completion above. Do not add further production repairs, alter scores, relax thresholds, enter/disclose credentials, use paid/new providers, arm live execution, access signing keys or mutate persistent evidence. Existing disposable test setup only.
+Every Claude commit for this instruction must end with exactly:
+ARGUS-INSTRUCTION-ID: argus-phase-4-recovery-005
+and nothing after it.
 
-Commands:
+STOP after committing and pushing implementation/evidence/handoff. Do not begin Phase 5 and do not self-approve Phase 4.
 
-- `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py --collect-only -q` (same 94-case inventory).
-- `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py tests/integration/test_phase4_recovery_2.py tests/unit/test_phase4_recovery_2_contract.py -q`.
-- `uv run pytest tests/integration/test_shadow_phase4_remediation_observation.py tests/integration/test_shadow_quote_jobs_provider_remediation.py tests/integration/test_shadow_phase4.py tests/integration/test_shadow_phase4_concurrency_remediation.py tests/integration/test_migrations.py tests/integration/test_daily_report_remediation.py tests/integration/test_replay_demo_isolation.py -q`.
-- `uv run pytest -q`; `uv run ruff check .`; `uv run ruff format --check .`; `uv run mypy src`; `uv run alembic heads`; `uv run argus fixtures validate-real-chain`.
-- Existing secret-scan procedure and final git diff/status/trailer checks. Report legitimate environment limits distinctly; raw-evidence whitespace remains nonblocking.
+## Mandatory next-audit behavior
 
-The new checkpoint must contain exact existing first/last markers, PROJECT: ARGUS, phase 4, one STATUS and one actual full GIT_COMMIT from this run, Commands actually run, Test results, Acceptance criteria, Deviations, Known bugs/debt, Security state and Next action/STOP. Map ASSERT-01/02 to the actual assertions and inherited TC rows; carry accepted rows forward without claiming new independent runs. Preserve existing environmental deferrals: PG17_COMPOSE_VALIDATION, LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION, BQ_PUBLIC_DATASET_ACCESS. None permits live use.
+The independent auditor must read orchestration/AUDITOR_POLICY.md first and audit only ASSERT-01, ASSERT-02, and the twelve frozen regression/evidence checks above. If all pass, Phase 4 passes. The auditor must not discover another ordinary blocking test afterward.
 
-Bundle complete final checkpoint bytes with raw command output and identity/diff. AFTER final generation/hash-fill, assert both existing production validators return `(True, '')` and complete checkpoint text occurs in bundle. Do not edit validators or historical evidence.
+If a new real issue is noticed that is not a failure of this sealed contract, record it as NEXT_PHASE_CARRYFORWARD and roll it into the next phase acceptance review. Only a concrete emergency safety/integrity defect may interrupt this rule.
 
-Every Claude commit must end with exactly `ARGUS-INSTRUCTION-ID: argus-phase-4-recovery-004` and nothing after it. New handoff ID; LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-4-recovery-004; CURRENT_PHASE: 4; WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION; WORKING_TREE: clean; exact new checkpoint/bundle paths; actual commit from this run. Keep approved phase 3 and approved commit efb8837f01ab6aaa451c6ee3263e4effa389c4e6 until independent approval. Verify this instruction is one instruction-only commit whose direct parent equals TARGET_COMMIT, synchronize first, commit/push, verify remote and STOP. No self-approval or Phase 5 work.
-
-Next orchestrator audit is limited to ASSERT-01/02 and directly affected regressions. Once these frozen obligations are proven, stop digging for optional test improvements. Approve Phase 4 with the existing environmental limitations and freeze/authorize immediate Phase 5 if the master gate permits. Any further legitimate failure requires a new actual root-cause review, not blind repetition; supported safe recovery follows automatically within delegated authority. Human input is reserved for real authority/strategy decisions. Never bypass tooling denials or claim the builder has started merely because an instruction was published.
+On Phase 4 PASS, approve Phase 4 and freeze/authorize the immediate next phase in the same orchestration cycle unless MASTER_SPEC or a genuine human-authority boundary requires input.
