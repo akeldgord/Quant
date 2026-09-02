@@ -54,15 +54,39 @@ def decimal_median(values: list[Decimal]) -> Decimal:
 
 
 @dataclass(frozen=True)
+class CohortKey:
+    """The exact dimensions the sealed contract requires to hold constant
+    across every point compared for a curve/half-life computation: "SAME
+    event cohort, notional, quote unit, executable horizon and evidence
+    class." Two observations/points with a different ``CohortKey`` are
+    never comparable, however many events either one aggregates."""
+
+    notional_raw: int
+    quote_mint: str
+    horizon_label: str
+    evidence_class: str
+
+
+class IncompatibleCohortError(ValueError):
+    """Raised when :func:`build_delay_curve` is given observations whose
+    notional/quote-mint/horizon/evidence-class are not all identical --
+    silently building a curve across incompatible cohorts is exactly the
+    defect this exists to catch (F5-02)."""
+
+
+@dataclass(frozen=True)
 class DelayObservation:
     """One event's realized return fraction at one entry-delay target,
-    already restricted by the caller to one comparable cohort (same
-    notional, quote mint, holding horizon, evidence class)."""
+    tagged with its own exact cohort dimensions (notional/quote mint/
+    holding horizon/evidence class) -- :func:`build_delay_curve` verifies
+    every observation shares the SAME cohort rather than trusting the
+    caller silently."""
 
     event_id: str
     target_label: str
     target_seconds: int
     return_fraction: Decimal
+    cohort: CohortKey
 
 
 @dataclass(frozen=True)
@@ -72,6 +96,7 @@ class DelayPoint:
     median_return_fraction: Decimal
     n: int
     event_ids: tuple[str, ...]
+    cohort: CohortKey
 
 
 def build_delay_curve(observations: list[DelayObservation]) -> list[DelayPoint]:
@@ -79,7 +104,23 @@ def build_delay_curve(observations: list[DelayObservation]) -> list[DelayPoint]:
     per group -- distinct-event counts, never probe/observation counts
     (six probes from one event is not six independent trades; the caller
     must have already reduced to at most one observation per
-    (event_id, target_label))."""
+    (event_id, target_label)).
+
+    Every observation passed in must share the exact same
+    :class:`CohortKey` (notional/quote mint/horizon/evidence class) --
+    raises :class:`IncompatibleCohortError` otherwise, rather than
+    silently building a curve that mixes incompatible evidence."""
+    if not observations:
+        return []
+    cohorts = {obs.cohort for obs in observations}
+    if len(cohorts) > 1:
+        raise IncompatibleCohortError(
+            f"build_delay_curve received observations from {len(cohorts)} different "
+            f"cohorts (notional/quote-mint/horizon/evidence-class) -- never comparable: "
+            f"{sorted(cohorts, key=str)}"
+        )
+    cohort = observations[0].cohort
+
     by_label: dict[str, list[DelayObservation]] = {}
     for obs in observations:
         by_label.setdefault(obs.target_label, []).append(obs)
@@ -96,6 +137,7 @@ def build_delay_curve(observations: list[DelayObservation]) -> list[DelayPoint]:
                 median_return_fraction=median,
                 n=len(distinct_events),
                 event_ids=tuple(sorted(distinct_events)),
+                cohort=cohort,
             )
         )
     return sorted(points, key=lambda p: p.target_seconds)
@@ -129,11 +171,27 @@ def compute_half_life(points: list[DelayPoint]) -> HalfLifeResult:
     broken by earliest delay); half-life is the elapsed time from the
     peak to the first LATER observed point whose median return fraction
     is <= half the peak's value (that crossing point's own absolute delay
-    from first_seen_at is reported alongside the elapsed half-life)."""
+    from first_seen_at is reported alongside the elapsed half-life).
+
+    Every point must share the exact same :class:`CohortKey` -- points
+    built from a different notional, quote mint, executable horizon or
+    evidence class are never comparable, however many events either
+    aggregates (F5-02: two single-event points at different delays with
+    different cohort dimensions must not silently produce a curve)."""
     if len(points) < 2:
         return HalfLifeResult(
             outcome="INSUFFICIENT_COMPARABLE_EVIDENCE",
             reason="fewer than 2 comparable delay points in this cohort",
+        )
+
+    cohorts = {p.cohort for p in points}
+    if len(cohorts) > 1:
+        return HalfLifeResult(
+            outcome="INSUFFICIENT_COMPARABLE_EVIDENCE",
+            reason=(
+                f"points span {len(cohorts)} different cohorts (notional/quote-mint/"
+                "horizon/evidence-class) -- never comparable"
+            ),
         )
 
     ordered = sorted(points, key=lambda p: p.target_seconds)

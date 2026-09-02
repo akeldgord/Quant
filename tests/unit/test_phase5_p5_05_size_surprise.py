@@ -99,6 +99,21 @@ def test_evidenced_portfolio_valuation_produces_relative_fraction() -> None:
     assert result.portfolio_relative_unavailable_reason is None
 
 
+def test_current_size_none_never_substituted_with_zero_f5_01() -> None:
+    """F5-01 remediation: a genuinely missing current-opportunity size
+    must never be silently treated as zero -- z/component/portfolio
+    fraction all stay explicitly unavailable, never a fabricated signal."""
+    data = SizeSurpriseInput(prior_sizes=_sizes(1, 2, 3, 4, 5), current_size=None)
+    result = compute_size_surprise(data)
+    assert result.z is None
+    assert result.component is None
+    assert "no current-opportunity size evidenced" in result.unavailable_reason
+    assert result.portfolio_relative_size_fraction is None
+    # descriptive baseline stats remain available even with no current size
+    assert result.median == Decimal(3)
+    assert result.mad == Decimal(1)
+
+
 def test_recent_median_uses_most_recent_window() -> None:
     # 25 ascending values; recent_window default 20 -> excludes first 5.
     sizes = _sizes(*range(1, 26))

@@ -12,9 +12,9 @@ statistical model" caution) -- real live authorization is unconditionally
 false in this phase regardless of either score (P5-14).
 
 Same append-only, stable-identity, never-overwritten convention as
-``wallet_copyability_snapshots`` (see that module's docstring) --
-``prospective_event_id`` + ``as_of`` + ``algorithm_version`` +
-``evidence_manifest_digest``.
+``wallet_copyability_snapshots`` (see that module's docstring, F5-05
+remediation) -- ``prospective_event_id`` + ``as_of`` + ``algorithm_version``
++ ``evidence_manifest_digest`` + ``config_hash``.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import (
     Boolean,
@@ -38,9 +39,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from argus.db.base import Base
 from argus.domain.identity_mixin import FullIdentityMixin, full_identity_check_constraints
 
-GATE_PASS = "PASS"
-GATE_FAIL = "FAIL"
-GATE_UNKNOWN = "UNKNOWN"
+GATE_PASS: Literal["PASS"] = "PASS"
+GATE_FAIL: Literal["FAIL"] = "FAIL"
+GATE_UNKNOWN: Literal["UNKNOWN"] = "UNKNOWN"
 _GATE_STATUS_SQL = "'PASS', 'FAIL', 'UNKNOWN'"
 
 # The six master hard gates, section 53, evaluated before any eligible
@@ -72,6 +73,7 @@ class OpportunityReadinessSnapshot(FullIdentityMixin, Base):
             "as_of",
             "algorithm_version",
             "evidence_manifest_digest",
+            "config_hash",
             name="uq_opportunity_readiness_identity",
         ),
         CheckConstraint(

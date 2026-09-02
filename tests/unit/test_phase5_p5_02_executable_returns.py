@@ -153,6 +153,27 @@ def test_mark_plus_500_percent_with_no_route_has_no_positive_executable_return()
     assert result.gross_return_pct is None
 
 
+def test_nan_denominator_never_raises_invalidoperation_f5_02() -> None:
+    """F5-02 (remediation audit): a genuinely nonfinite raw amount (a real
+    persisted Numeric column can carry NaN) must be caught BEFORE any
+    comparison operator runs against it -- comparing a NaN Decimal with
+    ``<=`` itself raises InvalidOperation under the default context, which
+    is the exact crash the audit reproduced."""
+    entry = EntryFill(QUOTE, TOKEN, Decimal("NaN"), 200)  # type: ignore[arg-type]
+    reverse = ReverseQuote(OUTCOME_SUCCESS, TOKEN, QUOTE, 200, 120)
+    result = compute_executable_return(entry, reverse)
+    assert result.status == "UNAVAILABLE"
+    assert "nonfinite" in result.unavailable_reason
+
+
+def test_nan_reverse_output_never_raises_invalidoperation_f5_02() -> None:
+    entry = _entry(100, 200)
+    reverse = ReverseQuote(OUTCOME_SUCCESS, TOKEN, QUOTE, 200, Decimal("NaN"))  # type: ignore[arg-type]
+    result = compute_executable_return(entry, reverse)
+    assert result.status == "UNAVAILABLE"
+    assert "nonfinite" in result.unavailable_reason
+
+
 def test_later_delay_entry_with_different_quantity_cannot_reuse_first_reverse_quote() -> None:
     """The schema itself enforces this (one ShadowPosition per intent, at
     the first successful entry probe) -- a second, differently-sized

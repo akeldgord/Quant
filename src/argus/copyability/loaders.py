@@ -1,12 +1,12 @@
 """Production, point-in-time-safe evidence loaders for Phase 5
-(``argus-phase-5-001``) -- the "real production loader, not hand-built
-feature objects" P5-01 requires. Every function here queries the existing
-Phase 1/3/4 tables directly (``swaps``, ``wallet_discovery_events``,
-``shadow_intents``/``shadow_positions``/``shadow_quote_probes``/
-``shadow_mark_outcomes``, ``prospective_events``) and applies the M1
-point-in-time cutoff and the M7 discovery-contamination firewall
-uniformly, so every Phase 5 mechanic sees the same honestly-filtered
-evidence.
+(``argus-phase-5-001``, remediated per ``argus-phase-5-remediation-001``)
+-- the "real production loader, not hand-built feature objects" P5-01
+requires. Every function here queries the existing Phase 1/3/4 tables
+directly (``swaps``, ``tokens``, ``wallet_discovery_events``,
+``prospective_events``, ``shadow_intents``/``shadow_positions``/
+``shadow_quote_probes``) and applies the M1 point-in-time cutoff and the
+M7 discovery-contamination firewall uniformly, so every Phase 5 mechanic
+sees the same honestly-filtered evidence.
 
 Every row emitted by these loaders from real tables is
 ``EVIDENCE_CLASS_AUTHENTIC_PROSPECTIVE`` -- Phase 4's own REPLAY isolation
@@ -17,41 +17,66 @@ pure M2-M6 functions without going through this module at all (M7's own
 filename/report-mode/later import" rule -- this module is the one place
 that label is ever assigned to real evidence, and it is never assigned to
 anything but genuine production rows).
+
+F5-01/F5-02/F5-03 remediation (``argus-phase-5-remediation-001``): the
+central evidence-assembly primitive is now :func:`load_wallet_opportunities`
+-- ONE row per :class:`~argus.domain.shadow_intents.ShadowIntent` (an
+"eligible terminal entry-event opportunity", including entry failures with
+no position at all), carrying the real ``first_seen_at`` from its
+:class:`~argus.domain.prospective_events.ProspectiveEvent`, every
+known-by-cutoff ``REVERSE_EXECUTABLE`` probe's real actual timings, and
+every timestamp (probe ``created_at``/``requested_at``/``responded_at``/
+``terminal_at``, not merely ``terminal_at``) individually bounded by the
+cutoff. This is the one place ``n``/``k``/coverage denominators, the
+delay curve's cohort tag, and the forward-information grid's exact-match
+elapsed-time discipline are all derived from the SAME real event
+population, rather than three independently-drifting approximations.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from argus.copyability.delay_curves import DelayObservation
+from argus.copyability.delay_curves import CohortKey, DelayObservation
 from argus.copyability.executable_returns import (
     EntryFill,
+    ExecutableReturnResult,
     ReverseQuote,
     compute_executable_return,
 )
 from argus.copyability.identity import (
+    EVIDENCE_CLASS_AUTHENTIC_PROSPECTIVE,
     REASON_DISCOVERY_CONTAMINATED,
     REASON_FUTURE_KNOWLEDGE,
     ExcludedSourceRef,
     SourceRef,
 )
+from argus.domain.prospective_events import ProspectiveEvent
+from argus.domain.shadow_intents import STATUS_CREATED, STATUS_FILLED, ShadowIntent
 from argus.domain.shadow_positions import ShadowPosition
 from argus.domain.shadow_quote_probes import (
     PROBE_KIND_REVERSE_EXECUTABLE,
     ShadowQuoteProbe,
 )
 from argus.domain.swaps import Swap
+from argus.domain.tokens import Token
 from argus.domain.wallet_discovery_events import WalletDiscoveryEvent
 
 PRIMARY_EXECUTABLE_HORIZON = "5m"
+LONG_HORIZON_LABELS = ("5m", "30m", "1h", "6h", "24h")
 SIZE_SURPRISE_WINDOW_DAYS = 90
 SIZE_SURPRISE_MAX_PRIOR = 100
+
+# Fixed nominal seconds for every executable/reverse horizon label this
+# project uses -- needed to compute an observation's actual elapsed time
+# from first_seen_at against the forward-information grid's fixed cells.
+_HORIZON_SECONDS = {"5m": 300, "30m": 1800, "1h": 3600, "6h": 21600, "24h": 86400}
 
 # Classifications the parser marks as unambiguous swaps (never
 # TRANSFER_IN/TRANSFER_OUT/TOKEN_CREATE/LP_ACTION/UNKNOWN) -- the same
@@ -87,6 +112,35 @@ async def load_contamination_firewall(
     )
 
 
+async def resolve_token_ids_by_mint(session: AsyncSession, mints: set[str]) -> dict[str, uuid.UUID]:
+    """F5-01: real persisted ``tokens`` lookup -- the one place a mint
+    string is ever resolved to a real ``token_id`` for firewall
+    exclusion, replacing the previous ``token_id_by_mint={}`` stub that
+    made the discovery firewall structurally unable to exclude prior
+    buys by output mint."""
+    if not mints:
+        return {}
+    rows = (await session.execute(select(Token).where(Token.mint.in_(mints)))).scalars().all()
+    return {row.mint: row.token_id for row in rows}
+
+
+def _probe_known_by_cutoff(probe: ShadowQuoteProbe, cutoff: datetime) -> bool:
+    """F5-01: a probe is usable evidence as-of ``cutoff`` only if it is
+    genuinely terminal (``terminal_at`` set) AND every one of its own
+    real timestamps (``created_at``, ``requested_at``, ``responded_at``,
+    ``terminal_at``) -- not merely ``terminal_at`` -- is <= cutoff. A
+    probe recorded/requested/responded one instant after cutoff must
+    never be included even if its ``terminal_at`` happens to satisfy the
+    bound alone."""
+    if probe.terminal_at is None or probe.terminal_at > cutoff:
+        return False
+    if probe.created_at > cutoff:
+        return False
+    if probe.requested_at is not None and probe.requested_at > cutoff:
+        return False
+    return not (probe.responded_at is not None and probe.responded_at > cutoff)
+
+
 @dataclass(frozen=True)
 class PriorBuyLoadResult:
     sizes: list[Decimal]
@@ -102,14 +156,18 @@ async def load_prior_buy_sizes(
     signal_at: datetime,
     cutoff: datetime,
     firewall: ContaminationFirewall,
-    token_id_by_mint: dict[str, uuid.UUID | None],
+    token_id_by_mint: dict[str, uuid.UUID] | None = None,
     current_swap_id: uuid.UUID | None = None,
 ) -> PriorBuyLoadResult:
     """M4's baseline: the wallet's own last <=100 known positive buy
     notionals in ``quote_mint``, strictly during the 90 days before
     ``signal_at``, excluding the current buy, anything not yet known by
-    ``cutoff`` (``first_seen_at > cutoff``), and anything whose acquired
-    token is discovery-contaminated for this wallet (M7)."""
+    ``cutoff`` (bounding BOTH ``first_seen_at`` and ``created_at`` --
+    F5-01: a buy first seen before cutoff but only recorded/backdated
+    after it must still be excluded), duplicates (deduplicated by the
+    underlying chain ``event_id``, not the possibly-reparsed ``swap_id``
+    -- F5-01), and anything whose acquired token is discovery-
+    contaminated for this wallet (M7)."""
     window_start = signal_at - timedelta(days=SIZE_SURPRISE_WINDOW_DAYS)
     rows = (
         (
@@ -133,18 +191,26 @@ async def load_prior_buy_sizes(
         .all()
     )
 
+    if token_id_by_mint is None:
+        token_id_by_mint = await resolve_token_ids_by_mint(
+            session, {row.output_mint for row in rows if row.output_mint}
+        )
+
     contributing: list[SourceRef] = []
     excluded: list[ExcludedSourceRef] = []
     sizes: list[Decimal] = []
-    seen_swap_ids: set[uuid.UUID] = set()
+    seen_event_ids: set[uuid.UUID] = set()
     for row in rows:
         ref = SourceRef("swap", str(row.swap_id))
         if row.swap_id == current_swap_id:
             continue  # the current buy itself, excluded structurally (not a "prior" buy)
-        if row.swap_id in seen_swap_ids:
+        if row.event_id in seen_event_ids:
             excluded.append(ExcludedSourceRef(ref, "DUPLICATE_EVENT"))
             continue
         if row.first_seen_at is None or row.first_seen_at > cutoff:
+            excluded.append(ExcludedSourceRef(ref, REASON_FUTURE_KNOWLEDGE))
+            continue
+        if row.created_at is None or row.created_at > cutoff:
             excluded.append(ExcludedSourceRef(ref, REASON_FUTURE_KNOWLEDGE))
             continue
         token_id = token_id_by_mint.get(row.output_mint) if row.output_mint else None
@@ -154,7 +220,7 @@ async def load_prior_buy_sizes(
         if row.input_amount_ui is None:
             excluded.append(ExcludedSourceRef(ref, "MISSING_UI_AMOUNT"))
             continue
-        seen_swap_ids.add(row.swap_id)
+        seen_event_ids.add(row.event_id)
         contributing.append(ref)
         sizes.append(row.input_amount_ui)
 
@@ -167,111 +233,43 @@ async def load_prior_buy_sizes(
 
 
 @dataclass(frozen=True)
-class EventDelayObservation:
-    """One event's realized primary-horizon executable return at whatever
-    entry-delay label its single ShadowPosition actually filled at (the
-    "important current data limitation" -- exactly one ShadowPosition per
-    intent, at the first successful entry probe -- means the delay curve
-    is built cross-sectionally across events, never within one event)."""
+class OpportunityReverseOutcome:
+    """One known-by-cutoff ``REVERSE_EXECUTABLE`` probe's real result for
+    one opportunity, at one horizon label."""
 
-    shadow_position_id: uuid.UUID
-    token_id: uuid.UUID | None
+    probe_id: uuid.UUID
     target_label: str
-    target_seconds: int
-    executable_return_fraction: Decimal | None
-    status: str
+    raw_outcome: str
+    result: ExecutableReturnResult
+    actual_elapsed_seconds_from_first_seen: Decimal | None
 
 
 @dataclass(frozen=True)
-class WalletShadowEvidence:
-    delay_observations: list[EventDelayObservation]
+class WalletOpportunity:
+    """One "eligible terminal entry-event opportunity" (F5-03's own
+    phrase) -- one row per :class:`ShadowIntent` known by cutoff, whether
+    or not its entry ultimately filled. An entry failure (``NO_FILL``)
+    carries no position and an empty ``reverse_outcomes`` -- it still
+    counts toward M5's coverage denominator, per F5-03's correction."""
+
+    shadow_intent_id: uuid.UUID
+    token_id: uuid.UUID | None
+    first_seen_at: datetime
+    entry_status: str
+    shadow_position_id: uuid.UUID | None
+    entry_target_label: str | None
+    entry_target_seconds: int | None
+    entry_fill: EntryFill | None
+    entry_price_impact_pct: Decimal | None
+    reverse_outcomes: dict[str, OpportunityReverseOutcome] = field(default_factory=dict)
+    evidence_class: str = EVIDENCE_CLASS_AUTHENTIC_PROSPECTIVE
+
+
+@dataclass(frozen=True)
+class WalletOpportunitiesResult:
+    opportunities: list[WalletOpportunity]
     contributing: list[SourceRef]
     excluded: list[ExcludedSourceRef]
-
-
-async def load_wallet_shadow_positions(
-    session: AsyncSession,
-    *,
-    wallet_id: uuid.UUID,
-    cutoff: datetime,
-    firewall: ContaminationFirewall,
-    horizon_label: str = PRIMARY_EXECUTABLE_HORIZON,
-) -> WalletShadowEvidence:
-    """Loads every known-by-``cutoff`` ``ShadowPosition`` for this wallet
-    plus its ``REVERSE_EXECUTABLE`` probe at ``horizon_label``, and
-    computes the resulting executable return via M2 -- the single primary
-    data path every Phase 5 mechanic that needs an executable-return
-    observation shares."""
-    positions = (
-        (
-            await session.execute(
-                select(ShadowPosition).where(
-                    ShadowPosition.wallet_id == wallet_id,
-                    ShadowPosition.created_at <= cutoff,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    contributing: list[SourceRef] = []
-    excluded: list[ExcludedSourceRef] = []
-    observations: list[EventDelayObservation] = []
-
-    for position in positions:
-        pos_ref = SourceRef("shadow_position", str(position.shadow_position_id))
-        if firewall.is_contaminated(position.token_id):
-            excluded.append(ExcludedSourceRef(pos_ref, REASON_DISCOVERY_CONTAMINATED))
-            continue
-
-        probe = (
-            await session.execute(
-                select(ShadowQuoteProbe).where(
-                    ShadowQuoteProbe.shadow_position_id == position.shadow_position_id,
-                    ShadowQuoteProbe.probe_kind == PROBE_KIND_REVERSE_EXECUTABLE,
-                    ShadowQuoteProbe.target_label == horizon_label,
-                )
-            )
-        ).scalar_one_or_none()
-
-        if probe is None or probe.terminal_at is None or probe.terminal_at > cutoff:
-            excluded.append(ExcludedSourceRef(pos_ref, "REVERSE_QUOTE_NOT_YET_TERMINAL_BY_CUTOFF"))
-            continue
-
-        contributing.append(pos_ref)
-        contributing.append(SourceRef("shadow_quote_probe", str(probe.probe_id)))
-
-        entry = EntryFill(
-            input_mint=position.input_mint,
-            output_mint=position.output_mint,
-            input_amount_raw=position.entry_input_amount_raw,
-            output_amount_raw=position.entry_output_amount_raw,
-        )
-        reverse = ReverseQuote(
-            outcome=probe.outcome,
-            input_mint=probe.input_mint,
-            output_mint=probe.output_mint,
-            input_amount_raw=probe.notional_input_amount_raw,
-            output_amount_raw=probe.expected_output_amount_raw,
-        )
-        result = compute_executable_return(entry, reverse)
-
-        target_seconds = _entry_delay_seconds(position.entry_probe_target_label)
-        observations.append(
-            EventDelayObservation(
-                shadow_position_id=position.shadow_position_id,
-                token_id=position.token_id,
-                target_label=position.entry_probe_target_label,
-                target_seconds=target_seconds,
-                executable_return_fraction=result.gross_return_fraction,
-                status=result.status,
-            )
-        )
-
-    return WalletShadowEvidence(
-        delay_observations=observations, contributing=contributing, excluded=excluded
-    )
 
 
 def _entry_delay_seconds(label: str) -> int:
@@ -283,33 +281,230 @@ def _entry_delay_seconds(label: str) -> int:
     raise ValueError(f"unrecognized entry-delay target label: {label!r}")
 
 
-def build_delay_observations_for_curve(
-    events: list[EventDelayObservation],
-) -> list[DelayObservation]:
-    """Reduces to distinct-event executable-return observations for
-    :func:`argus.copyability.delay_curves.build_delay_curve` -- only
-    genuinely SUCCESS-status returns contribute (failures/pending never
-    fabricate a return fraction)."""
-    return [
-        DelayObservation(
-            event_id=str(event.shadow_position_id),
-            target_label=event.target_label,
-            target_seconds=event.target_seconds,
-            return_fraction=event.executable_return_fraction,
+async def load_wallet_opportunities(
+    session: AsyncSession,
+    *,
+    wallet_id: uuid.UUID,
+    cutoff: datetime,
+    firewall: ContaminationFirewall,
+    exclude_shadow_intent_id: uuid.UUID | None = None,
+) -> WalletOpportunitiesResult:
+    """The one real production event population every Phase 5 mechanic
+    (M2/M3/M5) reads from -- see module docstring. ``exclude_shadow_
+    intent_id`` lets a per-opportunity readiness computation (M6) exclude
+    its OWN opportunity from the copyability support it reads (M1: "an
+    outcome belonging to the current opportunity cannot enter its own
+    earlier readiness inputs")."""
+    intents = (
+        (
+            await session.execute(
+                select(ShadowIntent).where(
+                    ShadowIntent.wallet_id == wallet_id,
+                    ShadowIntent.created_at <= cutoff,
+                    ShadowIntent.status != STATUS_CREATED,
+                )
+            )
         )
-        for event in events
-        if event.status == "SUCCESS" and event.executable_return_fraction is not None
-    ]
+        .scalars()
+        .all()
+    )
+    if exclude_shadow_intent_id is not None:
+        intents = [i for i in intents if i.shadow_intent_id != exclude_shadow_intent_id]
+
+    contributing: list[SourceRef] = []
+    excluded: list[ExcludedSourceRef] = []
+    opportunities: list[WalletOpportunity] = []
+
+    for intent in intents:
+        intent_ref = SourceRef("shadow_intent", str(intent.shadow_intent_id))
+        if firewall.is_contaminated(intent.token_id):
+            excluded.append(ExcludedSourceRef(intent_ref, REASON_DISCOVERY_CONTAMINATED))
+            continue
+
+        prospective_event = await session.get(ProspectiveEvent, intent.prospective_event_id)
+        if (
+            prospective_event is None
+            or prospective_event.created_at > cutoff
+            or prospective_event.first_seen_at > cutoff
+        ):
+            excluded.append(ExcludedSourceRef(intent_ref, REASON_FUTURE_KNOWLEDGE))
+            continue
+        first_seen_at = prospective_event.first_seen_at
+
+        position: ShadowPosition | None = None
+        entry_fill: EntryFill | None = None
+        entry_price_impact_pct: Decimal | None = None
+        entry_target_label: str | None = None
+        entry_target_seconds: int | None = None
+        reverse_outcomes: dict[str, OpportunityReverseOutcome] = {}
+
+        if intent.status == STATUS_FILLED:
+            position = (
+                await session.execute(
+                    select(ShadowPosition).where(
+                        ShadowPosition.shadow_intent_id == intent.shadow_intent_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if position is None or position.created_at > cutoff:
+                excluded.append(ExcludedSourceRef(intent_ref, REASON_FUTURE_KNOWLEDGE))
+                continue
+
+            entry_fill = EntryFill(
+                input_mint=position.input_mint,
+                output_mint=position.output_mint,
+                input_amount_raw=position.entry_input_amount_raw,
+                output_amount_raw=position.entry_output_amount_raw,
+            )
+            entry_price_impact_pct = position.entry_price_impact_pct
+            entry_target_label = position.entry_probe_target_label
+            entry_target_seconds = _entry_delay_seconds(entry_target_label)
+
+            probes = (
+                (
+                    await session.execute(
+                        select(ShadowQuoteProbe).where(
+                            ShadowQuoteProbe.shadow_position_id == position.shadow_position_id,
+                            ShadowQuoteProbe.probe_kind == PROBE_KIND_REVERSE_EXECUTABLE,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for probe in probes:
+                probe_ref = SourceRef("shadow_quote_probe", str(probe.probe_id))
+                if not _probe_known_by_cutoff(probe, cutoff):
+                    excluded.append(
+                        ExcludedSourceRef(probe_ref, "REVERSE_QUOTE_NOT_YET_TERMINAL_BY_CUTOFF")
+                    )
+                    continue
+                reverse = ReverseQuote(
+                    outcome=probe.outcome,
+                    input_mint=probe.input_mint,
+                    output_mint=probe.output_mint,
+                    input_amount_raw=probe.notional_input_amount_raw,
+                    output_amount_raw=probe.expected_output_amount_raw,
+                )
+                result = compute_executable_return(entry_fill, reverse)
+                elapsed = None
+                if probe.terminal_at is not None:
+                    elapsed = Decimal((probe.terminal_at - first_seen_at).total_seconds())
+                reverse_outcomes[probe.target_label] = OpportunityReverseOutcome(
+                    probe_id=probe.probe_id,
+                    target_label=probe.target_label,
+                    raw_outcome=probe.outcome,
+                    result=result,
+                    actual_elapsed_seconds_from_first_seen=elapsed,
+                )
+                contributing.append(probe_ref)
+            contributing.append(SourceRef("shadow_position", str(position.shadow_position_id)))
+
+        contributing.append(intent_ref)
+        opportunities.append(
+            WalletOpportunity(
+                shadow_intent_id=intent.shadow_intent_id,
+                token_id=intent.token_id,
+                first_seen_at=first_seen_at,
+                entry_status=intent.status,
+                shadow_position_id=position.shadow_position_id if position else None,
+                entry_target_label=entry_target_label,
+                entry_target_seconds=entry_target_seconds,
+                entry_fill=entry_fill,
+                entry_price_impact_pct=entry_price_impact_pct,
+                reverse_outcomes=reverse_outcomes,
+            )
+        )
+
+    return WalletOpportunitiesResult(
+        opportunities=opportunities, contributing=contributing, excluded=excluded
+    )
+
+
+def build_delay_observations_for_curve(
+    opportunities: list[WalletOpportunity],
+    *,
+    horizon_label: str,
+    quote_mint: str,
+) -> list[DelayObservation]:
+    """Reduces the real opportunity population to cohort-tagged
+    :class:`DelayObservation` rows for :func:`argus.copyability.
+    delay_curves.build_delay_curve` -- one per FILLED opportunity that
+    has a genuinely SUCCESS executable return at ``horizon_label``,
+    x-axis = that opportunity's own entry-delay label (cross-sectional
+    across distinct events, per the "important data limitation": exactly
+    one position per intent, so the entry-delay curve is necessarily
+    built across events, never within one)."""
+    observations: list[DelayObservation] = []
+    for opp in opportunities:
+        if opp.entry_fill is None or opp.entry_target_label is None:
+            continue
+        outcome = opp.reverse_outcomes.get(horizon_label)
+        if outcome is None:
+            continue
+        result = outcome.result
+        if result.status != "SUCCESS" or result.gross_return_fraction is None:
+            continue
+        cohort = CohortKey(
+            notional_raw=opp.entry_fill.input_amount_raw,
+            quote_mint=quote_mint,
+            horizon_label=horizon_label,
+            evidence_class=opp.evidence_class,
+        )
+        observations.append(
+            DelayObservation(
+                event_id=str(opp.shadow_intent_id),
+                target_label=opp.entry_target_label,
+                target_seconds=opp.entry_target_seconds,  # type: ignore[arg-type]
+                return_fraction=result.gross_return_fraction,
+                cohort=cohort,
+            )
+        )
+    return observations
+
+
+def build_forward_information_observations(
+    opportunities: list[WalletOpportunity],
+) -> dict[str, list[Decimal]]:
+    """F5-02: honest forward-information-grid evidence -- for each fixed
+    grid horizon label, collect ONLY the actual executable returns whose
+    REAL elapsed time from ``first_seen_at`` to the reverse probe's own
+    ``terminal_at`` exactly equals that horizon's nominal seconds. An
+    entry delayed 5s with a 5m (300s) holding exit lands at an actual
+    elapsed ~305s -- NOT an exact match for the "5m" cell, which stays
+    unavailable for that opportunity (never relabeled/interpolated)."""
+    from argus.copyability.delay_curves import FORWARD_INFO_HORIZON_LABELS
+
+    results: dict[str, list[Decimal]] = {label: [] for label in FORWARD_INFO_HORIZON_LABELS}
+    for opp in opportunities:
+        for outcome in opp.reverse_outcomes.values():
+            result = outcome.result
+            if result.status != "SUCCESS" or result.gross_return_fraction is None:
+                continue
+            elapsed = outcome.actual_elapsed_seconds_from_first_seen
+            if elapsed is None:
+                continue
+            for label in FORWARD_INFO_HORIZON_LABELS:
+                nominal_seconds = _HORIZON_SECONDS.get(label)
+                if nominal_seconds is None:
+                    nominal_seconds = _entry_delay_seconds(label)
+                if elapsed == nominal_seconds:
+                    results[label].append(result.gross_return_fraction)
+    return results
 
 
 __all__ = [
+    "LONG_HORIZON_LABELS",
     "PRIMARY_EXECUTABLE_HORIZON",
     "ContaminationFirewall",
-    "load_contamination_firewall",
+    "OpportunityReverseOutcome",
     "PriorBuyLoadResult",
-    "load_prior_buy_sizes",
-    "EventDelayObservation",
-    "WalletShadowEvidence",
-    "load_wallet_shadow_positions",
+    "WalletOpportunitiesResult",
+    "WalletOpportunity",
     "build_delay_observations_for_curve",
+    "build_forward_information_observations",
+    "load_contamination_firewall",
+    "load_prior_buy_sizes",
+    "load_wallet_opportunities",
+    "resolve_token_ids_by_mint",
 ]

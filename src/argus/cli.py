@@ -1770,13 +1770,16 @@ def copyability_report(
         "", "--as-of", help="ISO-8601 point-in-time cutoff. Defaults to now."
     ),
 ) -> None:
-    """P5-10: the one 'argus copyability' report command. Read-only over
-    already-persisted Phase 1/3/4 evidence (no quote-provider dispatch,
-    no evidence mutation) -- computes and idempotently persists each
-    wallet's Phase 5 analytical snapshot (MASTER_SPEC.md sections 46-53),
-    then prints the required report fields. A wallet with no shadow-copy
-    sample yet is reported honestly with null/unavailable fields, never a
-    fabricated score."""
+    """P5-10 (F5-06 remediation): the one 'argus copyability' report
+    command. Read-only over already-persisted Phase 1/3/4 evidence (no
+    quote-provider dispatch, no evidence mutation) -- computes and
+    idempotently persists each wallet's Phase 5 wallet-copyability snapshot
+    (MASTER_SPEC.md sections 46-52, M1-M5/M7) AND, when a prospective event
+    is known by the cutoff, its most recent per-opportunity trade-readiness
+    snapshot (section 53, M6) -- then prints the required report fields. A
+    wallet with no shadow-copy sample yet, or no prospective event yet, is
+    reported honestly with null/unavailable fields and a stated reason,
+    never a fabricated score."""
     import json
     from datetime import UTC, datetime
 
@@ -1785,10 +1788,16 @@ def copyability_report(
     from argus.config import resolve_production_git_commit
     from argus.copyability.service import (
         BUILD_HASH,
+        compute_and_persist_opportunity_readiness,
         compute_and_persist_wallet_copyability,
     )
+    from argus.domain.prospective_events import ProspectiveEvent
+    from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
     from argus.domain.wallets import Wallet
-    from argus.scoring.config_weights import load_copyability_weights
+    from argus.scoring.config_weights import (
+        load_copyability_weights,
+        load_trade_readiness_weights,
+    )
 
     as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
 
@@ -1796,7 +1805,8 @@ def copyability_report(
         config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
         try:
             git_commit = resolve_production_git_commit(allow_unverified=True)
-            weights = load_copyability_weights(config)
+            copyability_weights = load_copyability_weights(config)
+            readiness_weights = load_trade_readiness_weights(config)
             async with sessionmaker() as session, session.begin():
                 query = select(Wallet)
                 if wallet:
@@ -1805,24 +1815,111 @@ def copyability_report(
 
                 reports = []
                 for wallet_row in wallets:
+                    computed_at = datetime.now(UTC)
                     snapshot, created = await compute_and_persist_wallet_copyability(
                         session,
                         wallet=wallet_row,
                         as_of=as_of_dt,
-                        weights=weights,
+                        weights=copyability_weights,
                         build_hash=BUILD_HASH,
                         config_hash=config.config_hash,
                         master_spec_hash=config.spec_hash,
                         git_commit=git_commit,
-                        computed_at=datetime.now(UTC),
-                        current_size=None,
+                        computed_at=computed_at,
                     )
+
+                    qualification_row = (
+                        await session.execute(
+                            select(WalletScoreSnapshot)
+                            .where(
+                                WalletScoreSnapshot.wallet_id == wallet_row.wallet_id,
+                                WalletScoreSnapshot.created_at <= as_of_dt,
+                            )
+                            .order_by(WalletScoreSnapshot.created_at.desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    qualification_score = (
+                        qualification_row.qualification_score
+                        if qualification_row is not None
+                        else None
+                    )
+
+                    # The most recent decision-time opportunity for this
+                    # wallet known by the cutoff -- M6's own point-in-time
+                    # rule (never a still-future or not-yet-known event).
+                    latest_event = (
+                        await session.execute(
+                            select(ProspectiveEvent)
+                            .where(
+                                ProspectiveEvent.wallet_id == wallet_row.wallet_id,
+                                ProspectiveEvent.created_at <= as_of_dt,
+                                ProspectiveEvent.first_seen_at <= as_of_dt,
+                            )
+                            .order_by(ProspectiveEvent.first_seen_at.desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+
+                    readiness_report: dict | None = None
+                    readiness_unavailable_reason: str | None = None
+                    if latest_event is None:
+                        readiness_unavailable_reason = (
+                            "no prospective event known by this cutoff for this wallet"
+                        )
+                    else:
+                        (
+                            readiness_snapshot,
+                            readiness_created,
+                        ) = await compute_and_persist_opportunity_readiness(
+                            session,
+                            prospective_event=latest_event,
+                            as_of=as_of_dt,
+                            copyability_weights=copyability_weights,
+                            readiness_weights=readiness_weights,
+                            build_hash=BUILD_HASH,
+                            config_hash=config.config_hash,
+                            master_spec_hash=config.spec_hash,
+                            git_commit=git_commit,
+                            computed_at=computed_at,
+                        )
+                        readiness_report = {
+                            "prospective_event_id": str(latest_event.prospective_event_id),
+                            "as_of": readiness_snapshot.as_of.isoformat(),
+                            "snapshot_reused": not readiness_created,
+                            "eligible": readiness_snapshot.eligible,
+                            "actionable_score": (
+                                str(readiness_snapshot.actionable_score)
+                                if readiness_snapshot.actionable_score is not None
+                                else None
+                            ),
+                            "diagnostic_score": (
+                                str(readiness_snapshot.diagnostic_score)
+                                if readiness_snapshot.diagnostic_score is not None
+                                else None
+                            ),
+                            "gates": readiness_snapshot.gates,
+                            "components": readiness_snapshot.components,
+                            "evidence_manifest_digest": readiness_snapshot.evidence_manifest_digest,
+                            "excluded_source_ids": readiness_snapshot.excluded_source_ids,
+                        }
+
                     reports.append(
                         {
                             "wallet": wallet_row.wallet_address,
                             "as_of": snapshot.as_of.isoformat(),
                             "algorithm_version": snapshot.algorithm_version,
                             "snapshot_reused": not created,
+                            "qualification_score": (
+                                str(qualification_score)
+                                if qualification_score is not None
+                                else None
+                            ),
+                            "qualification_unavailable_reason": (
+                                None
+                                if qualification_score is not None
+                                else "no wallet score snapshot known by this cutoff"
+                            ),
                             "copyability_score": (
                                 str(snapshot.copyability_score)
                                 if snapshot.copyability_score is not None
@@ -1831,17 +1928,31 @@ def copyability_report(
                             "copyability_components": snapshot.copyability_components,
                             "sample_n": snapshot.sample_n,
                             "sample_k": snapshot.sample_k,
+                            "sample_coverage": str(snapshot.sample_coverage),
                             "confidence": snapshot.confidence,
                             "delay_curve": snapshot.delay_curve,
                             "half_life_result": snapshot.half_life_result,
                             "forward_information_grid": snapshot.forward_information_grid,
                             "size_surprise": snapshot.size_surprise,
+                            "readiness": readiness_report,
+                            "readiness_unavailable_reason": readiness_unavailable_reason,
+                            "contributing_source_ids": snapshot.contributing_source_ids,
                             "excluded_source_ids": snapshot.excluded_source_ids,
                             "evidence_manifest_digest": snapshot.evidence_manifest_digest,
                             "config_hash": snapshot.config_hash,
                             "master_spec_hash": snapshot.master_spec_hash,
                             "build_hash": snapshot.build_hash,
                             "git_commit": snapshot.git_commit,
+                            "limitations": [
+                                "risk_caps gate is always UNKNOWN in this phase -- no live "
+                                "risk-allowance/authority system exists yet (Phase 6 territory)",
+                                "real live trade authorization is unconditionally false in this "
+                                "phase regardless of any score here (P5-14)",
+                                "wallet-level copyability size surprise has no current-"
+                                "opportunity size at this report scope -- z/component stay "
+                                "unavailable; see the per-opportunity readiness size_surprise "
+                                "component for an evidenced current size when available",
+                            ],
                         }
                     )
         finally:

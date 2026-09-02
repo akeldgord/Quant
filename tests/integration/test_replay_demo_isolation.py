@@ -100,18 +100,56 @@ def _sessionmaker() -> tuple[ArgusConfig, Any, async_sessionmaker[Any]]:
     return config, engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
-def _run_script(env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_script(
+    output_dir: Path, env_overrides: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """F5-07 remediation: every invocation in this suite passes an explicit
+    ``--output-dir`` (the caller's own pytest ``tmp_path``) rather than
+    relying on the script's internal ``default_output_dir()`` tempdir --
+    proving the P5-11 CLI flag itself works under test, with pytest owning
+    the directory's lifecycle instead of an unmanaged OS tempdir."""
     env = {**os.environ}
     env.pop("_ARGUS_REPLAY_DEMO_FAULT_INJECT", None)
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
-        [sys.executable, str(SCRIPT_PATH)],
+        [sys.executable, str(SCRIPT_PATH), "--output-dir", str(output_dir)],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,
         timeout=120,
+    )
+
+
+# ---------------------------------------------------------------------
+# F5-07: prove the existing tracked historical replay-evidence artifacts
+# are byte-for-byte unchanged before and after this entire integration
+# suite runs -- this suite's own subprocess invocations of the replay
+# script must never touch tracked orchestration/ evidence paths.
+# ---------------------------------------------------------------------
+
+_TRACKED_HISTORICAL_REPLAY_ARTIFACTS: tuple[Path, ...] = tuple(
+    sorted((REPO_ROOT / "orchestration").glob("*/evidence/replay_*demo*.json"))
+)
+
+
+def _hash_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _tracked_historical_replay_artifacts_unchanged() -> Any:
+    before = {path: _hash_file(path) for path in _TRACKED_HISTORICAL_REPLAY_ARTIFACTS}
+    assert before, "expected at least one tracked historical replay-evidence artifact to exist"
+    yield
+    after = {path: _hash_file(path) for path in _TRACKED_HISTORICAL_REPLAY_ARTIFACTS}
+    assert after == before, (
+        "this integration suite must never modify tracked historical replay-"
+        "evidence artifacts -- every subprocess invocation here uses an "
+        "explicit tmp_path --output-dir"
     )
 
 
@@ -427,7 +465,9 @@ def _assert_seed_present(snapshot: dict[str, list[dict[str, Any]]]) -> None:
 # ---------------------------------------------------------------------
 
 
-async def test_successful_run_leaves_shared_wallet_and_queue_untouched(admin_engine) -> None:
+async def test_successful_run_leaves_shared_wallet_and_queue_untouched(
+    admin_engine, tmp_path: Path
+) -> None:
     config, engine, sessionmaker = _sessionmaker()
     seeded: dict[str, Any] | None = None
     try:
@@ -437,7 +477,7 @@ async def test_successful_run_leaves_shared_wallet_and_queue_untouched(admin_eng
         )
         _assert_seed_present(before)
 
-        result = _run_script()
+        result = _run_script(tmp_path)
         assert result.returncode == 0, (
             f"successful run expected, got exit {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -461,7 +501,7 @@ async def test_successful_run_leaves_shared_wallet_and_queue_untouched(admin_eng
 
 @pytest.mark.parametrize("fault_point", FAULT_POINTS)
 async def test_fault_injection_leaves_shared_wallet_and_queue_untouched(
-    admin_engine, fault_point: str
+    admin_engine, fault_point: str, tmp_path: Path
 ) -> None:
     config, engine, sessionmaker = _sessionmaker()
     seeded: dict[str, Any] | None = None
@@ -472,7 +512,7 @@ async def test_fault_injection_leaves_shared_wallet_and_queue_untouched(
         )
         _assert_seed_present(before)
 
-        result = _run_script({"_ARGUS_REPLAY_DEMO_FAULT_INJECT": fault_point})
+        result = _run_script(tmp_path, {"_ARGUS_REPLAY_DEMO_FAULT_INJECT": fault_point})
         assert result.returncode != 0, (
             f"fault injection at {fault_point!r} was expected to fail the run\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -520,8 +560,10 @@ def test_refuse_unless_scratch_database_allows_scratch_prefixed_names() -> None:
 # ---------------------------------------------------------------------
 
 
-async def test_scratch_database_is_actually_dropped_after_successful_run(admin_engine) -> None:
-    result = _run_script()
+async def test_scratch_database_is_actually_dropped_after_successful_run(
+    admin_engine, tmp_path: Path
+) -> None:
+    result = _run_script(tmp_path)
     assert result.returncode == 0, (
         f"successful run expected, got exit {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

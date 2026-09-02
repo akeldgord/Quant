@@ -28,7 +28,11 @@ class SizeSurpriseInput:
     # future-knowledge exclusion / discovery-firewall exclusion, capped at
     # the most recent 100.
     prior_sizes: list[Decimal]
-    current_size: Decimal
+    # None when no actual current-opportunity size is evidenced -- F5-01
+    # remediation: the caller must never substitute zero (or any other
+    # value) for a genuinely missing current size; z/component stay
+    # unavailable with an explicit reason instead.
+    current_size: Decimal | None
     # Actual point-in-time evidenced total portfolio value in units
     # compatible with prior_sizes/current_size -- never a sum of known
     # open positions treated as "total wealth" (this instruction's own
@@ -73,7 +77,9 @@ def compute_size_surprise(
     z: Decimal | None = None
     component: Decimal | None = None
     reason: str | None = None
-    if n < 5:
+    if data.current_size is None:
+        reason = "no current-opportunity size evidenced"
+    elif n < 5:
         reason = f"baseline sample too small for z-score (n={n} < 5)"
     elif median <= 0:
         reason = "baseline median size is non-positive"
@@ -85,7 +91,9 @@ def compute_size_surprise(
 
     portfolio_fraction: Decimal | None = None
     portfolio_reason: str | None = None
-    if data.portfolio_value_at_signal is None:
+    if data.current_size is None:
+        portfolio_reason = "no current-opportunity size evidenced"
+    elif data.portfolio_value_at_signal is None:
         portfolio_reason = "no point-in-time portfolio valuation evidence in compatible units"
     elif data.portfolio_value_at_signal <= 0:
         portfolio_reason = "nonpositive portfolio valuation"

@@ -32,11 +32,12 @@ from typer.testing import CliRunner
 
 from argus.cli import app
 from argus.config import ArgusConfig, load_config
-from argus.copyability.identity import evidence_manifest_digest
+from argus.copyability.identity import SourceRef, evidence_manifest_digest
 from argus.copyability.loaders import (
     ContaminationFirewall,
+    build_delay_observations_for_curve,
     load_contamination_firewall,
-    load_wallet_shadow_positions,
+    load_wallet_opportunities,
 )
 from argus.copyability.persistence import get_or_create_wallet_copyability_snapshot
 from argus.copyability.service import ALGORITHM_VERSION
@@ -274,16 +275,25 @@ async def test_p5_01_position_created_after_cutoff_is_excluded(admin_engine) -> 
 
         firewall = ContaminationFirewall(contaminated_token_ids=frozenset())
         async with sessionmaker() as session:
-            evidence = await load_wallet_shadow_positions(
+            result = await load_wallet_opportunities(
                 session, wallet_id=wallet_id, cutoff=cutoff, firewall=firewall
             )
-        assert evidence.delay_observations == []  # position created AFTER cutoff -- excluded
+        # The entire ShadowIntent (created AFTER cutoff) is excluded -- not
+        # merely relabeled as "no reverse outcome yet" (F5-01).
+        assert result.opportunities == []
 
         async with sessionmaker() as session:
-            evidence_at_now = await load_wallet_shadow_positions(
-                session, wallet_id=wallet_id, cutoff=_NOW + timedelta(minutes=10), firewall=firewall
+            result_at_now = await load_wallet_opportunities(
+                session,
+                wallet_id=wallet_id,
+                cutoff=_NOW + timedelta(minutes=10),
+                firewall=firewall,
             )
-        assert len(evidence_at_now.delay_observations) == 1
+        assert len(result_at_now.opportunities) == 1
+        observations = build_delay_observations_for_curve(
+            result_at_now.opportunities, horizon_label="5m", quote_mint=SOL_MINT
+        )
+        assert len(observations) == 1
     finally:
         await engine.dispose()
 
@@ -336,13 +346,13 @@ async def test_p5_07_discovery_contaminated_token_excluded_from_selection_usable
         assert firewall.contaminated_token_ids == frozenset({contaminated_token_id})
 
         async with sessionmaker() as session:
-            evidence = await load_wallet_shadow_positions(
+            result = await load_wallet_opportunities(
                 session, wallet_id=wallet_id, cutoff=cutoff, firewall=firewall
             )
-        # Only the clean token's position is selection-usable.
-        assert len(evidence.delay_observations) == 1
-        assert evidence.delay_observations[0].token_id == clean_token_id
-        assert any(excl.reason == "DISCOVERY_CONTAMINATED" for excl in evidence.excluded)
+        # Only the clean token's opportunity is selection-usable.
+        assert len(result.opportunities) == 1
+        assert result.opportunities[0].token_id == clean_token_id
+        assert any(excl.reason == "DISCOVERY_CONTAMINATED" for excl in result.excluded)
     finally:
         await engine.dispose()
 
@@ -392,6 +402,7 @@ async def test_p5_09_snapshot_reused_across_sessions_for_identical_identity(admi
                 as_of=_NOW,
                 algorithm_version=ALGORITHM_VERSION,
                 evidence_manifest_digest=digest,
+                config_hash=_TEST_GIT_COMMIT,
                 build_row=_build,
             )
         assert created1 is True
@@ -404,6 +415,7 @@ async def test_p5_09_snapshot_reused_across_sessions_for_identical_identity(admi
                 as_of=_NOW,
                 algorithm_version=ALGORITHM_VERSION,
                 evidence_manifest_digest=digest,
+                config_hash=_TEST_GIT_COMMIT,
                 build_row=_build,
             )
         assert created2 is False
@@ -424,13 +436,7 @@ async def test_p5_09_snapshot_reused_across_sessions_for_identical_identity(admi
         assert len(count) == 1
 
         # A DIFFERENT evidence-manifest digest is a new row, never an overwrite.
-        digest2 = evidence_manifest_digest(
-            [
-                __import__("argus.copyability.identity", fromlist=["SourceRef"]).SourceRef(
-                    "swap", "x"
-                )
-            ]
-        )
+        digest2 = evidence_manifest_digest([SourceRef("swap", "x")])
 
         def _build2() -> WalletCopyabilitySnapshot:
             row = _build()
@@ -445,10 +451,32 @@ async def test_p5_09_snapshot_reused_across_sessions_for_identical_identity(admi
                 as_of=_NOW,
                 algorithm_version=ALGORITHM_VERSION,
                 evidence_manifest_digest=digest2,
+                config_hash=_TEST_GIT_COMMIT,
                 build_row=_build2,
             )
         assert created3 is True
         assert row3.snapshot_id != row1.snapshot_id
+
+        # A DIFFERENT config_hash under otherwise-identical evidence is
+        # ALSO a new row, never a stale-config reuse (F5-05).
+        def _build4() -> WalletCopyabilitySnapshot:
+            row = _build()
+            row.snapshot_id = uuid.uuid4()
+            row.config_hash = "a-different-config-hash"
+            return row
+
+        async with sessionmaker() as session, session.begin():
+            row4, created4 = await get_or_create_wallet_copyability_snapshot(
+                session,
+                wallet_id=wallet_id,
+                as_of=_NOW,
+                algorithm_version=ALGORITHM_VERSION,
+                evidence_manifest_digest=digest,
+                config_hash="a-different-config-hash",
+                build_row=_build4,
+            )
+        assert created4 is True
+        assert row4.snapshot_id not in (row1.snapshot_id, row3.snapshot_id)
     finally:
         await engine.dispose()
 
@@ -480,25 +508,39 @@ def test_p5_10_cli_copyability_report_runs_and_prints_required_fields(admin_engi
         "wallet",
         "as_of",
         "algorithm_version",
+        "qualification_score",
+        "qualification_unavailable_reason",
         "copyability_score",
         "copyability_components",
         "sample_n",
         "sample_k",
+        "sample_coverage",
         "confidence",
         "delay_curve",
         "half_life_result",
         "forward_information_grid",
         "size_surprise",
+        "readiness",
+        "readiness_unavailable_reason",
+        "contributing_source_ids",
+        "excluded_source_ids",
         "evidence_manifest_digest",
         "config_hash",
         "master_spec_hash",
         "build_hash",
         "git_commit",
+        "limitations",
     ):
         assert field in report, field
     assert report["wallet"] == wallet_address
     # No sample evidence yet -- honestly null, never fabricated.
     assert report["copyability_score"] is None
+    assert report["qualification_score"] is None
+    assert report["qualification_unavailable_reason"] is not None
+    # No prospective event known by this cutoff -- readiness is honestly
+    # unavailable, never a fabricated gate/score (F5-06).
+    assert report["readiness"] is None
+    assert report["readiness_unavailable_reason"] is not None
     assert report["sample_n"] == 0
 
     # Re-run: reuses the same snapshot, never duplicates.
@@ -508,6 +550,141 @@ def test_p5_10_cli_copyability_report_runs_and_prints_required_fields(admin_engi
     assert result2.exit_code == 0, result2.output
     reports2 = json.loads(result2.output)
     assert reports2[0]["snapshot_reused"] is True
+
+
+def test_p5_10_cli_copyability_report_seeded_event_entry_reverse_wires_readiness(
+    admin_engine,
+) -> None:
+    """F5-06: the ORIGINAL required integration shape -- a seeded
+    persisted event/entry/reverse chain -> real CLI -> parsed report,
+    run twice, asserting stable source IDs/results and no duplicate
+    snapshot. Proves the readiness/qualification fields are genuinely
+    wired to production evidence, not merely present-but-null."""
+    import asyncio
+
+    config, engine, sessionmaker = _sessionmaker()
+
+    async def _seed() -> tuple[str, datetime]:
+        wallet_address = _unique_wallet()
+        mint = _unique_mint()
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet(session, address=wallet_address, at=_NOW)
+            token_id = await _seed_token(session, mint=mint, at=_NOW)
+        async with sessionmaker() as session:
+            await _seed_shadow_position_with_reverse(
+                session,
+                wallet_id=wallet_id,
+                token_id=token_id,
+                output_mint=mint,
+                created_at=_NOW,
+            )
+        return wallet_address, _NOW + timedelta(minutes=10)
+
+    wallet_address, as_of_dt = asyncio.run(_seed())
+    asyncio.run(engine.dispose())
+
+    result = runner.invoke(
+        app,
+        ["copyability", "report", "--wallet", wallet_address, "--as-of", as_of_dt.isoformat()],
+    )
+    assert result.exit_code == 0, result.output
+    import json
+
+    report = json.loads(result.output)[0]
+
+    # Real production event population reached M5: the one FILLED,
+    # SUCCESS-executable opportunity contributes to n/k (F5-01/F5-03).
+    assert report["sample_n"] == 1
+    assert report["sample_k"] == 1
+    assert report["copyability_score"] is not None
+
+    # Real per-opportunity readiness wiring (F5-04/F5-06): the seeded
+    # ProspectiveEvent is found and evaluated, never left null.
+    readiness = report["readiness"]
+    assert readiness is not None
+    assert readiness["gates"]["quote_validity"]["status"] == "PASS"
+    # The seeded token was never mint-validated -- an honest FAIL, never a
+    # fabricated PASS (this instruction's own explicit rule).
+    assert readiness["gates"]["token_safety"]["status"] == "FAIL"
+    assert readiness["gates"]["risk_caps"]["status"] == "UNKNOWN"
+    assert readiness["eligible"] is False
+    first_prospective_event_id = readiness["prospective_event_id"]
+
+    # Re-run: same wallet-copyability AND readiness snapshots are reused --
+    # stable source IDs/results, never a duplicate row (P5-09/F5-05).
+    result2 = runner.invoke(
+        app,
+        ["copyability", "report", "--wallet", wallet_address, "--as-of", as_of_dt.isoformat()],
+    )
+    assert result2.exit_code == 0, result2.output
+    report2 = json.loads(result2.output)[0]
+    assert report2["snapshot_reused"] is True
+    assert report2["readiness"]["snapshot_reused"] is True
+    assert report2["readiness"]["prospective_event_id"] == first_prospective_event_id
+    assert report2["sample_n"] == report["sample_n"]
+    assert report2["copyability_score"] == report["copyability_score"]
+    assert report2["contributing_source_ids"] == report["contributing_source_ids"]
+
+
+def test_p5_14_cli_copyability_report_never_dispatches_provider_or_leaks_credential(
+    admin_engine, monkeypatch, caplog
+) -> None:
+    """P5-14 (SAFETY_OR_INTEGRITY_BLOCKING): the new analytics command
+    completes successfully even when the one execution-provider dispatch
+    entry point in this codebase (``JupiterClient.get_quote``) is replaced
+    by a raising sentinel -- proving the read-only report path never
+    dispatches a quote provider (matching its own docstring's "no quote-
+    provider dispatch" claim). A fake inert credential-shaped environment
+    value never leaks into the emitted report or into captured DEBUG
+    logs, and no real credential is used, printed, or dispatched."""
+    import asyncio
+    import logging
+
+    from argus.providers.jupiter.client import JupiterClient
+
+    async def _raising_sentinel(*args, **kwargs) -> None:
+        raise AssertionError("argus copyability report must never dispatch a quote provider")
+
+    monkeypatch.setattr(JupiterClient, "get_quote", _raising_sentinel)
+    fake_credential = "FAKE-INERT-CREDENTIAL-should-never-appear-anywhere-abc123"
+    monkeypatch.setenv("HELIUS_API_KEY", fake_credential)
+
+    config, engine, sessionmaker = _sessionmaker()
+
+    async def _seed() -> tuple[str, datetime]:
+        wallet_address = _unique_wallet()
+        mint = _unique_mint()
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet(session, address=wallet_address, at=_NOW)
+            token_id = await _seed_token(session, mint=mint, at=_NOW)
+        async with sessionmaker() as session:
+            await _seed_shadow_position_with_reverse(
+                session,
+                wallet_id=wallet_id,
+                token_id=token_id,
+                output_mint=mint,
+                created_at=_NOW,
+            )
+        return wallet_address, _NOW + timedelta(minutes=10)
+
+    wallet_address, as_of_dt = asyncio.run(_seed())
+    asyncio.run(engine.dispose())
+
+    with caplog.at_level(logging.DEBUG):
+        result = runner.invoke(
+            app,
+            [
+                "copyability",
+                "report",
+                "--wallet",
+                wallet_address,
+                "--as-of",
+                as_of_dt.isoformat(),
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert fake_credential not in result.output
+    assert fake_credential not in caplog.text
 
 
 def test_p5_10_cli_copyability_report_empty_database_is_honest() -> None:

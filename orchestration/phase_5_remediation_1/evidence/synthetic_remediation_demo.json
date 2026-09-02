@@ -1,0 +1,47 @@
+{
+  "label": "SYNTHETIC REMEDIATION DEMONSTRATION -- NOT AUTHENTIC PROSPECTIVE EVIDENCE",
+  "purpose": "proves the F5-01/F5-02/F5-03 remediated production pure functions (never a reimplementation) produce correct end-to-end output over synthetic in-memory WalletOpportunity objects, without requiring a live database",
+  "f5_02_exact_match_forward_grid": {
+    "5m_cell_available": true,
+    "5m_cell_median_return_fraction": "1.3",
+    "explanation": "opportunity A's 5m probe actually resolved at elapsed=305s (5s entry delay + 300s hold) so it correctly contributes NOTHING to the 5m cell; only opportunity B's exact elapsed=300s probe fills it -- proves entry-delay+holding-horizon returns are never relabeled into the wrong fixed grid cell"
+  },
+  "delay_curve": [
+    {
+      "target_label": "1s",
+      "target_seconds": 1,
+      "n": 1,
+      "cohort": {
+        "notional_raw": 100000000,
+        "quote_mint": "So11111111111111111111111111111111111111112",
+        "horizon_label": "5m",
+        "evidence_class": "SYNTHETIC"
+      }
+    },
+    {
+      "target_label": "5s",
+      "target_seconds": 5,
+      "n": 1,
+      "cohort": {
+        "notional_raw": 100000000,
+        "quote_mint": "So11111111111111111111111111111111111111112",
+        "horizon_label": "5m",
+        "evidence_class": "SYNTHETIC"
+      }
+    }
+  ],
+  "half_life": {
+    "outcome": "RIGHT_CENSORED",
+    "peak_seconds": 5,
+    "half_life_seconds": null
+  },
+  "m5_copyability": {
+    "n_events": 2,
+    "k_distinct_tokens": 2,
+    "coverage_numerator": 2,
+    "coverage_denominator": 2,
+    "mean_abs_price_impact_fraction": "0.4",
+    "score": "82.00",
+    "confidence": "LOW"
+  }
+}

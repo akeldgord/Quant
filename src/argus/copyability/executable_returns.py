@@ -18,7 +18,7 @@ never produces a fabricated return.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from argus.domain.shadow_quote_probes import (
@@ -100,6 +100,24 @@ def _unavailable(reason: str) -> ExecutableReturnResult:
     return ExecutableReturnResult(status="UNAVAILABLE", unavailable_reason=reason)
 
 
+def _to_finite_decimal(value: object) -> Decimal | None:
+    """Converts ``value`` to ``Decimal`` and returns it only if finite --
+    ``None`` for any nonfinite (NaN/Infinity) or unconvertible value. Never
+    raises: a real persisted ``Numeric`` column CAN carry NaN, and a
+    comparison operator (``<=``) against a NaN ``Decimal`` itself raises
+    ``InvalidOperation`` under the default context -- so every raw amount
+    is converted and finiteness-checked HERE, before any comparison ever
+    touches it (F5-02's "nonfinite denominator reaches <=0 before finite
+    validation" defect)."""
+    try:
+        decimal_value = Decimal(value)  # type: ignore[arg-type]
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not decimal_value.is_finite():
+        return None
+    return decimal_value
+
+
 def compute_executable_return(
     entry: EntryFill,
     reverse: ReverseQuote,
@@ -124,25 +142,38 @@ def compute_executable_return(
     if reverse.outcome != OUTCOME_SUCCESS:
         return _unavailable(f"unrecognized reverse-quote outcome: {reverse.outcome!r}")
 
-    if entry.input_amount_raw <= 0:
+    # Every raw amount is converted to a finite Decimal FIRST -- before any
+    # comparison operator ever runs against it -- so a genuinely nonfinite
+    # input (a real Numeric column can carry NaN) is always caught here,
+    # never mid-arithmetic and never by a comparison raising InvalidOperation.
+    entry_input = _to_finite_decimal(entry.input_amount_raw)
+    entry_output = _to_finite_decimal(entry.output_amount_raw)
+    if entry_input is None:
+        return _unavailable("nonfinite entry input amount")
+    if entry_output is None:
+        return _unavailable("nonfinite entry output amount")
+    if entry_input <= 0:
         return _unavailable("zero or nonpositive entry input amount (denominator)")
-    if entry.output_amount_raw <= 0:
+    if entry_output <= 0:
         return _unavailable("zero or nonpositive entry output amount (acquired quantity)")
     if reverse.input_mint is None or reverse.output_mint is None:
         return _unavailable("reverse quote missing mint identity")
     if reverse.input_mint != entry.output_mint or reverse.output_mint != entry.input_mint:
         return _unavailable("mismatched mint: reverse quote does not close this exact pair")
-    if reverse.input_amount_raw != entry.output_amount_raw:
+    if reverse.input_amount_raw is None:
+        return _unavailable("reverse quote missing input amount")
+    reverse_input = _to_finite_decimal(reverse.input_amount_raw)
+    if reverse_input is None:
+        return _unavailable("nonfinite reverse input amount")
+    if reverse_input != entry_output:
         return _unavailable(
             "mismatched quantity: reverse quote did not sell exactly the acquired quantity"
         )
     if reverse.output_amount_raw is None:
         return _unavailable("reverse quote missing output amount")
-
-    entry_input = Decimal(entry.input_amount_raw)
-    reverse_output = Decimal(reverse.output_amount_raw)
-    if not entry_input.is_finite() or not reverse_output.is_finite():
-        return _unavailable("nonfinite amount")
+    reverse_output = _to_finite_decimal(reverse.output_amount_raw)
+    if reverse_output is None:
+        return _unavailable("nonfinite reverse output amount")
 
     gross_return_fraction = reverse_output / entry_input - 1
     gross_return_pct = gross_return_fraction * 100
@@ -156,8 +187,8 @@ def compute_executable_return(
             return _unavailable(
                 "additional cost quoted in a mismatched mint; never summed across mints"
             )
-        cost_amount = Decimal(cost.amount_raw)
-        if not cost_amount.is_finite():
+        cost_amount = _to_finite_decimal(cost.amount_raw)
+        if cost_amount is None:
             return _unavailable("nonfinite additional cost")
         if cost.already_included_in_output:
             # Already reflected in reverse_output -- never subtracted twice.

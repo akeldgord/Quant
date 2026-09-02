@@ -9,13 +9,17 @@ byte-exactly, never retuned). Never updated in place -- a changed evidence
 set or algorithm/config version is always a new row, matching
 ``wallet_score_snapshots``'s own append-only precedent (Phase 3).
 
-Stable unique identity (P5-09): ``wallet_id`` + ``as_of`` +
-``algorithm_version`` + ``evidence_manifest_digest`` (a SHA-256 hex digest
-over the exact sorted set of contributing source row identities, computed
-by ``argus.copyability.identity.evidence_manifest_digest``). A rerun over
-byte-identical evidence at the same cutoff always reuses the existing row
-(``argus.copyability.persistence``); a changed evidence set or upgraded
-algorithm always produces a new one, never an overwrite. ``computed_at``
+Stable unique identity (P5-09, widened by F5-05 remediation): ``wallet_id``
++ ``as_of`` + ``algorithm_version`` + ``evidence_manifest_digest`` (a
+SHA-256 hex digest over the exact sorted set of contributing source row
+identities, computed by
+``argus.copyability.identity.evidence_manifest_digest``) + ``config_hash``
+-- a config/weights change is never silently absorbed into an old row
+under otherwise-identical evidence. A rerun over byte-identical evidence at
+the same cutoff and config always reuses the existing row
+(``argus.copyability.persistence``); a changed evidence set, upgraded
+algorithm, or changed config always produces a new one, never an
+overwrite. ``computed_at``
 (wall-clock write time) deliberately is NOT part of this identity -- two
 runs separated by real time but over the same frozen evidence/config are
 the same semantic snapshot (this instruction's own explicit requirement).
@@ -58,6 +62,7 @@ class WalletCopyabilitySnapshot(FullIdentityMixin, Base):
             "as_of",
             "algorithm_version",
             "evidence_manifest_digest",
+            "config_hash",
             name="uq_wallet_copyability_identity",
         ),
         CheckConstraint(
