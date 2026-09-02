@@ -31,10 +31,29 @@ kind-wide claim), so the other 5 still-PENDING entry-delay probes a single
 `_seed_intent_with_entry_probes` call schedules are never touched by this
 file's own assertions -- "target probes by ID to avoid unrelated due
 probes changing counts," per the frozen instruction.
+
+argus-phase-4-recovery-005 (SEALED ACCEPTANCE CONTRACT, test-only, no
+production code change) adds two frozen assertions on top of the existing
+94-case inventory, both inside this same file:
+
+- ASSERT-01: `_process_and_reprocess` (shared by TC-01/03/04, whose own
+  outcomes are always non-SUCCESS) now also observes the scoped
+  `ShadowQuoteProbe` row count (by the claimed probe's own parent --
+  `shadow_intent_id` for ENTRY_DELAY, `shadow_position_id` for
+  REVERSE_EXECUTABLE) and the seeded-wallet `ShadowPosition` count at
+  three points -- before first execution, after the committed terminal
+  result, and after the fresh-session repeat -- asserting all three are
+  identical. Never applied to TC-02's own SUCCESS cases.
+- ASSERT-02: TC-04's own 44 cases now wrap both executor calls (first +
+  repeat, both inside `_process_and_reprocess`) in `caplog.at_level
+  (logging.DEBUG)` and assert none of the injected inert unsafe
+  sentinels, nor the unsafe `errorCode` value itself (raw or
+  escaped-`repr()` form), ever appear in the captured formatted log text.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
@@ -88,7 +107,9 @@ def _unique_mint() -> str:
 async def _seed_and_claim_entry(sessionmaker, config):
     """Seeds one tracked wallet's real buy swap + monitoring pass (6 due
     ENTRY_DELAY probes), then claims exactly ONE of them by its own
-    probe_id/generation -- the other 5 stay untouched PENDING rows."""
+    probe_id/generation -- the other 5 stay untouched PENDING rows.
+    Returns (wallet_address, wallet_id, shadow_intent_id,
+    shadow_position_id[always None here], probe_id, generation)."""
     wallet_address = _unique_wallet()
     mint = _unique_mint()
     intent = await _seed_intent_with_entry_probes(
@@ -106,14 +127,16 @@ async def _seed_and_claim_entry(sessionmaker, config):
         )
     assert len(claimed) == 1
     probe_id, generation = claimed[0]
-    return wallet_address, intent.wallet_id, probe_id, generation
+    return wallet_address, intent.wallet_id, intent.shadow_intent_id, None, probe_id, generation
 
 
 async def _seed_and_claim_reverse(sessionmaker, config):
     """Fills a real entry probe (creating a real ShadowPosition with its
     own real scheduled REVERSE_EXECUTABLE probes via the actual
     production fill path), then claims exactly ONE reverse probe by its
-    own probe_id/generation."""
+    own probe_id/generation. Returns (wallet_address, wallet_id,
+    shadow_intent_id[always None here], shadow_position_id, probe_id,
+    generation)."""
     wallet_address = _unique_wallet()
     mint = _unique_mint()
     intent = await _seed_intent_with_entry_probes(
@@ -132,7 +155,14 @@ async def _seed_and_claim_reverse(sessionmaker, config):
         )
     assert len(claimed) == 1
     probe_id, generation = claimed[0]
-    return wallet_address, position.wallet_id, probe_id, generation
+    return (
+        wallet_address,
+        position.wallet_id,
+        None,
+        position.shadow_position_id,
+        probe_id,
+        generation,
+    )
 
 
 async def _seed_and_claim(sessionmaker, config, kind: str):
@@ -159,6 +189,30 @@ async def _position_count(sessionmaker, wallet_id: uuid.UUID) -> int:
         ).scalar_one()
 
 
+async def _scoped_probe_count(
+    sessionmaker,
+    *,
+    shadow_intent_id: uuid.UUID | None,
+    shadow_position_id: uuid.UUID | None,
+) -> int:
+    """ASSERT-01: the scoped ShadowQuoteProbe row count for exactly the
+    claimed probe's own parent (its shadow_intent_id for ENTRY_DELAY, its
+    shadow_position_id for REVERSE_EXECUTABLE) -- never an unrelated
+    table-wide count."""
+    assert (shadow_intent_id is None) != (shadow_position_id is None)
+    async with sessionmaker() as session:
+        condition = (
+            ShadowQuoteProbe.shadow_intent_id == shadow_intent_id
+            if shadow_intent_id is not None
+            else ShadowQuoteProbe.shadow_position_id == shadow_position_id
+        )
+        return (
+            await session.execute(
+                select(func.count()).select_from(ShadowQuoteProbe).where(condition)
+            )
+        ).scalar_one()
+
+
 def _snapshot(probe: ShadowQuoteProbe) -> dict[str, Any]:
     return {
         "probe_id": probe.probe_id,
@@ -179,6 +233,10 @@ async def _process_and_reprocess(
     probe_id: uuid.UUID,
     generation: int,
     respond: Callable[[httpx.Request], httpx.Response],
+    *,
+    wallet_id: uuid.UUID,
+    shadow_intent_id: uuid.UUID | None,
+    shadow_position_id: uuid.UUID | None,
 ) -> tuple[ShadowQuoteProbe, dict[str, Any]]:
     """Processes the claimed probe once via the real common executor,
     then -- WITHOUT closing the same provider/transport -- reloads the
@@ -188,7 +246,21 @@ async def _process_and_reprocess(
     byte-for-byte identical before/after, and that the transport recorded
     exactly ONE call in total -- keeping the provider open across both
     calls so a genuine accidental second dispatch could never be masked
-    by a closed-client exception."""
+    by a closed-client exception.
+
+    ASSERT-01 (argus-phase-4-recovery-005): also observes the scoped
+    ShadowQuoteProbe count (by the claimed probe's own parent
+    shadow_intent_id/shadow_position_id) and the seeded-wallet
+    ShadowPosition count at three points -- before first execution, after
+    the committed terminal result, and after the fresh-session repeat --
+    and asserts all three observations are identical. Callers using this
+    helper only ever reach non-SUCCESS terminal outcomes (TC-01/03/04),
+    so this oracle is never applied to a TC-02 SUCCESS case."""
+    before_probe_count = await _scoped_probe_count(
+        sessionmaker, shadow_intent_id=shadow_intent_id, shadow_position_id=shadow_position_id
+    )
+    before_position_count = await _position_count(sessionmaker, wallet_id)
+
     handler = _counting_handler(respond)
     provider, http_client = _jupiter_client(handler)
     try:
@@ -201,6 +273,13 @@ async def _process_and_reprocess(
             _claim_generation=generation,
         )
         assert len(handler.calls) == 1  # type: ignore[attr-defined]
+
+        after_first_probe_count = await _scoped_probe_count(
+            sessionmaker, shadow_intent_id=shadow_intent_id, shadow_position_id=shadow_position_id
+        )
+        after_first_position_count = await _position_count(sessionmaker, wallet_id)
+        assert after_first_probe_count == before_probe_count
+        assert after_first_position_count == before_position_count
 
         config2, engine2, sessionmaker2 = _sessionmaker()
         try:
@@ -228,6 +307,14 @@ async def _process_and_reprocess(
 
         assert snapshot_after == snapshot_before
         assert len(handler.calls) == 1  # type: ignore[attr-defined]  # still exactly 1 -- no new HTTP request
+
+        after_repeat_probe_count = await _scoped_probe_count(
+            sessionmaker, shadow_intent_id=shadow_intent_id, shadow_position_id=shadow_position_id
+        )
+        after_repeat_position_count = await _position_count(sessionmaker, wallet_id)
+        assert after_repeat_probe_count == before_probe_count
+        assert after_repeat_position_count == before_position_count
+
         return first, snapshot_after
     finally:
         await http_client.aclose()
@@ -271,9 +358,14 @@ async def test_tc01_malformed_nested_amount_terminal_no_route_and_reload_idempot
     config, engine, sessionmaker = _sessionmaker()
     wallet_address = None
     try:
-        wallet_address, wallet_id, probe_id, generation = await _seed_and_claim(
-            sessionmaker, config, kind
-        )
+        (
+            wallet_address,
+            wallet_id,
+            shadow_intent_id,
+            shadow_position_id,
+            probe_id,
+            generation,
+        ) = await _seed_and_claim(sessionmaker, config, kind)
         input_mint, output_mint, notional = await _probe_route_identity(sessionmaker, probe_id)
         before_positions = await _position_count(sessionmaker, wallet_id)
 
@@ -296,7 +388,14 @@ async def test_tc01_malformed_nested_amount_terminal_no_route_and_reload_idempot
             )
 
         first, _snapshot_after = await _process_and_reprocess(
-            sessionmaker, config, probe_id, generation, respond
+            sessionmaker,
+            config,
+            probe_id,
+            generation,
+            respond,
+            wallet_id=wallet_id,
+            shadow_intent_id=shadow_intent_id,
+            shadow_position_id=shadow_position_id,
         )
 
         assert first.outcome == OUTCOME_NO_ROUTE
@@ -347,9 +446,14 @@ async def test_tc02_valid_nested_amount_via_common_executor_succeeds(
     config, engine, sessionmaker = _sessionmaker()
     wallet_address = None
     try:
-        wallet_address, wallet_id, probe_id, generation = await _seed_and_claim(
-            sessionmaker, config, PROBE_KIND_ENTRY_DELAY
-        )
+        (
+            wallet_address,
+            wallet_id,
+            _shadow_intent_id,
+            _shadow_position_id,
+            probe_id,
+            generation,
+        ) = await _seed_and_claim(sessionmaker, config, PROBE_KIND_ENTRY_DELAY)
         input_mint, output_mint, notional = await _probe_route_identity(sessionmaker, probe_id)
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -401,9 +505,14 @@ async def test_tc02_invalid_nested_amount_via_common_executor_is_no_route_no_fil
     config, engine, sessionmaker = _sessionmaker()
     wallet_address = None
     try:
-        wallet_address, wallet_id, probe_id, generation = await _seed_and_claim(
-            sessionmaker, config, PROBE_KIND_ENTRY_DELAY
-        )
+        (
+            wallet_address,
+            wallet_id,
+            _shadow_intent_id,
+            _shadow_position_id,
+            probe_id,
+            generation,
+        ) = await _seed_and_claim(sessionmaker, config, PROBE_KIND_ENTRY_DELAY)
         input_mint, output_mint, notional = await _probe_route_identity(sessionmaker, probe_id)
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -502,15 +611,27 @@ async def test_tc03_status_and_code_mapping_worker_and_reload_idempotent(
     config, engine, sessionmaker = _sessionmaker()
     wallet_address = None
     try:
-        wallet_address, _wallet_id, probe_id, generation = await _seed_and_claim(
-            sessionmaker, config, kind
-        )
+        (
+            wallet_address,
+            wallet_id,
+            shadow_intent_id,
+            shadow_position_id,
+            probe_id,
+            generation,
+        ) = await _seed_and_claim(sessionmaker, config, kind)
 
         def respond(request: httpx.Request) -> httpx.Response:
             return httpx.Response(status_code, json=body)
 
         first, _snapshot_after = await _process_and_reprocess(
-            sessionmaker, config, probe_id, generation, respond
+            sessionmaker,
+            config,
+            probe_id,
+            generation,
+            respond,
+            wallet_id=wallet_id,
+            shadow_intent_id=shadow_intent_id,
+            shadow_position_id=shadow_position_id,
         )
 
         assert first.outcome == expected_outcome
@@ -548,14 +669,24 @@ _TC04_UNSAFE_CODES: list[tuple[str, object]] = [
     "code_id,unsafe_code", _TC04_UNSAFE_CODES, ids=[c[0] for c in _TC04_UNSAFE_CODES]
 )
 async def test_tc04_unsafe_provider_code_never_persisted_worker_and_reload_idempotent(
-    admin_engine, kind: str, status_code: int, code_id: str, unsafe_code: object
+    admin_engine,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    status_code: int,
+    code_id: str,
+    unsafe_code: object,
 ) -> None:
     config, engine, sessionmaker = _sessionmaker()
     wallet_address = None
     try:
-        wallet_address, _wallet_id, probe_id, generation = await _seed_and_claim(
-            sessionmaker, config, kind
-        )
+        (
+            wallet_address,
+            wallet_id,
+            shadow_intent_id,
+            shadow_position_id,
+            probe_id,
+            generation,
+        ) = await _seed_and_claim(sessionmaker, config, kind)
 
         def respond(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -574,9 +705,24 @@ async def test_tc04_unsafe_provider_code_never_persisted_worker_and_reload_idemp
                 },
             )
 
-        first, snapshot_after = await _process_and_reprocess(
-            sessionmaker, config, probe_id, generation, respond
-        )
+        # ASSERT-02 (argus-phase-4-recovery-005): capture DEBUG-and-above
+        # logging around BOTH executor calls (first execution + fresh-
+        # session repeat, both performed inside _process_and_reprocess)
+        # and assert none of the injected inert unsafe sentinels or the
+        # unsafe error-code value itself (raw or escaped-repr form) ever
+        # appear in the captured formatted log output.
+        with caplog.at_level(logging.DEBUG):
+            first, snapshot_after = await _process_and_reprocess(
+                sessionmaker,
+                config,
+                probe_id,
+                generation,
+                respond,
+                wallet_id=wallet_id,
+                shadow_intent_id=shadow_intent_id,
+                shadow_position_id=shadow_position_id,
+            )
+        captured_log_text = caplog.text
 
         expected_outcome = (
             OUTCOME_QUOTE_FAILED if status_code == 400 else OUTCOME_PROVIDER_CAPACITY_MISS
@@ -585,13 +731,18 @@ async def test_tc04_unsafe_provider_code_never_persisted_worker_and_reload_idemp
         assert first.failure_evidence == {"http_status_code": status_code}
 
         serialized = str(snapshot_after["failure_evidence"])
-        for secret in (
+        forbidden_values = [
             "sk-live-should-never-be-stored",
             "apiKey=SECRET",
             "trace-should-not-be-stored-either",
             "should-never-be-stored",
-        ):
-            assert secret not in serialized
+        ]
+        if isinstance(unsafe_code, str) and unsafe_code:
+            forbidden_values.append(unsafe_code)
+            forbidden_values.append(repr(unsafe_code))
+        for forbidden in forbidden_values:
+            assert forbidden not in serialized
+            assert forbidden not in captured_log_text
     finally:
         if wallet_address is not None:
             await _cleanup_wallet(admin_engine, wallet_address)
@@ -621,9 +772,14 @@ async def test_tc05_identifier_boundary_worker(
     config, engine, sessionmaker = _sessionmaker()
     wallet_address = None
     try:
-        wallet_address, _wallet_id, probe_id, generation = await _seed_and_claim(
-            sessionmaker, config, PROBE_KIND_ENTRY_DELAY
-        )
+        (
+            wallet_address,
+            _wallet_id,
+            _shadow_intent_id,
+            _shadow_position_id,
+            probe_id,
+            generation,
+        ) = await _seed_and_claim(sessionmaker, config, PROBE_KIND_ENTRY_DELAY)
 
         def respond(request: httpx.Request) -> httpx.Response:
             return httpx.Response(status_code, json={"errorCode": code})
