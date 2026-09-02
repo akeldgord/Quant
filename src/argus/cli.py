@@ -54,6 +54,10 @@ shadow_app = typer.Typer(
 app.add_typer(shadow_app, name="shadow")
 report_app = typer.Typer(add_completion=False, help="Operator reports")
 app.add_typer(report_app, name="report")
+copyability_app = typer.Typer(
+    add_completion=False, help="Copyability + forward information value research reports (Phase 5)"
+)
+app.add_typer(copyability_app, name="copyability")
 
 console = Console()
 
@@ -1752,6 +1756,101 @@ def report_daily() -> None:
                 default=str,
             )
         )
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@copyability_app.command("report")
+def copyability_report(
+    wallet: str = typer.Option(
+        "", "--wallet", help="Restrict to one tracked wallet address. Omit to report every wallet."
+    ),
+    as_of: str = typer.Option(
+        "", "--as-of", help="ISO-8601 point-in-time cutoff. Defaults to now."
+    ),
+) -> None:
+    """P5-10: the one 'argus copyability' report command. Read-only over
+    already-persisted Phase 1/3/4 evidence (no quote-provider dispatch,
+    no evidence mutation) -- computes and idempotently persists each
+    wallet's Phase 5 analytical snapshot (MASTER_SPEC.md sections 46-53),
+    then prints the required report fields. A wallet with no shadow-copy
+    sample yet is reported honestly with null/unavailable fields, never a
+    fabricated score."""
+    import json
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.copyability.service import (
+        BUILD_HASH,
+        compute_and_persist_wallet_copyability,
+    )
+    from argus.domain.wallets import Wallet
+    from argus.scoring.config_weights import load_copyability_weights
+
+    as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+
+    async def _run() -> int:
+        config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            weights = load_copyability_weights(config)
+            async with sessionmaker() as session, session.begin():
+                query = select(Wallet)
+                if wallet:
+                    query = query.where(Wallet.wallet_address == wallet)
+                wallets = (await session.execute(query)).scalars().all()
+
+                reports = []
+                for wallet_row in wallets:
+                    snapshot, created = await compute_and_persist_wallet_copyability(
+                        session,
+                        wallet=wallet_row,
+                        as_of=as_of_dt,
+                        weights=weights,
+                        build_hash=BUILD_HASH,
+                        config_hash=config.config_hash,
+                        master_spec_hash=config.spec_hash,
+                        git_commit=git_commit,
+                        computed_at=datetime.now(UTC),
+                        current_size=None,
+                    )
+                    reports.append(
+                        {
+                            "wallet": wallet_row.wallet_address,
+                            "as_of": snapshot.as_of.isoformat(),
+                            "algorithm_version": snapshot.algorithm_version,
+                            "snapshot_reused": not created,
+                            "copyability_score": (
+                                str(snapshot.copyability_score)
+                                if snapshot.copyability_score is not None
+                                else None
+                            ),
+                            "copyability_components": snapshot.copyability_components,
+                            "sample_n": snapshot.sample_n,
+                            "sample_k": snapshot.sample_k,
+                            "confidence": snapshot.confidence,
+                            "delay_curve": snapshot.delay_curve,
+                            "half_life_result": snapshot.half_life_result,
+                            "forward_information_grid": snapshot.forward_information_grid,
+                            "size_surprise": snapshot.size_surprise,
+                            "excluded_source_ids": snapshot.excluded_source_ids,
+                            "evidence_manifest_digest": snapshot.evidence_manifest_digest,
+                            "config_hash": snapshot.config_hash,
+                            "master_spec_hash": snapshot.master_spec_hash,
+                            "build_hash": snapshot.build_hash,
+                            "git_commit": snapshot.git_commit,
+                        }
+                    )
+        finally:
+            await engine.dispose()
+
+        if not reports:
+            console.print("no tracked wallets found -- nothing to report")
+            return 0
+        console.print(json.dumps(reports, indent=2, default=str))
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))

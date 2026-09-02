@@ -1,0 +1,61 @@
+=== $ uv run pytest tests/integration/test_phase4_recovery_3_matrix.py --collect-only -q
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[1_char-400]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[1_char-429]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[128_chars-400]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[128_chars-429]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[unknown_digits_underscore-400]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[unknown_digits_underscore-429]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[129_chars_rejected-400]
+tests/integration/test_phase4_recovery_3_matrix.py::test_tc05_identifier_boundary_worker[129_chars_rejected-429]
+
+94 tests collected in 0.37s
+
+=== $ uv run pytest tests/integration/test_phase4_recovery_3_matrix.py tests/integration/test_phase4_recovery_2.py tests/unit/test_phase4_recovery_2_contract.py -q
+SKIPPED [1] tests/integration/test_phase4_recovery_2.py:705: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/integration/test_phase4_recovery_2.py:735: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/integration/test_phase4_recovery_2.py:765: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/integration/test_phase4_recovery_2.py:807: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+53 passed, 109 skipped in 2.45s
+
+=== $ uv run pytest tests/integration/test_shadow_phase4_remediation_observation.py tests/integration/test_shadow_quote_jobs_provider_remediation.py tests/integration/test_shadow_phase4.py tests/integration/test_shadow_phase4_concurrency_remediation.py tests/integration/test_migrations.py tests/integration/test_daily_report_remediation.py tests/integration/test_replay_demo_isolation.py -q
+SKIPPED [1] tests/integration/test_daily_report_remediation.py:1705: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/integration/test_replay_demo_isolation.py:430: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [4] tests/integration/test_replay_demo_isolation.py:462: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/integration/test_replay_demo_isolation.py:523: Postgres not reachable for integration tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+2 passed, 126 skipped in 2.44s
+
+=== $ uv run pytest -q (full suite)
+SKIPPED [1] tests/replay/test_replay.py:532: Postgres not reachable for replay tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/replay/test_replay.py:605: Postgres not reachable for replay tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/replay/test_replay.py:702: Postgres not reachable for replay tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+SKIPPED [1] tests/replay/test_replay.py:834: Postgres not reachable for replay tests: [Errno 111] Connect call failed ('127.0.0.1', 5432)
+839 passed, 335 skipped in 54.35s
+
+=== $ uv run ruff check .
+All checks passed!
+
+=== $ uv run ruff format --check .
+289 files already formatted
+
+=== $ uv run mypy src
+Success: no issues found in 141 source files
+
+=== $ uv run alembic heads
+0022 (head)
+
+=== $ uv run python -m argus.cli fixtures validate-real-chain
+real_mainnet_dca_close_dual_asset_transfer_in: ok - ok
+real_mainnet_failed_nft_sale: ok - ok
+real_mainnet_multi_hop_swap: ok - ok
+real_mainnet_orca_close_position_multi_account: ok - ok
+real_mainnet_partial_sell: ok - ok
+real_mainnet_sol_to_token_swap: ok - ok
+real_mainnet_sol_transfer_multi: ok - ok
+real_mainnet_sol_transfer_received: ok - ok
+real_mainnet_sol_transfer_single: ok - ok
+real_mainnet_token_to_sol_swap: ok - ok
+real_mainnet_token_to_usdc_swap: ok - ok
+real_mainnet_usdc_transfer: ok - ok
+
+=== $ docker compose up -d postgres  (attempted genuine-evidence path; environmental)
+unable to get image 'postgres:17': Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?

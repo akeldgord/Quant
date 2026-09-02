@@ -64,26 +64,45 @@ guard (`refuse_unless_scratch_database`) additionally refuses to proceed
 if the resolved database name doesn't match this script's own scratch-name
 prefix, checked before any write and before any network-shaped call.
 
-After capturing full evidence (printed here and saved to
-`orchestration/phase_4_remediation_1/evidence/replay_demo_results.json`),
-the scratch database is dropped. The JSON snapshot and this script's
-captured stdout are the durable evidence -- the original Phase 4
-evidence at `orchestration/phase_4/evidence/replay_demo_results.json`
-(produced by the pre-remediation, shared-database version of this script)
-is left byte-for-byte unmodified as immutable history; it documents the
-same lifecycle correctly, just via a script version this remediation
-replaces for future runs.
+P5-11 remediation (``argus-phase-5-001``, consuming the recovery-005
+carryforward CF-P4-01): earlier versions of this script wrote evidence to
+a fixed, tracked path under `orchestration/` -- every round that reused
+this script for its own replay-based tests had to hand-edit `EVIDENCE_DIR`
+before running the targeted regression suite (which subprocess-invokes
+this script via `test_replay_demo_isolation.py`), or risk silently
+regenerating a PRIOR round's frozen evidence file with fresh random UUIDs.
+This version adds an explicit `--output-dir DIR` option; its default is a
+FRESH, per-process, untracked directory
+(`tempfile.mkdtemp(prefix="argus_phase4_replay_demo_")`, outside the repo
+entirely) -- so neither running this script directly nor any test that
+subprocess-invokes it with no arguments ever writes to a tracked
+orchestration evidence path. An explicit `--output-dir` pointing at a real
+(new) `orchestration/phase_5/evidence`-style path remains how a round
+captures its own durable evidence for a checkpoint. The output path is
+validated -- refusing to silently overwrite an existing file, with no
+`--overwrite` escape hatch -- BEFORE any scratch-database creation,
+migration, or replay work begins, so a bad path fails fast and cheaply.
 
-Run with: ``uv run python scripts/argus_phase4_replay_demo.py``
+After capturing full evidence (printed here and saved under
+`--output-dir`), the scratch database is dropped. The JSON snapshot and
+this script's captured stdout are the durable evidence -- every
+historical evidence file this script has ever produced under
+`orchestration/` is left byte-for-byte unmodified as immutable history; it
+documents the same lifecycle correctly, just via a script version later
+rounds replace for future runs.
+
+Run with: ``uv run python scripts/argus_phase4_replay_demo.py [--output-dir DIR]``
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import dataclasses
 import json
 import os
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -123,8 +142,39 @@ from argus.telegram.notifier import FakeTelegramTransport, TelegramNotifier  # n
 REAL_FIXTURE = (
     REPO_ROOT / "tests" / "golden" / "fixtures" / "real" / "real_mainnet_sol_to_token_swap.json"
 )
-EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_recovery_5" / "evidence"
-RESULTS_PATH = EVIDENCE_DIR / "replay_demo_results.json"
+RESULTS_FILENAME = "replay_demo_results.json"
+
+
+class ExistingReplayOutputFileError(RuntimeError):
+    """Raised when the resolved output file already exists -- P5-11: this
+    script never silently overwrites a prior run's evidence and offers no
+    ``--overwrite`` escape hatch. Raised before any scratch-database
+    creation, migration, or replay work begins."""
+
+
+def default_output_dir() -> Path:
+    """A fresh, per-process, untracked directory OUTSIDE the repository --
+    never a tracked ``orchestration/`` path. Two default invocations (this
+    function called twice, e.g. by two concurrent/sequential runs) always
+    resolve to two distinct directories."""
+    return Path(tempfile.mkdtemp(prefix="argus_phase4_replay_demo_"))
+
+
+def resolve_results_path(output_dir: Path) -> Path:
+    """Validates and returns ``output_dir / RESULTS_FILENAME`` -- refuses
+    (``ExistingReplayOutputFileError``) if that exact file already exists.
+    Creates ``output_dir`` itself if missing (never requires the caller to
+    pre-create it), but never touches an existing target file's bytes."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_path = output_dir / RESULTS_FILENAME
+    if results_path.exists():
+        raise ExistingReplayOutputFileError(
+            f"refusing to overwrite existing replay evidence file {results_path} -- "
+            "this script never overwrites a prior run's output; pass a different "
+            "--output-dir (or remove the file yourself if you intend to replace it)."
+        )
+    return results_path
+
 
 _LEADER_TIME = datetime(2024, 9, 18, 9, 22, 18, tzinfo=UTC)  # the fixture's real blockTime
 _TEST_GIT_COMMIT = "REPLAY4DEMO_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
@@ -581,7 +631,29 @@ async def _run_replay_lifecycle(sessionmaker, config) -> dict[str, Any]:
     return events
 
 
-async def main() -> int:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to write replay_demo_results.json into. Defaults to a fresh, "
+        "untracked temp directory outside the repo (see default_output_dir()). Refuses "
+        "to overwrite an existing file at the resolved path -- there is no --overwrite "
+        "flag.",
+    )
+    return parser.parse_args(argv)
+
+
+async def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    output_dir = args.output_dir if args.output_dir is not None else default_output_dir()
+
+    # P5-11: path validation happens BEFORE any scratch-database creation,
+    # migration, or replay/provider work -- a bad --output-dir fails fast
+    # and cheaply, never after paying for the whole lifecycle.
+    results_path = resolve_results_path(output_dir)
+
     scratch_name = _new_scratch_database_name()
     refuse_unless_scratch_database(scratch_name)
 
@@ -642,10 +714,13 @@ async def main() -> int:
             os.environ["ARGUS_DB_NAME"] = previous_db_name
         if fault != "before_create_database":
             await _maintenance_execute(f'DROP DATABASE IF EXISTS "{scratch_name}" WITH (FORCE)')
-        EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-        RESULTS_PATH.write_text(json.dumps(events, indent=2, default=str) + "\n")
+        results_path.write_text(json.dumps(events, indent=2, default=str) + "\n")
         print(json.dumps(events, indent=2, default=str))
-        print(f"\nEvidence written to {RESULTS_PATH.relative_to(REPO_ROOT)}")
+        try:
+            printed_path = results_path.relative_to(REPO_ROOT)
+        except ValueError:
+            printed_path = results_path
+        print(f"\nEvidence written to {printed_path}")
         print(
             f"Scratch database {scratch_name!r} dropped -- this demo never wrote to or "
             "deleted from the shared configured database (see this script's module docstring)."
@@ -654,4 +729,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(asyncio.run(main(sys.argv[1:])))

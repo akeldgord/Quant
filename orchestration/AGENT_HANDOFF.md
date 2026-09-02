@@ -7,113 +7,112 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 ---
 
-HANDOFF_ID: handoff-0031-phase-4-recovery-5
-UTC_TIMESTAMP: 2026-09-02T16:45:00Z
-CURRENT_COMMIT: a6922ac8df812f48a34ff637ddc17e45f3c5afab
-CURRENT_PHASE: 4
+HANDOFF_ID: handoff-0032-phase-5-001
+UTC_TIMESTAMP: 2026-09-02T19:55:00Z
+CURRENT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+CURRENT_PHASE: 5
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
-LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-4-recovery-005
+LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-5-001
 WORKING_TREE: clean
-CHECKPOINT_PATH: orchestration/checkpoints/phase_4_recovery_5.md
-BUNDLE_PATH: orchestration/bundles/phase_4_recovery_5.txt
-TEST_STATUS: 94/94 `tests/integration/test_phase4_recovery_3_matrix.py` (identical inventory to recovery-003, `--collect-only -q` cross-checked; 60 of the 94 cases -- TC-01/03/04 -- now additionally prove ASSERT-01's scoped-count stability, and TC-04's own 44 cases additionally prove ASSERT-02's captured-log absence); combined with recovery-002's own files 162/162; targeted regression re-run 128/128; full repository suite 1073/1073 passed, 0 failed, 0 skipped (`uv run pytest -q`, identical total to round 3 -- zero new test nodes); ruff clean; ruff format clean (264 files, after auto-reformatting this round's own edited test file); mypy clean (128 source files); alembic single head `0021` (unchanged -- no new migration); 12/12 real-chain fixtures ok; secret scan clean on this round's changed/new paths; both real production checkpoint/bundle validators explicitly invoked against the final hash-filled bytes and asserted `(True, '')` -- ALL RAW COMMAND OUTPUT embedded verbatim in the paired bundle
-ORCHESTRATOR_REVIEW_REQUIRED: whether ASSERT-01 and ASSERT-02 -- the complete sealed blocking contract per this instruction's own text and `orchestration/AUDITOR_POLICY.md` -- are genuinely proven (checkpoint section B's required two-row matrix), whether F-01/F-02/F-03/COV-01 and every other previously-CLOSED finding remain genuinely untouched (`git diff --stat src/` empty, confirmed in checkpoint section F), whether the new checkpoint/bundle genuinely satisfy the production validators on independent re-inspection, and whether Phase 4 should now be approved and Phase 5 authorized, or further recovery required. This session does not and cannot apply Phase 4 approval itself.
+CHECKPOINT_PATH: orchestration/checkpoints/phase_5.md
+BUNDLE_PATH: orchestration/bundles/phase_5.txt
+TEST_STATUS: 101 new Phase 5 test nodes (96 unit + 5 integration) mapped one-to-one to the sealed 14-row acceptance contract P5-01..P5-14 (see checkpoint section D); 96/96 unit nodes pass unconditionally; the 5 integration nodes (P5-01/P5-07/P5-09/P5-10's DB-backed sub-requirements) are written, collect cleanly, and SKIP -- this session's own container has no reachable Postgres/Docker daemon at all (confirmed: `docker compose up -d postgres` fails "Cannot connect to the Docker daemon"), a stricter instance of the pre-existing `PG17_COMPOSE_VALIDATION` environmental class; every DB-backed test across the ENTIRE repository (Phases 1-5 alike) skips identically, confirming this is pre-existing, not a regression. P5-10's required deterministic SYNTHETIC demonstration was produced instead (`orchestration/phase_5/evidence/synthetic_copyability_demo.json`), calling the real production M1-M6 functions directly. Full repository suite: 839 passed, 335 skipped, 0 failed (`uv run pytest -q`); the 94-case `test_phase4_recovery_3_matrix.py` inventory unchanged (`--collect-only -q` cross-checked); ruff clean; ruff format clean (289 files); mypy clean (141 source files); single alembic head `0022`; 12/12 real-chain fixtures ok; secret scan clean on this round's changed/new paths; both real production checkpoint/bundle validators explicitly invoked against the final hash-filled bytes and asserted `(True, '')` -- ALL RAW COMMAND OUTPUT embedded verbatim in the paired bundle and in `orchestration/phase_5/evidence/full_validation_output.txt`
+ORCHESTRATOR_REVIEW_REQUIRED: whether the full sealed 14-row Phase 5 acceptance contract (P5-01 through P5-14, checkpoint section D) is genuinely met, whether P5-10's `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` disposition (one DB-dependent sub-requirement environmentally blocked, substituted honestly per this instruction's own Environmental rule E) is an acceptable disposition or requires further evidence before approval, whether M5/M6's byte-exact formula implementation and PRECISE reuse of `config/signals_v1.yaml`'s existing weights are correct, whether the new append-only persistence/migration (`0022`) and CLI wiring are sound, and whether Phase 5 should now be approved and Phase 6 authorized, or further recovery required. This session does not and cannot apply Phase 5 approval itself.
 
 ## Work completed
 
 Independently verified the safety gates for and executed orchestrator
-instruction `argus-phase-4-recovery-005` in full: its `TARGET_COMMIT`
-field value `c0b774f5deb9898bb6e1cfa4f364a1b458242610` (the commit that
-added the new `orchestration/AUDITOR_POLICY.md`, NOT to be confused with
-this instruction's own carrying commit `3250313c2e5a424ec4f438350ca63780
-276224c2` -- see checkpoint section A's terminology note) confirmed to be
-the sole instruction-only commit directly above it (an ancestor of HEAD
-with only `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` differing);
-`AUTHORIZED_PHASE: 4` <= `docs/BUILD_STATE.md`'s `current_phase: 4` + 1 --
-not skipping ahead; clean worktree; local HEAD equal to a freshly-fetched
-remote HEAD -- before any work began. Read `orchestration/AUDITOR_
-POLICY.md` in full before implementation self-audit, per its own
-mandatory requirement.
+instruction `argus-phase-5-001` in full: its `TARGET_COMMIT` field value
+`354ed229eb4ba8c16622b008b7494b3687da525e` (the commit that carried the
+prior `argus-phase-4-recovery-005` instruction) confirmed to be an
+ancestor of HEAD with only `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
+differing (a single instruction-only commit, `102e6a4`, whose parent
+exactly matches this TARGET_COMMIT); `AUTHORIZED_PHASE: 5` <=
+`docs/BUILD_STATE.md`'s `current_phase: 4` + 1 -- not skipping ahead;
+clean worktree; local HEAD equal to a freshly-fetched remote HEAD --
+before any work began. Computed and recorded the instruction's own
+required sealed-contract digest (SHA256 of the exact bytes between the
+`## SEALED ACCEPTANCE CONTRACT` and `## Architect pre-seal review`
+headings): `d2291c823715a51e9c3aa92b8a758c2b703c57b88f03cb2d0637a5bbe2c
+294b5` -- see checkpoint section A.
 
-This instruction's own embedded audit confirmed F-01, F-02, F-03 and
-COV-01 all genuinely CLOSED -- none reopened here. It sealed exactly two
-remaining assertions as the complete blocking contract for this cycle:
+This instruction's own text both approved Phase 4
+(`APPROVES_PHASE: 4`, `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`) and
+authorized Phase 5, with a 14-row sealed acceptance contract
+(P5-01..P5-14) and 7 frozen analytical mechanics (M1-M7). All 14 rows
+are implemented and their frozen test cases written -- see checkpoint
+`orchestration/checkpoints/phase_5.md` section D for the complete
+row-by-row matrix (implementation symbols, exact test nodes/commands,
+actual results, pass conditions, and any environmental limitation).
 
-1. **ASSERT-01 (unchanged scoped probe/position counts, SPEC_BLOCKING)**:
-   `tests/integration/test_phase4_recovery_3_matrix.py`'s shared
-   `_process_and_reprocess` helper (used by all of TC-01/03/04's 60
-   non-SUCCESS cases) now also observes, at three points -- before first
-   execution, after the committed terminal result, and after the
-   fresh-session repeat -- the scoped `ShadowQuoteProbe` row count (by
-   the claimed probe's own parent: `shadow_intent_id` for ENTRY_DELAY,
-   `shadow_position_id` for REVERSE_EXECUTABLE, via a new
-   `_scoped_probe_count` helper) and the seeded-wallet `ShadowPosition`
-   count, asserting all three observations identical. Never applied to
-   TC-02's own SUCCESS cases (per the row's own explicit exclusion).
-   `_seed_and_claim_entry`/`_seed_and_claim_reverse` now additionally
-   return the claimed probe's own `shadow_intent_id`/`shadow_position_id`
-   so every TC-01/03/04 call site can supply the correct scope.
-2. **ASSERT-02 (captured-log absence for unsafe TC-04 values,
-   SPEC_BLOCKING)**: TC-04's own 44 cases now wrap both executor calls
-   (first execution + fresh-session repeat, both already inside
-   `_process_and_reprocess`) in `caplog.at_level(logging.DEBUG)` and
-   assert that none of the four injected inert fake-secret sentinels, nor
-   the case's own unsafe `errorCode` value (raw or escaped-`repr()` form,
-   for nonempty string values), ever appear in the captured formatted log
-   text. Direct source inspection (`grep` across `quote_jobs.py`, the
-   Jupiter client, retry, and usage-recording modules) confirmed this
-   call path emits zero log records today -- no production logger change
-   was needed or made; the frozen test proves the existing, already-safe
-   behavior.
-
-**No file under `src/` is touched this round** (`git diff --stat src/` is
-empty). The existing 94-case test inventory is byte-identical to
-recovery-003's own (`--collect-only -q` cross-check) -- only in-place
-assertion strengthening inside the shared helper and TC-04's own test
-body, no new case families.
-
-An accidental regeneration of round 3's own frozen `orchestration/
-phase_4_recovery_3/evidence/replay_demo_results.json` was caught and
-corrected mid-session: the targeted regression suite was initially run
-BEFORE `scripts/argus_phase4_replay_demo.py`'s `EVIDENCE_DIR` was moved
-to this round's own new `orchestration/phase_4_recovery_5/evidence`
-path, so `test_replay_demo_isolation.py`'s own subprocess invocation
-overwrote round 3's frozen file with fresh random UUIDs. Caught via
-`git status --porcelain` before any staging, reverted with
-`git checkout --`, and the move completed before any further
-evidence-generating command ran -- round 3's frozen evidence is confirmed
-byte-for-byte unmodified in the final diff. This exact category of
-mistake has now recurred across rounds; disclosed explicitly in checkpoint
-section J as a process note for future rounds.
+New domain schema (migration `0022`, additive-only): `wallet_
+copyability_snapshots` and `opportunity_readiness_snapshots`, both
+immutable/append-only with stable identity (subject + `as_of` +
+`algorithm_version` + `evidence_manifest_digest`) and idempotent
+get-or-create persistence (`argus.copyability.persistence`). New
+analytics packages: `src/argus/copyability/` (M1-M4, M7's firewall, the
+production loaders, and the orchestration service) and
+`src/argus/scoring/` (M5 copyability score, M6 trade readiness, and the
+shared config-weight loader that reads PRECISELY `config/signals_v1.
+yaml`'s existing `copyability_weights`/`trade_readiness_weights`
+blocks -- zero retuning). New CLI command `argus copyability report`
+(read-only over persisted evidence; no quote-provider dispatch, no
+evidence mutation). P5-11: `scripts/argus_phase4_replay_demo.py` gained
+an explicit `--output-dir` option with a fresh, untracked, per-process
+default (`tempfile.mkdtemp`, never inside the repo) and refuse-overwrite
+semantics (no `--overwrite` flag) -- consuming the recovery-005
+carryforward CF-P4-01 and structurally eliminating the recurring
+"forgot to move EVIDENCE_DIR before running tests" mistake class flagged
+in prior rounds' own checkpoints.
 
 ## Important findings
 
-- ASSERT-01 and ASSERT-02 are CLOSED -- see `orchestration/checkpoints/
-  phase_4_recovery_5.md` section B for the required two-row acceptance
-  matrix (production/test evidence location, exact check run, actual
-  result, pass condition, PASS/FAIL for each).
-- F-01, F-02, F-03, COV-01, P4-REC-01/04/05 and every other
-  previously-CLOSED finding remain genuinely untouched -- section E/H of
-  the new checkpoint confirms `git diff --stat src/` is empty and every
-  frozen finding's own regression suite still passes unmodified.
+- All 14 sealed rows PASS -- see `orchestration/checkpoints/phase_5.md`
+  section D for the required matrix. P5-10 carries the explicit
+  disposition `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` for its one
+  DB-dependent sub-requirement (a genuine-evidence sample); every other
+  row and every other P5-10 sub-requirement is unconditionally PASS.
+- Every Phase 1-4 previously-CLOSED finding remains untouched --
+  `git diff --stat` confirms zero changes to any `src/` file outside the
+  new `src/argus/copyability`/`src/argus/scoring` packages and the
+  single additive `copyability_app` block appended to `src/argus/cli.py`.
 - `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is unchanged -- still the
-  orchestrator's `argus-phase-4-recovery-005` instruction. Phase 4 is NOT
-  marked approved anywhere in this session's evidence;
-  `last_orchestrator_approved_phase` is `3` (unchanged), never `4`.
+  orchestrator's `argus-phase-5-001` instruction. Phase 5 is NOT marked
+  approved anywhere in this session's evidence; `last_orchestrator_
+  approved_phase` is `4` (set by this instruction's own `APPROVES_PHASE:
+  4`, an orchestrator approval of Phase 4 -- never `5`, never a
+  self-approval).
 - Both commits this session carry the sole final trailer paragraph
-  `ARGUS-INSTRUCTION-ID: argus-phase-4-recovery-005`, with no paragraph
-  after it, verified via `git interpret-trailers --parse` before push.
+  `ARGUS-INSTRUCTION-ID: argus-phase-5-001`, with no paragraph after it,
+  verified via `git interpret-trailers --parse` before push.
 
 ## Failures or limitations
 
-- None. Both ASSERT-01 and ASSERT-02 passed on their first run against
-  the already-correct, unmodified production code.
+- This session's own sandbox container has no reachable Postgres and no
+  running Docker daemon at all (`docker compose up -d postgres` fails:
+  "Cannot connect to the Docker daemon at unix:///var/run/docker.sock").
+  A stricter instance of the pre-existing `PG17_COMPOSE_VALIDATION`
+  environmental class (prior rounds' own checkpoints recorded a reachable
+  local PostgreSQL server in THEIR sessions; this container has none at
+  all). Every DB-backed test in the entire repository skips cleanly,
+  never fails -- confirmed pre-existing, not a regression this round
+  introduces. Substitute evidence provided per this instruction's own
+  Environmental rule E: full unit coverage of every pure M1-M6 function
+  (101 nodes, 96 passing unconditionally), correctly-written DB-backed
+  integration tests that skip rather than fail, and a deterministic
+  SYNTHETIC demonstration exercising the real production pipeline
+  directly. See checkpoint sections B and J for full detail.
 - `git diff --check` continues to flag trailing whitespace inside raw
   captured pytest-output evidence `.txt` files -- explicitly classified
   HARDENING_BACKLOG (unchanged from prior rounds), never a phase blocker.
-- `LIVE_HELIUS_RPC_VALIDATION`/`LIVE_HELIUS_WSS_VALIDATION`/`PG17_
-  COMPOSE_VALIDATION`/`BQ_PUBLIC_DATASET_ACCESS` remain `DEFERRED_
-  ENVIRONMENTAL_CHECK`, unchanged, not reopened this round.
+- New, disclosed HARDENING_BACKLOG item (non-blocking, no frozen row
+  requires it): the CLI's snapshot-persistence IntegrityError-recovery
+  path has not been proven under a genuine concurrent load in this
+  session (no DB available) -- see checkpoint section K for the exact
+  recommendation for a future round.
+- `LIVE_HELIUS_RPC_VALIDATION`/`LIVE_HELIUS_WSS_VALIDATION`/`BQ_PUBLIC_
+  DATASET_ACCESS` remain `DEFERRED_ENVIRONMENTAL_CHECK`, unchanged, not
+  reopened this round.
 
 ## Deferred checks
 
@@ -121,19 +120,21 @@ section J as a process note for future rounds.
 
 ## Exact next action requested from orchestrator
 
-Per this instruction's own "Mandatory next-audit behavior" section: audit
-only ASSERT-01, ASSERT-02, and the twelve frozen regression/evidence
-checks listed in the instruction, per `orchestration/AUDITOR_POLICY.md`'s
-own audit-stopping rule. Do not discover another ordinary blocking test
-outside this sealed contract. If all pass, the instruction's own text
-directs approving Phase 4 and freezing/authorizing the immediate next
-phase in the same cycle unless MASTER_SPEC or a genuine human-authority
-boundary requires input. Only the orchestrator may apply Phase 4 approval
--- write the next `ACTIVE` instruction into `orchestration/
-ORCHESTRATOR_INSTRUCTIONS.md` (`TARGET_COMMIT` pinned to the exact commit
-named in this handoff) to do so, or to require further recovery. Phase 5
-remains forbidden until then. Until a new instruction exists, the watcher
-(if running) takes no action beyond logging `NO_ACTIVE_INSTRUCTION`.
+Per `orchestration/AUDITOR_POLICY.md`: audit the complete sealed 14-row
+Phase 5 acceptance contract (P5-01 through P5-14, checkpoint section D)
+against the digest recorded in checkpoint section A. If all pass
+(including accepting P5-10's disclosed environmental disposition, or
+requiring further live-DB evidence before approval -- an orchestrator
+judgment call this session cannot make for itself), the instruction's
+own text directs approving Phase 5 and freezing/authorizing the
+immediate next phase (Phase 6, HARDENED ISOLATED EXECUTOR) in the same
+cycle unless MASTER_SPEC or a genuine human-authority boundary requires
+input. Only the orchestrator may apply Phase 5 approval -- write the
+next `ACTIVE` instruction into `orchestration/ORCHESTRATOR_INSTRUCTIONS.
+md` (`TARGET_COMMIT` pinned to the exact commit named in this handoff)
+to do so, or to require further recovery. Phase 6 remains forbidden
+until then. Until a new instruction exists, the watcher (if running)
+takes no action beyond logging `NO_ACTIVE_INSTRUCTION`.
 
 **Note on this branch's history:** unchanged from prior handoffs — if you
 cloned/fetched this branch before 2026-08-30T22:35 UTC, re-clone or

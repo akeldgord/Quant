@@ -1,0 +1,169 @@
+{
+  "label": "SYNTHETIC DEMONSTRATION -- NOT AUTHENTIC PROSPECTIVE EVIDENCE",
+  "wallet": "SYNTHETIC_WALLET_NOT_A_REAL_ADDRESS",
+  "qualification_score": "90",
+  "leader_result": {
+    "entry": {
+      "input_amount_raw": 100000000,
+      "output_amount_raw": 200000000
+    }
+  },
+  "follower_returns_by_delay": {
+    "1s": "0.4",
+    "5s": "0.2",
+    "15s": "0.1"
+  },
+  "executable_outcome_example": {
+    "status": "SUCCESS",
+    "gross_return_pct": "120.0"
+  },
+  "half_life": {
+    "outcome": "PEAK_FOUND",
+    "peak_seconds": 1,
+    "crossing_seconds": 5,
+    "half_life_seconds": "4"
+  },
+  "forward_information_grid": {
+    "5s": {
+      "available": true,
+      "return_fraction": "0.4",
+      "is_executable": true,
+      "benchmark": "cash_zero_return_baseline",
+      "matched_universe_abnormal_return": null,
+      "matched_universe_status": "PHASE_9_MATCHED_CONTROLS_UNAVAILABLE"
+    },
+    "15s": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    },
+    "30s": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    },
+    "60s": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    },
+    "5m": {
+      "available": true,
+      "return_fraction": "0.1",
+      "is_executable": true,
+      "benchmark": "cash_zero_return_baseline",
+      "matched_universe_abnormal_return": null,
+      "matched_universe_status": "PHASE_9_MATCHED_CONTROLS_UNAVAILABLE"
+    },
+    "30m": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    },
+    "1h": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    },
+    "6h": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    },
+    "24h": {
+      "available": false,
+      "reason": "no observation at this horizon"
+    }
+  },
+  "copyability": {
+    "score": "63.6000",
+    "components": {
+      "prospective_delayed_follower_alpha": {
+        "available": true,
+        "value": "60.0",
+        "weight": "0.35",
+        "reason": null
+      },
+      "liquidity_executability": {
+        "available": true,
+        "value": "80",
+        "weight": "0.15",
+        "reason": null
+      },
+      "post_entry_stability": {
+        "available": true,
+        "value": "75.00",
+        "weight": "0.10",
+        "reason": null
+      },
+      "holding_duration_suitability": {
+        "available": true,
+        "value": "60",
+        "weight": "0.10",
+        "reason": null
+      },
+      "latency_tolerance": {
+        "available": true,
+        "value": "25",
+        "weight": "0.10",
+        "reason": null
+      },
+      "slippage_sensitivity": {
+        "available": true,
+        "value": "98.00",
+        "weight": "0.10",
+        "reason": null
+      },
+      "sample_confidence": {
+        "available": true,
+        "value": "48.00",
+        "weight": "0.10",
+        "reason": null
+      }
+    },
+    "confidence": "LOW",
+    "sample_n": 12,
+    "sample_k": 6
+  },
+  "size_surprise": {
+    "median": "3",
+    "mad": "1",
+    "z": "4.046944556859571023876972885",
+    "component": "90.46944556859571023876972885"
+  },
+  "readiness": {
+    "gates": {
+      "token_safety": {
+        "status": "PASS",
+        "reason": "synthetic ok"
+      },
+      "chain_freshness": {
+        "status": "PASS",
+        "reason": "synthetic ok"
+      },
+      "wallet_eligibility": {
+        "status": "PASS",
+        "reason": "synthetic tier A"
+      },
+      "history_quality": {
+        "status": "PASS",
+        "reason": "synthetic HIGH"
+      },
+      "quote_validity": {
+        "status": "PASS",
+        "reason": "synthetic fresh quote"
+      },
+      "risk_caps": {
+        "status": "PASS",
+        "reason": "synthetic nonzero caps"
+      }
+    },
+    "eligible": true,
+    "actionable_score": "82.46694455685957102387697288",
+    "diagnostic_score": "82.46694455685957102387697288"
+  },
+  "sample_size": 12,
+  "confidence": "LOW",
+  "versions": {
+    "algorithm_version": "copyability_v1",
+    "normalization_version": "copyability_components_v1"
+  },
+  "limitations": [
+    "SYNTHETIC data throughout -- never presented as authentic prospective observation (M7).",
+    "No live database was available in this sandbox to run the real 'argus copyability report' CLI end-to-end against genuine persisted evidence (see phase_5 checkpoint Environmental section); this demonstration exercises the exact same production M1-M6 functions the CLI command calls, directly."
+  ]
+}
