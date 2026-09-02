@@ -91,6 +91,7 @@ proof.
 from __future__ import annotations
 
 import contextlib
+import re
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -170,9 +171,23 @@ class SimulatedWorkerCrash(RuntimeError):
 # short identifier field).
 _MAX_SAFE_PROVIDER_CODE_LEN: Final[int] = 128
 
+# F-02 (argus-phase-4-recovery-002): a genuine provider error-code
+# identifier is a bounded ASCII grammar -- [A-Za-z][A-Za-z0-9_]{0,127} --
+# never merely "the right length." A type/length-only check (the P4-REC-03
+# original) let an unsafe-shaped string (a URL, a bare query assignment,
+# embedded control characters, JSON-body-shaped text) through unchanged as
+# long as it happened to fit the length bound. This is a format policy for
+# identifiers, not a claim to detect every possible secret hidden in
+# arbitrary text.
+_SAFE_PROVIDER_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"^[A-Za-z][A-Za-z0-9_]{{0,{_MAX_SAFE_PROVIDER_CODE_LEN - 1}}}$"
+)
+
 
 def _safe_provider_error_code(value: object) -> str | None:
-    if not isinstance(value, str) or len(value) == 0 or len(value) > _MAX_SAFE_PROVIDER_CODE_LEN:
+    if not isinstance(value, str):
+        return None
+    if not _SAFE_PROVIDER_CODE_PATTERN.fullmatch(value):
         return None
     return value
 
@@ -204,18 +219,27 @@ def _classify_provider_exception(exc: Exception) -> tuple[str, dict | None]:
     if isinstance(exc, httpx.HTTPStatusError):
         response = exc.response
         status_code = response.status_code
-        if status_code == 429:
-            return OUTCOME_PROVIDER_CAPACITY_MISS, {"http_status_code": status_code}
+        # F-02: extract safe evidence BEFORE selecting the status-derived
+        # outcome -- a parsing failure (invalid/non-object JSON) must never
+        # erase the HTTP429 capacity classification, and a genuinely
+        # supplied, safe errorCode must survive on 429 exactly like every
+        # other status.
         try:
             body = response.json()
         except ValueError:
-            return OUTCOME_QUOTE_FAILED, {"http_status_code": status_code}
+            body = None
         provider_code = (
             _safe_provider_error_code(body.get("errorCode")) if isinstance(body, dict) else None
         )
         evidence: dict = {"http_status_code": status_code}
         if provider_code is not None:
             evidence["provider_error_code"] = provider_code
+        if status_code == 429:
+            # HTTP429 always remains PROVIDER_CAPACITY_MISS, even when the
+            # code is absent, malformed, or equals the known no-route
+            # identifier -- 429 is a capacity signal, never re-mapped by
+            # any code content.
+            return OUTCOME_PROVIDER_CAPACITY_MISS, evidence
         if provider_code == _JUPITER_NO_ROUTE_ERROR_CODE:
             return OUTCOME_NO_ROUTE, evidence
         return OUTCOME_QUOTE_FAILED, evidence
@@ -228,15 +252,30 @@ def _is_positive_raw_amount(value: object) -> bool:
     strictly positive integer -- never a bool (``isinstance(True, int)``
     is true in Python, but a bool is never a genuine raw-amount value),
     never a float, never a negative/zero placeholder, and never an
-    unparseable string."""
+    unparseable string.
+
+    F-01 (argus-phase-4-recovery-002): ``str.isdigit()`` alone is NOT
+    sufficient -- it accepts non-ASCII Unicode "digit" characters (e.g.
+    superscript-two ``"²"``) that ``int()`` cannot parse, and Python's
+    own global integer-string-conversion length guard raises
+    ``ValueError`` for an excessively long digit string. Both previously
+    escaped this function uncaught, crashing the whole probe-processing
+    call instead of producing an honest terminal non-success. ``isascii()``
+    rejects non-ASCII digits outright (never needing the guard below for
+    them); the ``try/except`` is defense-in-depth for the interpreter's
+    own conversion-length limit, which this project never disables."""
     if isinstance(value, bool):
         return False
     if isinstance(value, int):
         return value > 0
     if isinstance(value, str):
-        if not value.isdigit():
+        if not value or not value.isascii() or not value.isdigit():
             return False
-        return int(value) > 0
+        try:
+            parsed = int(value)
+        except (ValueError, OverflowError):
+            return False
+        return parsed > 0
     return False
 
 

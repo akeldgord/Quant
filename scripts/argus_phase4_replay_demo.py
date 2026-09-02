@@ -123,7 +123,7 @@ from argus.telegram.notifier import FakeTelegramTransport, TelegramNotifier  # n
 REAL_FIXTURE = (
     REPO_ROOT / "tests" / "golden" / "fixtures" / "real" / "real_mainnet_sol_to_token_swap.json"
 )
-EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_recovery" / "evidence"
+EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_recovery_2" / "evidence"
 RESULTS_PATH = EVIDENCE_DIR / "replay_demo_results.json"
 
 _LEADER_TIME = datetime(2024, 9, 18, 9, 22, 18, tzinfo=UTC)  # the fixture's real blockTime

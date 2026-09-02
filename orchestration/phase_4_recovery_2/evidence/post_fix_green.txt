@@ -1,0 +1,4 @@
+...................................................s................     [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/unit/test_phase4_recovery_2_contract.py:363: phase_4_recovery_2 checkpoint/bundle not yet generated (generated near the end of this recovery round, before final push)
+67 passed, 1 skipped in 3.16s
