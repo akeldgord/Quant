@@ -421,18 +421,33 @@ def _build_live() -> dict:
     }
 
 
-def _latest_history_id_per_wallet_subquery():
+def _latest_history_id_per_wallet_subquery(cutoff: datetime | None = None):
     """WalletHistoryQuality is append-only and versioned (a later
     reconstruction adds a new row rather than overwriting a prior
     judgment) -- downstream code always reads the latest row per wallet.
     Returns the ``history_id`` DISTINCT ON each wallet's own most recent
     ``created_at``, so a repeated reconstruction never multiplies a
-    distinct-wallet or chosen-position sample (P4-remediation-002 R6)."""
+    distinct-wallet or chosen-position sample (P4-remediation-002 R6).
+
+    P4-REC-05: ``cutoff``, when supplied, bounds the selection to history
+    rows genuinely KNOWN as of that instant (``created_at <= cutoff``)
+    before the DISTINCT ON picks each wallet's latest eligible row -- a
+    history record created AFTER an earlier report's own ``end`` must
+    never count as "current" in that earlier report just because it is
+    the globally-latest row by the time the report happens to run. The
+    per-wallet deduplication itself is unchanged; only which rows are
+    eligible candidates is bounded. ``cutoff=None`` preserves the
+    original globally-latest-ever selection (``_build_research``'s own
+    unbounded historical-backtest use, out of this recovery's frozen
+    scope)."""
+    query = select(WalletHistoryQuality.history_id, WalletHistoryQuality.history_completeness)
+    if cutoff is not None:
+        query = query.where(WalletHistoryQuality.created_at <= cutoff)
     return (
-        select(WalletHistoryQuality.history_id, WalletHistoryQuality.history_completeness)
-        .distinct(WalletHistoryQuality.wallet_id)
+        query.distinct(WalletHistoryQuality.wallet_id)
         .order_by(WalletHistoryQuality.wallet_id, WalletHistoryQuality.created_at.desc())
-    ).subquery()
+        .subquery()
+    )
 
 
 async def _build_research(session: AsyncSession) -> dict:
@@ -512,7 +527,11 @@ async def _build_data_quality(session: AsyncSession, *, start: datetime, end: da
     # LOW -> LOW -> HIGH now counts 0, never 2; every prior point-in-time
     # row stays preserved, only the report's own current-state count
     # reads just the latest one per wallet.
-    latest_history = _latest_history_id_per_wallet_subquery()
+    # P4-REC-05: bounded to history rows known as of this report's own
+    # `end` -- a history row created AFTER `end` must never count as
+    # "current" in this report just because it is the globally-latest row
+    # by the time this query happens to run.
+    latest_history = _latest_history_id_per_wallet_subquery(cutoff=end)
     low_completeness_wallets = await _count(
         session,
         select(func.count())

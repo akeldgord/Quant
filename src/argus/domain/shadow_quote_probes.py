@@ -168,6 +168,15 @@ class ShadowQuoteProbe(Base):
 
     outcome: Mapped[str] = mapped_column(String(24), nullable=False, default=OUTCOME_PENDING)
     raw_quote: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # P4-REC-03: a small, bounded, already-sanitized failure-evidence
+    # representation -- populated only on the shared entry/reverse
+    # exception seam (argus.shadow.quote_jobs._classify_provider_exception)
+    # -- e.g. {"http_status_code": 429} or {"scheduler_drop_reason": "...",
+    # "scheduler_priority_class": "..."}. Never the raw response body,
+    # headers, or request URL. NULL when no exception was ever raised
+    # (a genuine SUCCESS/response-classified outcome) or when the
+    # exception carried no positively-identified evidence to preserve.
+    failure_evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

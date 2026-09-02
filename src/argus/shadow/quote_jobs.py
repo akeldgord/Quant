@@ -164,38 +164,113 @@ class SimulatedWorkerCrash(RuntimeError):
     test) -- never raised in normal operation."""
 
 
-def _classify_provider_exception(exc: Exception) -> str:
+# P4-REC-03: the maximum length this project ever trusts a provider-
+# supplied error-code STRING to be before treating it as unsafe-to-persist
+# garbage (never a body, never a header, never a URL -- just this one
+# short identifier field).
+_MAX_SAFE_PROVIDER_CODE_LEN: Final[int] = 128
+
+
+def _safe_provider_error_code(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) == 0 or len(value) > _MAX_SAFE_PROVIDER_CODE_LEN:
+        return None
+    return value
+
+
+def _classify_provider_exception(exc: Exception) -> tuple[str, dict | None]:
     """Maps ANY exception a real or fake execution provider (or the
     shared scheduler) can raise to the correct honest outcome -- never
-    just the fake-provider-only :class:`ShadowQuoteError` family."""
+    just the fake-provider-only :class:`ShadowQuoteError` family.
+
+    P4-REC-03: also returns a small, bounded, already-sanitized
+    failure-evidence dict alongside the outcome -- the caller persists
+    this verbatim into ``ShadowQuoteProbe.failure_evidence``. Only ever
+    carries a handful of positively-identified, safe-to-store scalar
+    fields (an HTTP status code, a provider-supplied error-code STRING
+    already used for classification above, a scheduler drop reason/
+    priority class) -- never the raw response body, headers, or request
+    URL, and never a fabricated/guessed mapping for an exception type this
+    project cannot positively identify (``None`` in that case, honestly
+    unavailable rather than invented)."""
     from argus.providers.scheduler import RequestDropped
 
     if isinstance(exc, RequestDropped):
-        return OUTCOME_PROVIDER_CAPACITY_MISS
+        return OUTCOME_PROVIDER_CAPACITY_MISS, {
+            "scheduler_drop_reason": exc.reason,
+            "scheduler_priority_class": exc.priority_class,
+        }
     if isinstance(exc, _ShadowQuoteError):
-        return _ERROR_OUTCOME_MAP.get(type(exc), OUTCOME_QUOTE_FAILED)
+        return _ERROR_OUTCOME_MAP.get(type(exc), OUTCOME_QUOTE_FAILED), None
     if isinstance(exc, httpx.HTTPStatusError):
         response = exc.response
-        if response.status_code == 429:
-            return OUTCOME_PROVIDER_CAPACITY_MISS
+        status_code = response.status_code
+        if status_code == 429:
+            return OUTCOME_PROVIDER_CAPACITY_MISS, {"http_status_code": status_code}
         try:
             body = response.json()
         except ValueError:
-            return OUTCOME_QUOTE_FAILED
-        if isinstance(body, dict) and body.get("errorCode") == _JUPITER_NO_ROUTE_ERROR_CODE:
-            return OUTCOME_NO_ROUTE
-        return OUTCOME_QUOTE_FAILED
-    return OUTCOME_QUOTE_FAILED
+            return OUTCOME_QUOTE_FAILED, {"http_status_code": status_code}
+        provider_code = (
+            _safe_provider_error_code(body.get("errorCode")) if isinstance(body, dict) else None
+        )
+        evidence: dict = {"http_status_code": status_code}
+        if provider_code is not None:
+            evidence["provider_error_code"] = provider_code
+        if provider_code == _JUPITER_NO_ROUTE_ERROR_CODE:
+            return OUTCOME_NO_ROUTE, evidence
+        return OUTCOME_QUOTE_FAILED, evidence
+    return OUTCOME_QUOTE_FAILED, None
+
+
+def _is_positive_raw_amount(value: object) -> bool:
+    """A genuine Jupiter v6 raw-amount field (``inAmount``/``outAmount``)
+    is a decimal-digit string (or, defensively, a real ``int``) encoding a
+    strictly positive integer -- never a bool (``isinstance(True, int)``
+    is true in Python, but a bool is never a genuine raw-amount value),
+    never a float, never a negative/zero placeholder, and never an
+    unparseable string."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value > 0
+    if isinstance(value, str):
+        if not value.isdigit():
+            return False
+        return int(value) > 0
+    return False
+
+
+def _is_nonempty_mint_string(value: object) -> bool:
+    return isinstance(value, str) and len(value) > 0
 
 
 def _is_structurally_valid_route_entry(entry: object) -> bool:
     """A genuine Jupiter v6 ``routePlan`` entry is an object carrying its
     own ``swapInfo`` object (never a bare ``null``/non-object placeholder)
-    -- this checks the EXISTING quote contract's own minimal shape, never
-    demands new economic/semantic proof beyond it (P4-remediation-002 R4:
+    with the fields the existing quote contract actually requires per leg:
+    nonempty string ``inputMint``/``outputMint`` and valid positive
+    integer/raw-amount ``inAmount``/``outAmount`` strings
+    (P4-REC-02/P4-remediation-audit-002 R4-V: a nonempty ``swapInfo``
+    DICT is not itself route evidence -- ``swapInfo={}`` or a ``swapInfo``
+    whose own required nested fields are missing, wrong-typed, or
+    non-positive is exactly as invalid as no ``swapInfo`` at all). This
+    checks the EXISTING quote contract's own per-leg shape, never demands
+    new economic/semantic proof beyond it (P4-remediation-002 R4:
     "Nonempty list is not route validation... do not demand new economic/
-    semantic proof beyond that contract")."""
-    return isinstance(entry, dict) and isinstance(entry.get("swapInfo"), dict)
+    semantic proof beyond that contract" -- P4-REC-02 only deepens this
+    same existing contract one level, from "swapInfo is a dict" to
+    "swapInfo's own required fields are genuinely present and valid")."""
+    if not isinstance(entry, dict):
+        return False
+    swap_info = entry.get("swapInfo")
+    if not isinstance(swap_info, dict):
+        return False
+    return (
+        _is_nonempty_mint_string(swap_info.get("inputMint"))
+        and _is_nonempty_mint_string(swap_info.get("outputMint"))
+        and _is_positive_raw_amount(swap_info.get("inAmount"))
+        and _is_positive_raw_amount(swap_info.get("outAmount"))
+    )
 
 
 def _extract_fee_estimate_raw(quote_raw: dict) -> int | None:
@@ -492,6 +567,7 @@ async def _execute_and_record_probe(
     route_present = False
     fee_estimate: int | None = None
     raw_quote: dict | None = None
+    failure_evidence: dict | None = None
 
     async def _call_provider() -> ExecutableQuote:
         nonlocal requested_at, responded_at
@@ -513,7 +589,7 @@ async def _execute_and_record_probe(
         else:
             quote = await _call_provider()
     except Exception as exc:  # noqa: BLE001 -- classified below, never silently swallowed
-        outcome = _classify_provider_exception(exc)
+        outcome, failure_evidence = _classify_provider_exception(exc)
     else:
         outcome, price_impact, route_present = _classify_quote(
             dict(quote.raw),
@@ -588,6 +664,7 @@ async def _execute_and_record_probe(
         probe.fee_estimate_raw = fee_estimate
         probe.outcome = outcome
         probe.raw_quote = raw_quote
+        probe.failure_evidence = failure_evidence
 
         if probe_kind == PROBE_KIND_ENTRY_DELAY:
             assert shadow_intent_id is not None

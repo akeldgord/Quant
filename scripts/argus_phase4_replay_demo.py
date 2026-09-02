@@ -123,7 +123,7 @@ from argus.telegram.notifier import FakeTelegramTransport, TelegramNotifier  # n
 REAL_FIXTURE = (
     REPO_ROOT / "tests" / "golden" / "fixtures" / "real" / "real_mainnet_sol_to_token_swap.json"
 )
-EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_remediation_2" / "evidence"
+EVIDENCE_DIR = REPO_ROOT / "orchestration" / "phase_4_recovery" / "evidence"
 RESULTS_PATH = EVIDENCE_DIR / "replay_demo_results.json"
 
 _LEADER_TIME = datetime(2024, 9, 18, 9, 22, 18, tzinfo=UTC)  # the fixture's real blockTime
@@ -239,7 +239,21 @@ def _quote(
             "priceImpactPct": "0.01",
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),
-            "routePlan": [{"swapInfo": {"label": "fake-amm-replay"}, "percent": 100}],
+            # P4-REC-02: swapInfo must carry its own genuine
+            # inputMint/outputMint/inAmount/outAmount fields (not merely
+            # be a dict) to be structurally valid route evidence.
+            "routePlan": [
+                {
+                    "swapInfo": {
+                        "label": "fake-amm-replay",
+                        "inputMint": input_mint,
+                        "outputMint": output_mint,
+                        "inAmount": str(in_amount),
+                        "outAmount": str(out_amount),
+                    },
+                    "percent": 100,
+                }
+            ],
         },
     )
 

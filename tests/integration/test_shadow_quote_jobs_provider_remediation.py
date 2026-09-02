@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from argus.clock import Clock
@@ -34,6 +34,7 @@ from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.chain_events import ChainEvent
 from argus.domain.commitment import COMMITMENT_CONFIRMED, CommitmentObservation
+from argus.domain.shadow_positions import ShadowPosition
 from argus.domain.shadow_quote_probes import (
     OUTCOME_NO_ROUTE,
     OUTCOME_PROVIDER_CAPACITY_MISS,
@@ -456,6 +457,85 @@ async def test_real_jupiter_http_400_no_route_error_code_maps_to_no_route(admin_
         assert processed[0].outcome == OUTCOME_NO_ROUTE
         assert processed[0].expected_output_amount_raw is None
         assert len(handler.calls) == 1  # type: ignore[attr-defined]
+        # P4-REC-03 test 1: the sanitized supplied status/code survive
+        # persistence -- never the raw body's own "error" free-text field.
+        probe = processed[0]
+        assert probe.failure_evidence == {
+            "http_status_code": 400,
+            "provider_error_code": "COULD_NOT_FIND_ANY_ROUTE",
+        }
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# 2b. P4-REC-03 test 6: secrets/arbitrary body/header data are never
+#     persisted -- only the small, bounded, positively-identified set of
+#     sanitized fields survives, regardless of what else the response
+#     body or headers actually carried.
+# ---------------------------------------------------------------------
+
+
+async def test_real_jupiter_failure_evidence_never_persists_secrets_or_raw_body(
+    admin_engine,
+) -> None:
+    wallet_address = _unique_wallet()
+    mint = f"P4RPMint{uuid.uuid4().hex[:30]}"
+    config, engine, sessionmaker = _sessionmaker()
+    http_client: httpx.AsyncClient | None = None
+    try:
+        await _seed_intent_with_entry_probes(
+            sessionmaker, config, wallet_address=wallet_address, mint=mint
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                400,
+                json={
+                    "errorCode": "COULD_NOT_FIND_ANY_ROUTE",
+                    "error": "Could not find any route for the given input and output mints",
+                    # A real provider response could plausibly echo
+                    # request-identifying or credential-shaped fields --
+                    # none of this must ever survive into the persisted
+                    # failure_evidence.
+                    "apiKeyUsed": "sk-live-should-never-be-stored",
+                    "requestUrl": "https://quote-api.jup.ag/v6/quote?apiKey=SECRET",
+                    "traceId": "trace-should-not-be-stored-either",
+                },
+                headers={
+                    "X-Api-Key-Echo": "should-never-be-stored",
+                    "Set-Cookie": "session=should-never-be-stored",
+                },
+            )
+
+        handler = _counting_handler(respond)
+        provider, http_client = _jupiter_client(handler)
+
+        far_future = _NOW + timedelta(seconds=400)
+        processed = await run_due_entry_probes(
+            sessionmaker, provider, config=config, clock=Clock(), now=far_future, limit=1
+        )
+        assert len(processed) == 1
+        probe = processed[0]
+        assert probe.outcome == OUTCOME_NO_ROUTE
+        assert probe.failure_evidence is not None
+        # Only the two positively-identified, sanitized keys this project
+        # ever writes -- nothing from the body's other fields and nothing
+        # header-derived.
+        assert set(probe.failure_evidence.keys()) == {"http_status_code", "provider_error_code"}
+        assert probe.failure_evidence["http_status_code"] == 400
+        assert probe.failure_evidence["provider_error_code"] == "COULD_NOT_FIND_ANY_ROUTE"
+        serialized = str(probe.failure_evidence)
+        for secret in (
+            "sk-live-should-never-be-stored",
+            "apiKey=SECRET",
+            "trace-should-not-be-stored-either",
+            "should-never-be-stored",
+        ):
+            assert secret not in serialized
     finally:
         if http_client is not None:
             await http_client.aclose()
@@ -504,6 +584,15 @@ async def test_real_jupiter_http_400_unrecognized_error_code_stays_honest_quote_
         assert len(processed) == 1
         assert processed[0].outcome == OUTCOME_QUOTE_FAILED
         assert len(handler.calls) == 1  # type: ignore[attr-defined]
+        # P4-REC-03 test 3: an unrecognized-but-safe provider code is still
+        # preserved even though it maps to the QUOTE_FAILED catch-all --
+        # never dropped just because this project has no positive mapping
+        # for it, and never mapped to a fabricated outcome.
+        probe = processed[0]
+        assert probe.failure_evidence == {
+            "http_status_code": 400,
+            "provider_error_code": "TOKEN_NOT_TRADABLE",
+        }
     finally:
         if http_client is not None:
             await http_client.aclose()
@@ -548,6 +637,9 @@ async def test_real_jupiter_http_429_maps_to_provider_capacity_miss(admin_engine
         assert probe.requested_at is not None
         assert probe.responded_at is not None
         assert probe.terminal_at is not None
+        # P4-REC-03 test 2: the sanitized supplied status code survives
+        # persistence -- never the raw body's own free-text "error" field.
+        assert probe.failure_evidence == {"http_status_code": 429}
     finally:
         if http_client is not None:
             await http_client.aclose()
@@ -586,6 +678,10 @@ async def test_real_jupiter_http_500_unparseable_body_stays_quote_failed(admin_e
         # max_attempts=1 keeps this deterministic: exactly one real call,
         # never a guessed multi-attempt retry count muddying the assertion.
         assert len(handler.calls) == 1  # type: ignore[attr-defined]
+        # The status code is still safe, positively-identified evidence
+        # even though the body itself couldn't be parsed as JSON at all --
+        # never the unparseable body text itself.
+        assert processed[0].failure_evidence == {"http_status_code": 500}
     finally:
         if http_client is not None:
             await http_client.aclose()
@@ -646,9 +742,11 @@ async def test_real_jupiter_positive_output_without_route_plan_is_no_route(
 
 # ---------------------------------------------------------------------
 # 6b. Malformed 200: a NONEMPTY routePlan whose own entries are not
-#     structurally valid (null / missing swapInfo) is equivalent to no
-#     route at all -- never trusted merely for being a nonempty list
-#     (P4-remediation-002 R4).
+#     structurally valid (null / missing swapInfo, or -- P4-REC-02 --
+#     a swapInfo whose own required nested mint/amount fields are
+#     missing, wrong-typed, or non-positive) is equivalent to no route
+#     at all -- never trusted merely for being a nonempty list or for
+#     swapInfo merely being a dict (P4-remediation-002 R4 / P4-REC-02).
 # ---------------------------------------------------------------------
 
 
@@ -658,6 +756,107 @@ async def test_real_jupiter_positive_output_without_route_plan_is_no_route(
         pytest.param([None], id="null-entry"),
         pytest.param([{"percent": 100}], id="missing-swapinfo"),
         pytest.param(["not-even-an-object"], id="non-dict-entry"),
+        # P4-REC-02 test 2: swapInfo={} -- a nonempty swapInfo DICT is
+        # not itself route evidence; its own required fields are absent.
+        pytest.param([{"swapInfo": {}}], id="empty-swapinfo"),
+        # P4-REC-02 test 3: swapInfo present but missing required mint
+        # and amount fields.
+        pytest.param(
+            [{"swapInfo": {"ammKey": "AMMkey1", "label": "Raydium"}}],
+            id="missing-required-mint-and-amount",
+        ),
+        pytest.param(
+            [
+                {
+                    "swapInfo": {
+                        "ammKey": "AMMkey1",
+                        "label": "Raydium",
+                        "inputMint": "SomeMint1111111111111111111111111111111111",
+                        "outputMint": "SomeMint2222222222222222222222222222222222",
+                        "outAmount": "500000",
+                    }
+                }
+            ],
+            id="missing-required-amount-only",
+        ),
+        # P4-REC-02 test 4: wrong-type mint (an int instead of a mint
+        # string).
+        pytest.param(
+            [
+                {
+                    "swapInfo": {
+                        "ammKey": "AMMkey1",
+                        "label": "Raydium",
+                        "inputMint": 12345,
+                        "outputMint": "SomeMint2222222222222222222222222222222222",
+                        "inAmount": "1000000",
+                        "outAmount": "500000",
+                    }
+                }
+            ],
+            id="wrong-type-mint",
+        ),
+        pytest.param(
+            [
+                {
+                    "swapInfo": {
+                        "ammKey": "AMMkey1",
+                        "label": "Raydium",
+                        "inputMint": "",
+                        "outputMint": "SomeMint2222222222222222222222222222222222",
+                        "inAmount": "1000000",
+                        "outAmount": "500000",
+                    }
+                }
+            ],
+            id="empty-string-mint",
+        ),
+        # P4-REC-02 test 5: malformed/nonpositive required raw amount.
+        pytest.param(
+            [
+                {
+                    "swapInfo": {
+                        "ammKey": "AMMkey1",
+                        "label": "Raydium",
+                        "inputMint": "SomeMint1111111111111111111111111111111111",
+                        "outputMint": "SomeMint2222222222222222222222222222222222",
+                        "inAmount": "0",
+                        "outAmount": "500000",
+                    }
+                }
+            ],
+            id="zero-amount",
+        ),
+        pytest.param(
+            [
+                {
+                    "swapInfo": {
+                        "ammKey": "AMMkey1",
+                        "label": "Raydium",
+                        "inputMint": "SomeMint1111111111111111111111111111111111",
+                        "outputMint": "SomeMint2222222222222222222222222222222222",
+                        "inAmount": "-5",
+                        "outAmount": "500000",
+                    }
+                }
+            ],
+            id="negative-amount",
+        ),
+        pytest.param(
+            [
+                {
+                    "swapInfo": {
+                        "ammKey": "AMMkey1",
+                        "label": "Raydium",
+                        "inputMint": "SomeMint1111111111111111111111111111111111",
+                        "outputMint": "SomeMint2222222222222222222222222222222222",
+                        "inAmount": "not-a-number",
+                        "outAmount": "500000",
+                    }
+                }
+            ],
+            id="non-numeric-amount",
+        ),
     ],
 )
 async def test_real_jupiter_malformed_route_plan_entries_are_no_route(
@@ -695,6 +894,22 @@ async def test_real_jupiter_malformed_route_plan_entries_are_no_route(
         assert probe.outcome == OUTCOME_NO_ROUTE
         assert probe.route_present is False
         assert probe.expected_output_amount_raw is None
+
+        # P4-REC-02 test 6: an invalid route must never create an
+        # executable position/shadow sample.
+        async with sessionmaker() as session:
+            positions = (
+                (
+                    await session.execute(
+                        select(ShadowPosition).where(
+                            ShadowPosition.shadow_intent_id == intent.shadow_intent_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert positions == []
     finally:
         if http_client is not None:
             await http_client.aclose()
@@ -1214,12 +1429,23 @@ async def test_real_scheduler_drop_never_reaches_network_accepted_request_still_
         assert probe.latency_ms is None
         assert probe.scheduling_delay_seconds is None
         assert probe.terminal_at is not None
+        # P4-REC-03 test 4: the scheduler's own supplied drop reason and
+        # priority class survive persistence -- zero HTTP calls (asserted
+        # above) and null call timestamps (asserted above) alongside them.
+        assert probe.failure_evidence is not None
+        assert isinstance(probe.failure_evidence["scheduler_drop_reason"], str)
+        assert len(probe.failure_evidence["scheduler_drop_reason"]) > 0
+        assert probe.failure_evidence["scheduler_priority_class"] == PRIORITY_CLASS_ENTRY_DELAY
 
         # Exact replay: this probe is already terminal (R5's own
         # generation/no-send guard) -- calling the execute step again
         # with the SAME claim generation must make zero further HTTP
         # calls and zero further clock consumption, never re-dispatching
         # a probe whose terminal capacity-miss decision already stands.
+        # P4-REC-03 test 5: this re-fetches the probe row fresh from the
+        # database (the same restart-safety seam section 84 already
+        # relies on) and must return the SAME safe evidence, never a
+        # second, different, or dropped value.
         replay_clock = _ScriptedClock([])
         replayed = await _execute_and_record_probe(
             sessionmaker,
@@ -1234,6 +1460,7 @@ async def test_real_scheduler_drop_never_reaches_network_accepted_request_still_
         assert replayed.requested_at is None
         assert replayed.responded_at is None
         assert len(handler.calls) == 0  # type: ignore[attr-defined]
+        assert replayed.failure_evidence == probe.failure_evidence
 
         block_event.set()
         queued_event.set()

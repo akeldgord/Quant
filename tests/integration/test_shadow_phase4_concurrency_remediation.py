@@ -276,7 +276,21 @@ def _quote(*, input_mint: str, output_mint: str, in_amount: int, out_amount: int
             "priceImpactPct": impact,
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),
-            "routePlan": [{"swapInfo": {"label": "fake-amm"}, "percent": 100}],
+            # P4-REC-02: swapInfo must carry its own genuine
+            # inputMint/outputMint/inAmount/outAmount fields (not merely
+            # be a dict) to be structurally valid route evidence.
+            "routePlan": [
+                {
+                    "swapInfo": {
+                        "label": "fake-amm",
+                        "inputMint": input_mint,
+                        "outputMint": output_mint,
+                        "inAmount": str(in_amount),
+                        "outAmount": str(out_amount),
+                    },
+                    "percent": 100,
+                }
+            ],
         },
     )
 

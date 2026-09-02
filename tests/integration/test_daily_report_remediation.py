@@ -521,16 +521,33 @@ async def test_new_wallets_counts_distinct_wallets_not_discovery_events(admin_en
 
 
 async def _independent_current_low_completeness_count(
-    admin_engine, *, wallet_ids: list[Any] | None = None
+    admin_engine, *, wallet_ids: list[Any] | None = None, cutoff: datetime | None = None
 ) -> int:
     """Independent oracle: a wallet's CURRENT assessment is the row with
     no later row for that same wallet (a correlated NOT EXISTS), a
     deliberately different query shape from production's own DISTINCT ON
     subquery. ``wallet_ids=None`` computes the unrestricted global count
-    (used as a same-semantics baseline)."""
+    (used as a same-semantics baseline).
+
+    P4-REC-05: ``cutoff``, when supplied, bounds BOTH the candidate row
+    itself (``whq1.created_at <= cutoff``) and the "no later row" check
+    (``whq2.created_at > whq1.created_at AND whq2.created_at <= cutoff``)
+    -- a history row created after ``cutoff`` must never count as
+    "current," and must never make an earlier, genuinely-current-at-
+    cutoff row look superseded. This stays a genuinely independent query
+    shape (correlated NOT EXISTS) from production's own DISTINCT ON, per
+    the audit's own "never duplicate production's formula in the test"
+    finding."""
     if wallet_ids is not None and not wallet_ids:
         return 0
     where_scope = "whq1.wallet_id = ANY(:wallet_ids) AND " if wallet_ids is not None else ""
+    cutoff_clause_1 = "AND whq1.created_at <= :cutoff " if cutoff is not None else ""
+    cutoff_clause_2 = "AND whq2.created_at <= :cutoff " if cutoff is not None else ""
+    params: dict[str, Any] = {}
+    if wallet_ids is not None:
+        params["wallet_ids"] = wallet_ids
+    if cutoff is not None:
+        params["cutoff"] = cutoff
     async with admin_engine.connect() as conn:
         row = (
             await conn.execute(
@@ -538,13 +555,15 @@ async def _independent_current_low_completeness_count(
                     "SELECT count(*) FROM wallet_history_quality whq1 "
                     f"WHERE {where_scope}"
                     "whq1.history_completeness IN ('LOW', 'UNKNOWN') "
+                    f"{cutoff_clause_1}"
                     "AND NOT EXISTS ("
                     "  SELECT 1 FROM wallet_history_quality whq2 "
                     "  WHERE whq2.wallet_id = whq1.wallet_id "
-                    "  AND whq2.created_at > whq1.created_at"
+                    "  AND whq2.created_at > whq1.created_at "
+                    f"  {cutoff_clause_2}"
                     ")"
                 ),
-                {"wallet_ids": wallet_ids} if wallet_ids is not None else {},
+                params,
             )
         ).scalar_one()
     return row
@@ -645,6 +664,244 @@ async def test_low_completeness_wallets_reflects_current_state_not_every_low_row
         assert report.data_quality["low_completeness_wallets"] == baseline + 1
     finally:
         await _cleanup_wallets(admin_engine, addresses)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# 3b. P4-REC-05: low_completeness_wallets selects the latest wallet-
+# history assessment KNOWN AT REPORT END, not a later assessment that
+# merely happens to exist by the time the report query runs.
+# ---------------------------------------------------------------------
+
+
+async def test_report_uses_low_history_before_end_ignores_high_history_after_end(
+    admin_engine,
+) -> None:
+    """P4-REC-05 test 1: a wallet has a LOW history row before the
+    report's own end, and a LATER HIGH history row created after that
+    end -- an earlier-ending report must use the LOW row only (the HIGH
+    row was not yet known at that report's own cutoff)."""
+    address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        baseline_cutoff = _NOW + timedelta(minutes=1)
+        baseline = await _independent_current_low_completeness_count(
+            admin_engine, cutoff=baseline_cutoff
+        )
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet_only(session, wallet_address=address, at=_NOW)
+            session.add(
+                WalletHistoryQuality(
+                    history_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
+                    history_start=None,
+                    history_end=None,
+                    history_provider_set="helius",
+                    history_completeness=COMPLETENESS_LOW,
+                    history_completeness_reason="sparse evidence before report end",
+                    acquisition_manifest=None,
+                    excluded_evidence=[],
+                    algorithm_version="test-v1",
+                    created_at=_NOW,
+                )
+            )
+            # A later, HIGH assessment created AFTER the earlier report's
+            # own end -- not yet known at that cutoff.
+            session.add(
+                WalletHistoryQuality(
+                    history_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
+                    history_start=_NOW - timedelta(days=30),
+                    history_end=_NOW,
+                    history_provider_set="helius",
+                    history_completeness=COMPLETENESS_HIGH,
+                    history_completeness_reason="full acquisition walk after report end",
+                    acquisition_manifest=None,
+                    excluded_evidence=[],
+                    algorithm_version="test-v1",
+                    created_at=_NOW + timedelta(hours=1),
+                )
+            )
+
+        independent = await _independent_current_low_completeness_count(
+            admin_engine, wallet_ids=[wallet_id], cutoff=baseline_cutoff
+        )
+        assert independent == 1
+
+        earlier_report = await build_daily_report(
+            sessionmaker,
+            now=baseline_cutoff,
+            tier_allowed=config.get("thresholds.wallet_tier_allowed"),
+            window=timedelta(days=1),
+        )
+        assert earlier_report.data_quality["low_completeness_wallets"] == baseline + 1
+    finally:
+        await _cleanup_wallets(admin_engine, [address])
+        await engine.dispose()
+
+
+async def test_report_after_high_history_exists_uses_high_only(admin_engine) -> None:
+    """P4-REC-05 test 2: a LATER report, run after the HIGH assessment
+    now exists, must use the HIGH row only -- the same wallet contributes
+    0 once its own report's end is past the HIGH row's created_at."""
+    address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        later_cutoff = _NOW + timedelta(hours=2)
+        baseline = await _independent_current_low_completeness_count(
+            admin_engine, cutoff=later_cutoff
+        )
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet_only(session, wallet_address=address, at=_NOW)
+            session.add(
+                WalletHistoryQuality(
+                    history_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
+                    history_start=None,
+                    history_end=None,
+                    history_provider_set="helius",
+                    history_completeness=COMPLETENESS_LOW,
+                    history_completeness_reason="sparse evidence before report end",
+                    acquisition_manifest=None,
+                    excluded_evidence=[],
+                    algorithm_version="test-v1",
+                    created_at=_NOW,
+                )
+            )
+            session.add(
+                WalletHistoryQuality(
+                    history_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
+                    history_start=_NOW - timedelta(days=30),
+                    history_end=_NOW,
+                    history_provider_set="helius",
+                    history_completeness=COMPLETENESS_HIGH,
+                    history_completeness_reason="full acquisition walk after report end",
+                    acquisition_manifest=None,
+                    excluded_evidence=[],
+                    algorithm_version="test-v1",
+                    created_at=_NOW + timedelta(hours=1),
+                )
+            )
+
+        independent = await _independent_current_low_completeness_count(
+            admin_engine, wallet_ids=[wallet_id], cutoff=later_cutoff
+        )
+        assert independent == 0
+
+        later_report = await build_daily_report(
+            sessionmaker,
+            now=later_cutoff,
+            tier_allowed=config.get("thresholds.wallet_tier_allowed"),
+            window=timedelta(days=1),
+        )
+        # The wallet's HIGH row is now the latest-known-as-of-cutoff row
+        # -- contributes 0, never the earlier LOW row.
+        assert later_report.data_quality["low_completeness_wallets"] == baseline
+    finally:
+        await _cleanup_wallets(admin_engine, [address])
+        await engine.dispose()
+
+
+async def test_multiple_pre_end_versions_count_exactly_one_latest_eligible(
+    admin_engine,
+) -> None:
+    """P4-REC-05 test 3: three pre-cutoff versions (LOW -> LOW -> UNKNOWN,
+    all created before the report's own end) must contribute exactly ONE
+    qualifying wallet -- the latest ELIGIBLE (still <= cutoff) version,
+    never one row per historical version."""
+    address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        cutoff = _NOW + timedelta(minutes=10)
+        baseline = await _independent_current_low_completeness_count(admin_engine, cutoff=cutoff)
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet_only(session, wallet_address=address, at=_NOW)
+            for offset, reason in (
+                (0, "first pass"),
+                (1, "second pass"),
+                (2, "third pass -- still UNKNOWN"),
+            ):
+                session.add(
+                    WalletHistoryQuality(
+                        history_id=uuid.uuid4(),
+                        wallet_id=wallet_id,
+                        history_start=None,
+                        history_end=None,
+                        history_provider_set="helius",
+                        history_completeness=(
+                            COMPLETENESS_LOW if offset < 2 else COMPLETENESS_UNKNOWN
+                        ),
+                        history_completeness_reason=reason,
+                        acquisition_manifest=None,
+                        excluded_evidence=[],
+                        algorithm_version="test-v1",
+                        created_at=_NOW + timedelta(minutes=offset),
+                    )
+                )
+
+        independent = await _independent_current_low_completeness_count(
+            admin_engine, wallet_ids=[wallet_id], cutoff=cutoff
+        )
+        assert independent == 1
+
+        report = await build_daily_report(
+            sessionmaker,
+            now=cutoff,
+            tier_allowed=config.get("thresholds.wallet_tier_allowed"),
+            window=timedelta(days=1),
+        )
+        assert report.data_quality["low_completeness_wallets"] == baseline + 1
+    finally:
+        await _cleanup_wallets(admin_engine, [address])
+        await engine.dispose()
+
+
+async def test_history_only_after_report_end_wallet_not_counted(admin_engine) -> None:
+    """P4-REC-05 test 4: a wallet whose ONLY history row is created AFTER
+    the report's own end must not be counted as having any history AT
+    THAT end -- neither as LOW/UNKNOWN (falsely flagged) nor otherwise;
+    it simply contributes 0, identical to a wallet with no history at
+    all as of that cutoff."""
+    address = _unique_wallet()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        earlier_cutoff = _NOW
+        baseline = await _independent_current_low_completeness_count(
+            admin_engine, cutoff=earlier_cutoff
+        )
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet_only(session, wallet_address=address, at=_NOW)
+            session.add(
+                WalletHistoryQuality(
+                    history_id=uuid.uuid4(),
+                    wallet_id=wallet_id,
+                    history_start=None,
+                    history_end=None,
+                    history_provider_set="helius",
+                    history_completeness=COMPLETENESS_LOW,
+                    history_completeness_reason="only assessment, created after report end",
+                    acquisition_manifest=None,
+                    excluded_evidence=[],
+                    algorithm_version="test-v1",
+                    created_at=_NOW + timedelta(hours=1),
+                )
+            )
+
+        independent = await _independent_current_low_completeness_count(
+            admin_engine, wallet_ids=[wallet_id], cutoff=earlier_cutoff
+        )
+        assert independent == 0
+
+        earlier_report = await build_daily_report(
+            sessionmaker,
+            now=earlier_cutoff,
+            tier_allowed=config.get("thresholds.wallet_tier_allowed"),
+            window=timedelta(days=1),
+        )
+        assert earlier_report.data_quality["low_completeness_wallets"] == baseline
+    finally:
+        await _cleanup_wallets(admin_engine, [address])
         await engine.dispose()
 
 

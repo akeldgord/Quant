@@ -27,7 +27,7 @@ import dataclasses
 import os
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -35,10 +35,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from argus.clock import Clock
 from argus.config import REPO_ROOT, load_config
-from argus.db.connection import connection_for_admin
+from argus.db.connection import connection_for_admin, connection_for_role
+from argus.db.roles import DbRole
 
 _IDENTITY_COLUMNS = ("build_hash", "config_hash", "master_spec_hash", "git_commit")
 _BACKFILL_SENTINEL = "NOT_CAPTURED_PRE_R3_REMEDIATION"
@@ -162,7 +164,7 @@ def _current_revision(database: str) -> str:
 def test_migration_from_zero_to_head_creates_identity_columns(scratch_database: str) -> None:
     command.upgrade(_alembic_config(), "head")
 
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -191,7 +193,7 @@ def test_upgrade_from_0003_through_head_creates_table_and_columns_together(
     assert "parse_attempts" not in existing_tables
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
 
@@ -294,7 +296,7 @@ def test_upgrade_head_is_idempotent_and_restart_safe(scratch_database: str) -> N
 
     command.upgrade(cfg, "head")  # simulated restart
 
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     assert _column_names(scratch_database, "parse_attempts") == first_columns
 
 
@@ -308,7 +310,7 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -434,7 +436,7 @@ def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
 
     # Refused before touching anything: still at head, build_hash column
     # and both append-only rows still present and unmodified.
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     assert "build_hash" in _column_names(scratch_database, "swaps")
     rows = _query(
         scratch_database,
@@ -590,7 +592,7 @@ def test_p2r7_downgrade_from_0009_fails_closed_when_value_exceeds_bigint_range(
         command.downgrade(cfg, "0008")
 
     # Refused before touching anything: still at head, value unchanged.
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     stored = _query(
         scratch_database,
         "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t",
@@ -645,7 +647,7 @@ def test_p2r7_downgrade_from_0009_succeeds_when_values_fit_bigint_range(
     assert stored == 1_000_000
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
 
 
 def test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening(scratch_database: str) -> None:
@@ -882,7 +884,7 @@ def test_p3r6a_populated_0010_database_preserves_all_rows_through_head(
 
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
 
     position_row = _query(
         scratch_database,
@@ -1009,7 +1011,7 @@ def test_p3r6a_downgrade_from_0012_fails_closed_with_legacy_null_rows(
         command.downgrade(cfg, "0011")
 
     # Refused before touching anything: still at head, legacy row intact.
-    assert _current_revision(scratch_database) == "0020"
+    assert _current_revision(scratch_database) == "0021"
     row = _query(
         scratch_database,
         "SELECT round_trip_index FROM wallet_positions WHERE position_id = :p",
@@ -1032,3 +1034,414 @@ def test_p3r6a_downgrade_from_0012_succeeds_with_no_legacy_null_rows(
     assert _current_revision(scratch_database) == "0011"
     constraints = _check_constraint_names(scratch_database, "wallet_positions")
     assert "ck_wallet_positions_round_trip_index" in constraints
+
+
+# --- P4-REC-04 (argus-phase-4-recovery-001, frozen finding R4-M from
+# --- argus-phase-4-failure-review-001): migration 0020's own CHECK
+# --- constraint (responded_at IS NULL OR terminal_at IS NOT NULL) is
+# --- validated against every EXISTING row the instant it is created. A
+# --- real populated database upgrading through 0020 for the first time
+# --- has completed rows (responded_at set) with no terminal_at value at
+# --- all -- that column did not exist before this exact migration. These
+# --- tests prove the backfill 0020 now performs BEFORE creating the CHECK
+# --- constraint makes a real populated upgrade succeed, preserves every
+# --- byte of pre-existing evidence untouched, correctly terminalizes
+# --- every legacy completed row (and only those), leaves a pending row
+# --- claimable, and is idempotent under a repeated pass.
+
+_P4REC04_NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _insert_prospective_event(
+    database: str, prospective_event_id: str, *, wallet_id: str, swap_id: str, chain_event_id: str
+) -> None:
+    _execute(
+        database,
+        """
+        INSERT INTO prospective_events (
+            prospective_event_id, wallet_id, swap_id, event_id, first_seen_at,
+            wallet_tier_snapshot, token_state_snapshot, position_size_context,
+            cluster_state_snapshot, graph_state_snapshot, algorithm_version, created_at
+        ) VALUES (
+            :prospective_event_id, :wallet_id, :swap_id, :chain_event_id, :now,
+            'A', '{}', '{}', '{}', '{}', 'p4rec04-test', :now
+        )
+        """,
+        {
+            "prospective_event_id": prospective_event_id,
+            "wallet_id": wallet_id,
+            "swap_id": swap_id,
+            "chain_event_id": chain_event_id,
+            "now": _P4REC04_NOW,
+        },
+    )
+
+
+def _insert_shadow_intent(
+    database: str, intent_id: str, *, prospective_event_id: str, wallet_id: str
+) -> None:
+    _execute(
+        database,
+        """
+        INSERT INTO shadow_intents (
+            shadow_intent_id, prospective_event_id, wallet_id, input_mint, output_mint,
+            notional_input_amount_raw, config_hash, algorithm_version, created_at
+        ) VALUES (
+            :intent_id, :prospective_event_id, :wallet_id,
+            'So11111111111111111111111111111111111111112', :output_mint,
+            100000000, 'p4rec04-test', 'p4rec04-test', :now
+        )
+        """,
+        {
+            "intent_id": intent_id,
+            "prospective_event_id": prospective_event_id,
+            "wallet_id": wallet_id,
+            "output_mint": f"P4REC04Mint{uuid.uuid4().hex[:30]}",
+            "now": _P4REC04_NOW,
+        },
+    )
+
+
+def _insert_shadow_quote_probe(
+    database: str,
+    probe_id: str,
+    *,
+    shadow_intent_id: str,
+    target_label: str,
+    requested_at: datetime | None,
+    responded_at: datetime | None,
+    outcome: str,
+) -> None:
+    """A predecessor-revision-0018-shaped row -- no ``terminal_at``
+    column exists yet at that revision, so it is never referenced here."""
+    _execute(
+        database,
+        """
+        INSERT INTO shadow_quote_probes (
+            probe_id, probe_kind, target_label, shadow_intent_id, input_mint, output_mint,
+            notional_input_amount_raw, target_due_at, requested_at, responded_at,
+            outcome, algorithm_version, created_at
+        ) VALUES (
+            :probe_id, 'ENTRY_DELAY', :target_label, :shadow_intent_id,
+            'So11111111111111111111111111111111111111112', :output_mint,
+            100000000, :now, :requested_at, :responded_at,
+            :outcome, 'p4rec04-test', :now
+        )
+        """,
+        {
+            "probe_id": probe_id,
+            "target_label": target_label,
+            "shadow_intent_id": shadow_intent_id,
+            "output_mint": f"P4REC04Mint{uuid.uuid4().hex[:30]}",
+            "now": _P4REC04_NOW,
+            "requested_at": requested_at,
+            "responded_at": responded_at,
+            "outcome": outcome,
+        },
+    )
+
+
+def _seed_p4rec04_legacy_probes(
+    scratch_database: str,
+) -> dict[str, str]:
+    """Seeds one wallet/chain_event/swap/prospective_event/shadow_intent
+    chain at predecessor revision 0018, plus four ``shadow_quote_probes``
+    rows -- completed-success, completed-error/no-route, completed
+    (HTTP-429-shaped) capacity-miss, and a still-pending row -- exactly
+    the P4-REC-04 test 1 minimum required set. Returns the probe ids
+    keyed by their category."""
+    wallet_id = str(uuid.uuid4())
+    _insert_wallet(scratch_database, wallet_id, f"P4REC04Wallet{uuid.uuid4().hex[:34]}")
+    event_id = str(uuid.uuid4())
+    _insert_chain_event(scratch_database, event_id, signature=f"p4rec04-sig-{uuid.uuid4().hex[:8]}")
+    swap_id = str(uuid.uuid4())
+    _insert_swap(
+        scratch_database,
+        swap_id=swap_id,
+        event_id=event_id,
+        parser_version="v1",
+        build_hash="deadbeef",
+    )
+    prospective_event_id = str(uuid.uuid4())
+    _insert_prospective_event(
+        scratch_database,
+        prospective_event_id,
+        wallet_id=wallet_id,
+        swap_id=swap_id,
+        chain_event_id=event_id,
+    )
+    intent_id = str(uuid.uuid4())
+    _insert_shadow_intent(
+        scratch_database, intent_id, prospective_event_id=prospective_event_id, wallet_id=wallet_id
+    )
+
+    success_id = str(uuid.uuid4())
+    _insert_shadow_quote_probe(
+        scratch_database,
+        success_id,
+        shadow_intent_id=intent_id,
+        target_label="1s",
+        requested_at=_P4REC04_NOW,
+        responded_at=_P4REC04_NOW,
+        outcome="SUCCESS",
+    )
+    no_route_id = str(uuid.uuid4())
+    _insert_shadow_quote_probe(
+        scratch_database,
+        no_route_id,
+        shadow_intent_id=intent_id,
+        target_label="5s",
+        requested_at=_P4REC04_NOW,
+        responded_at=_P4REC04_NOW,
+        outcome="NO_ROUTE",
+    )
+    capacity_miss_id = str(uuid.uuid4())
+    _insert_shadow_quote_probe(
+        scratch_database,
+        capacity_miss_id,
+        shadow_intent_id=intent_id,
+        target_label="15s",
+        # A real dispatch happened (an HTTP 429 -- P4-remediation-002 R4's
+        # own "HTTP429 DID make a request" rule) -- responded_at is set
+        # even though the outcome is a capacity miss.
+        requested_at=_P4REC04_NOW,
+        responded_at=_P4REC04_NOW,
+        outcome="PROVIDER_CAPACITY_MISS",
+    )
+    pending_id = str(uuid.uuid4())
+    _insert_shadow_quote_probe(
+        scratch_database,
+        pending_id,
+        shadow_intent_id=intent_id,
+        target_label="30s",
+        requested_at=None,
+        responded_at=None,
+        outcome="PENDING",
+    )
+    return {
+        "success": success_id,
+        "no_route": no_route_id,
+        "capacity_miss": capacity_miss_id,
+        "pending": pending_id,
+    }
+
+
+def test_p4rec04_populated_0018_upgrade_through_0020_backfills_terminal_at(
+    scratch_database: str,
+) -> None:
+    """Required tests 1-4 and 6: a populated predecessor-revision-0018
+    database (completed-success, completed-error/no-route, completed
+    capacity-miss, and pending rows) upgrades through 0020 successfully;
+    every legacy completed row is correctly terminalized with
+    terminal_at deterministically derived from its own already-real
+    responded_at; the pending row is left alone (still NULL, still
+    claimable); every other pre-existing field is byte-for-byte
+    unchanged."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0018")
+    ids = _seed_p4rec04_legacy_probes(scratch_database)
+
+    command.upgrade(cfg, "head")
+    assert _current_revision(scratch_database) == "0021"
+
+    rows = {
+        str(r[0]): r
+        for r in _query(
+            scratch_database,
+            "SELECT probe_id, outcome, requested_at, responded_at, terminal_at, "
+            "target_label, notional_input_amount_raw FROM shadow_quote_probes "
+            "WHERE probe_id = ANY(:ids)",
+            {"ids": list(ids.values())},
+        )
+    }
+    assert len(rows) == 4
+
+    for category in ("success", "no_route", "capacity_miss"):
+        probe_id = ids[category]
+        row = rows[probe_id]
+        _probe_id, _outcome, _requested_at, responded_at, terminal_at, _label, _notional = row
+        assert responded_at is not None
+        # The frozen requirement itself: deterministically derived from
+        # the row's own already-real responded_at, never fabricated.
+        assert terminal_at == responded_at
+
+    pending_row = rows[ids["pending"]]
+    assert pending_row[2] is None  # requested_at
+    assert pending_row[3] is None  # responded_at
+    assert pending_row[4] is None  # terminal_at -- never falsely terminalized
+
+    # Old evidence (outcome, ids, labels, notional amount) is completely
+    # unchanged -- only the new terminal_at column was ever touched.
+    assert rows[ids["success"]][1] == "SUCCESS"
+    assert rows[ids["no_route"]][1] == "NO_ROUTE"
+    assert rows[ids["capacity_miss"]][1] == "PROVIDER_CAPACITY_MISS"
+    assert rows[ids["pending"]][1] == "PENDING"
+    for row in rows.values():
+        assert row[6] == 100000000
+
+    # The CHECK constraint this migration adds genuinely holds for every
+    # row now, not merely for the four fixture rows above.
+    with pytest.raises(
+        Exception, match="ck_shadow_probes_responded_requires_terminal|violates check"
+    ):
+        _execute(
+            scratch_database,
+            """
+            UPDATE shadow_quote_probes SET terminal_at = NULL
+            WHERE probe_id = :p
+            """,
+            {"p": ids["success"]},
+        )
+
+
+def test_p4rec04_backfill_update_is_idempotent(scratch_database: str) -> None:
+    """Required test 7: repeated startup/migration state is stable --
+    re-running the exact backfill statement migration 0020 itself uses
+    (the same statement a repeated 'migrate to head on every process
+    start' pattern would execute if it were ever re-applied) is a
+    genuine no-op against an already-migrated database: it touches zero
+    additional rows and never overwrites an already-correct value."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0018")
+    ids = _seed_p4rec04_legacy_probes(scratch_database)
+    command.upgrade(cfg, "head")
+
+    before = _query(
+        scratch_database,
+        "SELECT probe_id, terminal_at FROM shadow_quote_probes WHERE probe_id = ANY(:ids)",
+        {"ids": list(ids.values())},
+    )
+    before_by_id = {str(r[0]): r[1] for r in before}
+
+    _execute(
+        scratch_database,
+        "UPDATE shadow_quote_probes SET terminal_at = responded_at "
+        "WHERE responded_at IS NOT NULL AND terminal_at IS NULL",
+    )
+
+    after = _query(
+        scratch_database,
+        "SELECT probe_id, terminal_at FROM shadow_quote_probes WHERE probe_id = ANY(:ids)",
+        {"ids": list(ids.values())},
+    )
+    after_by_id = {str(r[0]): r[1] for r in after}
+    assert after_by_id == before_by_id
+    assert after_by_id[ids["pending"]] is None
+
+    # Upgrading to head a second time (a genuine repeated-startup pass)
+    # is itself stable too.
+    command.upgrade(cfg, "head")
+    assert _current_revision(scratch_database) == "0021"
+
+
+def _p4rec04_sessionmaker(scratch_database: str) -> tuple[Any, Any]:
+    config = load_config()
+    info = connection_for_role(config, DbRole.INGEST)
+    engine = create_async_engine(info.as_asyncpg_url())
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+@dataclasses.dataclass
+class _P4REC04FakeProvider:
+    """A minimal fake ``ExecutionProvider`` -- SUCCESS on every call, used
+    only to prove which probes the real claim query actually selects."""
+
+    calls: list[tuple[str, str, int]] = dataclasses.field(default_factory=list)
+
+    async def get_quote(
+        self, *, input_mint: str, output_mint: str, amount_raw: int, slippage_bps: int = 50
+    ) -> Any:
+        from argus.providers.models import ExecutableQuote
+
+        self.calls.append((input_mint, output_mint, amount_raw))
+        return ExecutableQuote(
+            provider="jupiter-fake",
+            input_mint=input_mint,
+            output_mint=output_mint,
+            in_amount_raw=amount_raw,
+            out_amount_raw=500_000,
+            raw={
+                "inputMint": input_mint,
+                "outputMint": output_mint,
+                "priceImpactPct": "0.01",
+                "inAmount": str(amount_raw),
+                "outAmount": "500000",
+                "routePlan": [
+                    {
+                        "swapInfo": {
+                            "label": "fake-amm",
+                            "inputMint": input_mint,
+                            "outputMint": output_mint,
+                            "inAmount": str(amount_raw),
+                            "outAmount": "500000",
+                        },
+                        "percent": 100,
+                    }
+                ],
+            },
+        )
+
+    async def build_unsigned_order(self, *, quote: Any, wallet_address: str) -> Any:
+        raise NotImplementedError
+
+
+async def _p4rec04_run_due_entry_probes(
+    scratch_database: str, *, now: datetime
+) -> tuple[list, int]:
+    from argus.shadow.quote_jobs import run_due_entry_probes
+
+    engine, sessionmaker = _p4rec04_sessionmaker(scratch_database)
+    try:
+        provider = _P4REC04FakeProvider()
+        config = load_config()
+        processed = await run_due_entry_probes(
+            sessionmaker, provider, config=config, clock=Clock(), now=now, limit=50
+        )
+        return processed, len(provider.calls)
+    finally:
+        await engine.dispose()
+
+
+def test_p4rec04_legacy_completed_rows_never_reclaimed_zero_provider_calls(
+    scratch_database: str,
+) -> None:
+    """Required test 5: a replay/worker pass over the migrated database
+    makes ZERO provider calls for the legacy completed rows -- the real
+    production claim query (argus.shadow.quote_jobs._claim_due_probes)
+    excludes every row whose terminal_at is now non-null, exactly like
+    it already does for a freshly-created terminal row."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0018")
+    ids = _seed_p4rec04_legacy_probes(scratch_database)
+    command.upgrade(cfg, "head")
+
+    far_future = _P4REC04_NOW + timedelta(days=1)
+    processed, call_count = asyncio.run(
+        _p4rec04_run_due_entry_probes(scratch_database, now=far_future)
+    )
+    # Only the genuinely pending row is claimable -- the three legacy
+    # completed rows are correctly excluded.
+    assert len(processed) == 1
+    assert processed[0].probe_id == uuid.UUID(ids["pending"])
+    assert call_count == 1
+
+
+def test_p4rec04_pending_row_remains_claimable_after_migration(scratch_database: str) -> None:
+    """Required test 6 (claim path): the pending legacy row is not merely
+    left with a NULL terminal_at -- it is genuinely still claimable and
+    runnable through the real worker path, and resolves normally."""
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0018")
+    ids = _seed_p4rec04_legacy_probes(scratch_database)
+    command.upgrade(cfg, "head")
+
+    far_future = _P4REC04_NOW + timedelta(days=1)
+    processed, _call_count = asyncio.run(
+        _p4rec04_run_due_entry_probes(scratch_database, now=far_future)
+    )
+    assert len(processed) == 1
+    probe = processed[0]
+    assert probe.probe_id == uuid.UUID(ids["pending"])
+    assert probe.outcome == "SUCCESS"
+    assert probe.terminal_at is not None
+    assert probe.responded_at is not None

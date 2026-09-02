@@ -409,7 +409,12 @@ async def _seed_additional_buy_swap(
     return swap_id, event_id
 
 
-async def _seed_token(session: Any, *, mint: str, at: datetime) -> uuid.UUID:
+async def _seed_token(
+    session: Any, *, mint: str, at: datetime, created_at: datetime | None = None
+) -> uuid.UUID:
+    """``created_at`` defaults to ``at`` (used as ``first_observed_at``);
+    pass it explicitly for a split effective-vs-recorded timestamp
+    (P4-REC-01)."""
     token_id = uuid.uuid4()
     session.add(
         Token(
@@ -419,7 +424,7 @@ async def _seed_token(session: Any, *, mint: str, at: datetime) -> uuid.UUID:
             first_observed_at=at,
             mint_validated=True,
             current_lifecycle_stage=LIFECYCLE_AMM_POOL,
-            created_at=at,
+            created_at=created_at if created_at is not None else at,
         )
     )
     await session.flush()
@@ -493,7 +498,10 @@ async def _seed_open_position(
     history_id: uuid.UUID,
     entry_value_quote: Decimal,
     at: datetime,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
+    """``created_at`` defaults to ``at`` (used as ``first_entry_at``); pass
+    it explicitly for a split effective-vs-recorded timestamp (P4-REC-01)."""
     position_id = uuid.uuid4()
     session.add(
         WalletPosition(
@@ -522,7 +530,7 @@ async def _seed_open_position(
             status=STATUS_OPEN,
             algorithm_version="test-v1",
             git_commit=_TEST_GIT_COMMIT,
-            created_at=at,
+            created_at=created_at if created_at is not None else at,
         )
     )
     await session.flush()
@@ -1197,7 +1205,21 @@ def _quote(
             "priceImpactPct": "0.01",
             "inAmount": str(in_amount),
             "outAmount": str(out_amount),
-            "routePlan": [{"swapInfo": {"label": "fake-amm"}, "percent": 100}],
+            # P4-REC-02: swapInfo must carry its own genuine
+            # inputMint/outputMint/inAmount/outAmount fields (not merely
+            # be a dict) to be structurally valid route evidence.
+            "routePlan": [
+                {
+                    "swapInfo": {
+                        "label": "fake-amm",
+                        "inputMint": input_mint,
+                        "outputMint": output_mint,
+                        "inAmount": str(in_amount),
+                        "outAmount": str(out_amount),
+                    },
+                    "percent": 100,
+                }
+            ],
         },
     )
 
@@ -1505,6 +1527,179 @@ async def test_eligible_token_with_only_post_cutoff_lifecycle_state_reports_unav
         # The critical assertion: never the token's CURRENT cached stage.
         assert event.token_state_snapshot["lifecycle_stage"] is None
         assert event.token_state_snapshot["lifecycle_stage"] != LIFECYCLE_AMM_POOL
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------
+# P4-REC-01: prospective state at cutoff T must not consume a Token
+# whose created_at > T even when first_observed_at <= T, and must not
+# consume a WalletPosition whose created_at > T even when
+# first_entry_at <= T.
+# ---------------------------------------------------------------------
+
+
+async def test_split_clock_token_created_after_cutoff_is_entirely_unavailable(
+    admin_engine,
+) -> None:
+    """P4-REC-01 test 1: Token.first_observed_at == T (effective time at
+    or before cutoff) but Token.created_at == T+1h (the row was not
+    actually persisted/known until after cutoff) -- the token must be
+    reported entirely unavailable at T, exactly like a token first
+    observed after cutoff. A backdated first_observed_at must never make
+    an as-yet-unrecorded Token row "known" at T."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            await _seed_token(session, mint=mint, at=T, created_at=T + timedelta(hours=1))
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.token_state_snapshot["available"] is False
+        assert isinstance(event.token_state_snapshot["reason"], str)
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+async def test_equality_clock_token_both_at_or_before_cutoff_is_available(
+    admin_engine,
+) -> None:
+    """P4-REC-01 test 2: Token.first_observed_at == T and Token.created_at
+    == T (both relevant clocks <= T) -- the token is available at T,
+    subject to existing rules (no market snapshot yet in this case)."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            await _seed_token(session, mint=mint, at=T, created_at=T)
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.token_state_snapshot["available"] is True
+        assert event.token_state_snapshot["mint"] == mint
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+async def test_split_clock_wallet_position_created_after_cutoff_is_excluded(
+    admin_engine,
+) -> None:
+    """P4-REC-01 test 3: WalletPosition.first_entry_at == T (economic time
+    at or before cutoff) but WalletPosition.created_at == T+1h (the
+    position row was not actually persisted/known until after cutoff) --
+    the position must be excluded from the size context at T, exactly
+    like the existing first_entry_at bound already excludes an
+    economically-later position."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            token_id = await _seed_token(session, mint=mint, at=T)
+            history_id = await _seed_history_quality(session, wallet_id=wallet_id, at=T)
+            await _seed_open_position(
+                session,
+                wallet_id=wallet_id,
+                token_id=token_id,
+                history_id=history_id,
+                entry_value_quote=Decimal("10"),
+                at=T,
+                created_at=T + timedelta(hours=1),
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.position_size_context["available"] is True
+        assert event.position_size_context["open_position_count"] == 0
+        assert event.position_size_context["aggregate_entry_value_quote"] is None
+    finally:
+        await _cleanup_wallet(admin_engine, wallet_address)
+        await _cleanup_token(admin_engine, mint)
+        await engine.dispose()
+
+
+async def test_equality_clock_wallet_position_both_at_or_before_cutoff_is_included(
+    admin_engine,
+) -> None:
+    """P4-REC-01 test 4: WalletPosition.first_entry_at == T and
+    WalletPosition.created_at == T (both relevant clocks <= T) -- the
+    position is included in the size context at T, subject to existing
+    rules."""
+    wallet_address = _unique_wallet()
+    mint = _unique_mint()
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        T = _NOW
+        async with sessionmaker() as session, session.begin():
+            wallet_id, _swap_id, _event_id = await _seed_tracked_wallet_with_buy_swap(
+                session,
+                wallet_address=wallet_address,
+                tier="A",
+                score=Decimal("90.000"),
+                mint=mint,
+                at=T,
+            )
+            token_id = await _seed_token(session, mint=mint, at=T)
+            history_id = await _seed_history_quality(session, wallet_id=wallet_id, at=T)
+            await _seed_open_position(
+                session,
+                wallet_id=wallet_id,
+                token_id=token_id,
+                history_id=history_id,
+                entry_value_quote=Decimal("10"),
+                at=T,
+                created_at=T,
+            )
+
+        async with sessionmaker() as session, session.begin():
+            created = await scan_for_new_prospective_events(session, tier_allowed=["A", "S"], now=T)
+        assert len(created) == 1
+        event = created[0]
+        assert event.position_size_context["available"] is True
+        assert event.position_size_context["open_position_count"] == 1
+        assert Decimal(event.position_size_context["aggregate_entry_value_quote"]) == Decimal("10")
     finally:
         await _cleanup_wallet(admin_engine, wallet_address)
         await _cleanup_token(admin_engine, mint)

@@ -156,10 +156,21 @@ async def _token_state_snapshot(
     current_lifecycle_stage`` (a denormalized cache of the token's CURRENT,
     possibly much-later, lifecycle state) used as a silent fallback. Only
     the token's own immutable mint identity is ever reported when no
-    point-in-time market evidence exists."""
+    point-in-time market evidence exists.
+
+    P4-REC-01: the ``tokens`` row itself has the same effective-vs-recorded
+    split as everything else this module already bounds -- ``first_observed_at``
+    is the effective (economic) time the mint was first seen trading, while
+    ``created_at`` is the recorded time ARGUS's own row was actually
+    persisted. A row can be backdated to ``first_observed_at <= cutoff``
+    while its ``created_at`` (the moment ARGUS actually learned about and
+    wrote it) is genuinely after cutoff -- that Token was not yet known at
+    cutoff even though its effective time claims otherwise, so BOTH clocks
+    must be bounded, exactly as already required for score/tier/market/
+    cluster evidence."""
     if token is None:
         return {"available": False, "reason": "mint is not a tracked tokens row"}
-    if token.first_observed_at > cutoff:
+    if token.first_observed_at > cutoff or token.created_at > cutoff:
         return {
             "available": False,
             "reason": "token was not yet first observed as of first_seen_at",
@@ -248,6 +259,14 @@ async def _position_size_context(
                     # past its own created_at in the future.
                     (WalletPosition.first_entry_at.is_(None))
                     | (WalletPosition.first_entry_at <= cutoff),
+                    # P4-REC-01: bound the position row's own recorded time
+                    # too (the same effective-vs-recorded split already
+                    # applied to Token/score/tier/cluster evidence) -- a
+                    # position whose first_entry_at is backdated to <=cutoff
+                    # but whose own row was not actually persisted
+                    # (created_at) until after cutoff was not yet known at
+                    # cutoff.
+                    WalletPosition.created_at <= cutoff,
                 )
             )
         )
