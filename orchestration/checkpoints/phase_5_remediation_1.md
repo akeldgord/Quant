@@ -16,7 +16,7 @@ self-approval of Phase 5 is claimed anywhere in this document -- only the
 orchestrator's own independent audit may approve Phase 5 or authorize
 Phase 6.
 STATUS: PASS
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: fef20bcf4401a55d3cfb6bbcef2eae87e1dc912f
 
 Instruction: `argus-phase-5-remediation-001`, ACTIVE at submission.
 
@@ -291,7 +291,77 @@ phase_5.md`, `orchestration/bundles/phase_5.txt`,
 `--output-dir` implementation is unchanged; only its TEST file's
 invocation pattern was updated), migration `0022` (never rewritten).
 
-I. Authority / carryforward / debt state
+I. Acceptance criteria
+
+[PASS] All 14 sealed rows (section D) are met, re-mapped against the
+SAME frozen contract, with P5-10 explicitly marked
+`PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` for its one DB-dependent
+sub-requirement (a genuine-evidence sample), per this instruction's own
+Environmental rule E -- every other row (including P5-10's own CLI
+wiring, the ORIGINAL seeded-chain shape, and empty-database honesty
+sub-requirements) is unconditionally PASS. No row was invented,
+weakened, or silently dropped from the frozen contract. No production
+weight/threshold was retuned (`config/signals_v1.yaml` byte-identical).
+No live/signing path exists anywhere in the new code (section D, P5-14).
+All seven consolidated findings F5-01 through F5-07 are genuinely closed
+(section C), not merely re-labeled.
+
+J. Deviations
+
+None from the sealed contract's own scope. One environmental reality is
+disclosed rather than worked around, unchanged from the prior round:
+this session's container has no reachable Postgres/Docker at all
+(section B) -- every DB-backed test this round is written correctly and
+skips cleanly (never fails), and a labeled SYNTHETIC demonstration
+substitutes for the one genuine-evidence artifact this session cannot
+honestly produce. One additional, unplanned but disclosed deviation:
+this round's own testing surfaced and fixed a real regression in
+`build_forward_information_observations` (section C) that had nothing
+to do with any of the seven frozen findings' own literal text but was a
+direct consequence of implementing F5-02 correctly -- fixed in place,
+not deferred, since leaving it broken would have left F5-02 itself
+incomplete.
+
+K. Known bugs / debt
+
+- Carried forward, unchanged: `git diff --check` continues to flag
+  trailing whitespace inside raw captured pytest-output evidence `.txt`
+  files -- HARDENING_BACKLOG, never a phase blocker.
+- New, disclosed as HARDENING_BACKLOG (non-blocking, no frozen row
+  requires it): every new/changed DB-backed integration test this round
+  (including the newly-added seeded-chain and sentinel tests) remains
+  execution-deferred in this specific sandbox -- a future round with
+  real Postgres access should run them for real at the earliest
+  opportunity to close the remaining gap between "collects cleanly and
+  is structurally sound" and "genuinely observed passing against a live
+  database." The prior round's own disclosed
+  `IntegrityError`-in-active-transaction concurrency debt item is now
+  CLOSED by F5-05's `INSERT ... ON CONFLICT DO NOTHING` rewrite (section
+  C) -- not merely worked around.
+- All Phase 1-4 known-bugs/debt items from
+  `orchestration/checkpoints/phase_4_recovery_5.md` section K remain
+  unchanged and not reopened.
+
+L. Security state
+
+No live-execution, signing, or credential-handling code exists anywhere
+in this round's diff. `argus copyability report` is read-only over
+already-persisted Phase 1/3/4 evidence: it never imports a live
+Jupiter/DexScreener/Helius client, never dispatches a network request,
+and never mutates a Phase 1-4 evidence row (only ever inserts a NEW,
+append-only Phase 5 snapshot row) -- now additionally proven by F5-07's
+new no-dispatch sentinel test (section D, P5-14), which replaces
+`JupiterClient.get_quote` with a raising sentinel and confirms the
+command completes without ever invoking it. No secret, credential, or
+private-key material appears anywhere in the new code, tests, or
+evidence (secret scan performed on every changed/new path before each
+commit, clean). `config/signals_v1.yaml`'s existing weights/thresholds
+are untouched. No `allow_automatic_scale_in` or any other live-trading
+gate was changed. Real live authorization remains unconditionally false
+throughout this phase, as required by P5-14 -- `risk_caps` is
+deliberately always `UNKNOWN` (section C, F5-04).
+
+M. Authority / carryforward / debt state
 
 No new NEXT_PHASE_CARRYFORWARD item introduced this round. CF-P4-01
 remains mapped solely to original P5-11 (now further strengthened by
@@ -310,7 +380,7 @@ the complete, honest implementation of all seven consolidated findings
 (F5-01 through F5-07) plus one additional regression this round's own
 testing caught and fixed (section C) -- not a partial or rushed patch.
 
-J. Next action / STOP
+N. Next action / STOP
 
 STOP. Await independent audit of this Phase 5 remediation round 1
 against the SAME sealed 14-row contract. No Phase 6 work. No
