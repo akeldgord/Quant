@@ -32,7 +32,7 @@ STATUS: All 5 frozen findings (P4-REC-01 through P4-REC-05) are fixed
   approved -- this checkpoint reports recovery completion for independent
   audit, it does not and cannot itself apply approval.
 UTC_TIMESTAMP: 2026-09-02T04:10:00Z
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: f932ce1a61358fd5bbdcc4fe7fcf64ff777a35ac
 TARGET_COMMIT: 9aa8b8decf8cb17e1b3bb28e9e1ebd0b2083acda
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
@@ -444,7 +444,7 @@ Per this project's established two-commit convention, this checkpoint, the
 paired bundle, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, and
 `orchestration/AGENT_HANDOFF.md` are committed once with every commit-hash-
 bearing field set to the literal placeholder
-`PLACEHOLDER_FILLED_IN_SECOND_COMMIT`, then a second, immediately
+`f932ce1a61358fd5bbdcc4fe7fcf64ff777a35ac`, then a second, immediately
 following commit fills in that first commit's own real hash in every one
 of those fields -- both commits carry the sole terminal trailer
 `ARGUS-INSTRUCTION-ID: argus-phase-4-recovery-001` with no paragraph
