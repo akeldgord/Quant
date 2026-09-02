@@ -9,7 +9,7 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 HANDOFF_ID: handoff-0032-phase-5-001
 UTC_TIMESTAMP: 2026-09-02T19:55:00Z
-CURRENT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+CURRENT_COMMIT: aac910cee873851f266d6d98eb60d90c4be3d49a
 CURRENT_PHASE: 5
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
 LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-5-001
@@ -108,7 +108,7 @@ in prior rounds' own checkpoints.
 - New, disclosed HARDENING_BACKLOG item (non-blocking, no frozen row
   requires it): the CLI's snapshot-persistence IntegrityError-recovery
   path has not been proven under a genuine concurrent load in this
-  session (no DB available) -- see checkpoint section K for the exact
+  session (no DB available) -- see checkpoint section L for the exact
   recommendation for a future round.
 - `LIVE_HELIUS_RPC_VALIDATION`/`LIVE_HELIUS_WSS_VALIDATION`/`BQ_PUBLIC_
   DATASET_ACCESS` remain `DEFERRED_ENVIRONMENTAL_CHECK`, unchanged, not

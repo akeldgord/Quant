@@ -1,5 +1,5 @@
 ARGUS ORCHESTRATOR REVIEW BUNDLE — Phase 5
-Generated: 2026-09-02T19:47:21.090036+00:00
+Generated: 2026-09-02T19:51:28.875611+00:00
 
 === CHECKPOINT ===
 ================ ARGUS ORCHESTRATOR CHECKPOINT ================
@@ -16,7 +16,7 @@ governed by `orchestration/AUDITOR_POLICY.md`. Authorized phase: 5 (Phase
 5 is claimed anywhere in this document -- only the orchestrator's
 independent audit may approve Phase 5 or authorize Phase 6.
 STATUS: PASS
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: aac910cee873851f266d6d98eb60d90c4be3d49a
 
 Instruction: `argus-phase-5-001`, ACTIVE at submission.
 
@@ -146,8 +146,8 @@ D. Sealed 14-row acceptance matrix (P5-01 through P5-14)
 | P5-10 | SPEC_BLOCKING | `argus copyability report` (`src/argus/cli.py`), `argus.copyability.service.compute_and_persist_wallet_copyability` | Integration (real CLI via `typer.testing.CliRunner`, exact production `argus.cli.app`): `tests/integration/test_phase5_persistence_and_report.py::test_p5_10_cli_copyability_report_runs_and_prints_required_fields`, `::test_p5_10_cli_copyability_report_empty_database_is_honest`. Synthetic demonstration (real M1-M6 functions, no DB): `orchestration/phase_5/evidence/synthetic_copyability_demo.json` (generation script embedded in `orchestration/phase_5/evidence/full_validation_output.txt`) | DB-backed CLI test: written, collects cleanly, SKIPS (section B). Empty-DB honesty test: ran, passed (does not require `admin_engine`). Synthetic demonstration: ran successfully, produced the required report fields (wallet, qualification score, follower returns by delay, executable outcome, forward-information grid, half-life/best-delay-or-reason, copyability score/components, size surprise, readiness gates/scores, sample size/confidence, versions, explicit limitations), labeled `"SYNTHETIC DEMONSTRATION -- NOT AUTHENTIC PROSPECTIVE EVIDENCE"` throughout | One documented command (`argus copyability report`), read-only over persisted evidence (no quote-provider dispatch, no evidence mutation -- confirmed by code inspection: the command never imports a live Jupiter/DexScreener client); accepts `--as-of` and `--wallet`; loads persisted sources, runs the real calculators, persists/reuses snapshots (`snapshot_reused` field), produces the required report; re-running is stable and non-duplicating (asserted in the DB test); a genuine, real, DB-backed sample is impossible to produce honestly in this session (section B) -- never worked around with a fabricated one | Genuine-current-evidence report (real wallet count, zero/one allowed) is the one row-level requirement this session cannot satisfy for real, per section B; the synthetic demonstration and the written-but-skipping DB test are the honest substitute this instruction's own Environmental rule E allows | PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION |
 | P5-11 | SPEC_BLOCKING | `scripts/argus_phase4_replay_demo.py` (`default_output_dir`, `resolve_results_path`, `ExistingReplayOutputFileError`, `--output-dir` argparse option) | `tests/unit/test_phase5_p5_11_replay_output_dir.py` (6 nodes) | 6/6 passed | Two default invocations resolve to two distinct, untracked, outside-the-repo directories; explicit `--output-dir` (tmp_path) succeeds; an existing sentinel target file is refused (`ExistingReplayOutputFileError`) with its bytes byte-for-byte unchanged; no `--overwrite` flag exists on the parser; path validation creates a missing output directory and happens before any expensive work (proven structurally: `main()` calls `resolve_results_path` before scratch-database creation -- code inspection, section F); the module no longer defines a tracked-path `EVIDENCE_DIR`/`RESULTS_PATH` constant at all | None -- this row needed no DB | PASS |
 | P5-12 | SPEC_BLOCKING | (process row -- see sections E/F) | `uv run pytest -q` (full suite); named regression files; `ruff check .`; `ruff format --check .`; `mypy src`; `alembic heads`; `argus fixtures validate-real-chain` | 839 passed, 335 skipped (all skips are the pre-existing, session-wide Postgres-unreachable condition, section B -- zero new failures, zero new non-environmental skips beyond the newly-written Phase 5 DB tests themselves, which skip for the identical reason every other DB test in the suite does), 0 failed. `ruff check .`: all checks passed. `ruff format --check .`: 289 files already formatted. `mypy src`: success, 141 source files. `alembic heads`: single head `0022`. `argus fixtures validate-real-chain`: 12/12 ok | Full command sequence run, raw output captured verbatim in `orchestration/phase_5/evidence/full_validation_output.txt`; no non-environmental failure anywhere; 94-case `test_phase4_recovery_3_matrix.py` inventory unchanged (`--collect-only -q` re-confirms 94 nodes); baseline tests not removed/weakened/skipped (only newly environment-gated by the same pre-existing condition every prior-phase DB test already carries) | Every DB-dependent test (Phase 1 through 5 alike) skips in this session -- pre-existing, not introduced by this round | PASS |
-| P5-13 | SPEC_BLOCKING | This checkpoint, `orchestration/bundles/phase_5.txt`, `orchestration/phase_5/evidence/` | This document itself; bundle validated post-hash-fill against `scripts/argus_orchestrator_watch.py`'s real `validate_checkpoint_content`/`validate_bundle_content` (section F, run after the second commit's hash fill) | All 14 rows enumerated with implementation symbols, exact test nodes/commands, actual results, pass conditions, and E-limitations (this table); report/manifest/version/hash/migration/count evidence in sections C/D/F; changed-file list in section G; carryforward/debt/authority state in sections I/J/K | Complete 14-row matrix present before READY_FOR_AUDIT; validators return `(True, '')` against the FINAL hash-filled bytes; bundle contains the checkpoint's exact bytes verbatim; all historical checkpoints/bundles/evidence preserved unmodified | None | PASS |
-| P5-14 | SAFETY_OR_INTEGRITY_BLOCKING | Scope/secret-safety/handoff (see sections H, K, L) | `git diff --stat` against every prohibited path; secret scan (section F); code inspection of every new/changed file for a live-dispatch, signing, or credential-handling path | No live/mainnet order, canary, signing/private-key/seed access, credential entry/disclosure, paid-provider dispatch, live arming, evidence rewrite, phase skip, or threshold relaxation anywhere in this round's diff. `argus copyability report` never imports a live quote/signing client (code inspection: only `argus.copyability.service`/`argus.scoring.*`/ORM reads). No environment-dump logging anywhere in new code | Zero prohibited-path changes; zero live/signing/credential paths in new code; existing weights in `config/signals_v1.yaml` unmodified (only the new, additive Phase 5 migration/config-schema-adjacent identity fields were added, no existing weight/threshold changed); handoff carries `CURRENT_PHASE: 5`, `LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-5-001`, clean worktree at push time | None | PASS |
+| P5-13 | SPEC_BLOCKING | This checkpoint, `orchestration/bundles/phase_5.txt`, `orchestration/phase_5/evidence/` | This document itself; bundle validated post-hash-fill against `scripts/argus_orchestrator_watch.py`'s real `validate_checkpoint_content`/`validate_bundle_content` (section F, run after the second commit's hash fill) | All 14 rows enumerated with implementation symbols, exact test nodes/commands, actual results, pass conditions, and E-limitations (this table); report/manifest/version/hash/migration/count evidence in sections C/D/F; changed-file list in section H; carryforward/debt/authority state in sections K/L/M | Complete 14-row matrix present before READY_FOR_AUDIT; validators return `(True, '')` against the FINAL hash-filled bytes; bundle contains the checkpoint's exact bytes verbatim; all historical checkpoints/bundles/evidence preserved unmodified | None | PASS |
+| P5-14 | SAFETY_OR_INTEGRITY_BLOCKING | Scope/secret-safety/handoff (see sections I, L, M) | `git diff --stat` against every prohibited path; secret scan (section F); code inspection of every new/changed file for a live-dispatch, signing, or credential-handling path | No live/mainnet order, canary, signing/private-key/seed access, credential entry/disclosure, paid-provider dispatch, live arming, evidence rewrite, phase skip, or threshold relaxation anywhere in this round's diff. `argus copyability report` never imports a live quote/signing client (code inspection: only `argus.copyability.service`/`argus.scoring.*`/ORM reads). No environment-dump logging anywhere in new code | Zero prohibited-path changes; zero live/signing/credential paths in new code; existing weights in `config/signals_v1.yaml` unmodified (only the new, additive Phase 5 migration/config-schema-adjacent identity fields were added, no existing weight/threshold changed); handoff carries `CURRENT_PHASE: 5`, `LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-5-001`, clean worktree at push time | None | PASS |
 
 E. DO-NOT / allowed-files compliance
 
@@ -258,7 +258,22 @@ $ git diff --stat config/ MASTER_SPEC.md orchestration/PROTOCOL.md scripts/argus
   pre-existing migration)
 ```
 
-G. Changed/new files this round
+G. Test results
+
+101 new Phase 5 test nodes total: 96 unit (unconditional, all passing --
+`tests/unit/test_phase5_p5_{01_identity(6),02_executable_returns(13),
+03_delay_curves_half_life(13),04_forward_information_grid(8),
+05_size_surprise(10),06_copyability_score(14),07_firewall(4),
+08_readiness_gates(22),11_replay_output_dir(6)}.py`) + 5 integration
+(`tests/integration/test_phase5_persistence_and_report.py` -- 1 passing
+unconditionally, 4 skipping for the environmental reason in section B).
+Full repository suite: 839 passed, 335 skipped, 0 failed
+(`uv run pytest -q`) -- identical zero-failure result to every prior
+round; the skip count reflects this session's own total Postgres
+unavailability (section B), not a new condition. See section D for the
+full per-row mapping and section F for raw command output.
+
+H. Changed/new files this round
 
 New: `migrations/versions/0022_phase5_copyability_and_readiness.py`;
 `src/argus/domain/wallet_copyability_snapshots.py`;
@@ -276,7 +291,7 @@ sub-app + `copyability report` command, appended after the last existing
 command); `scripts/argus_phase4_replay_demo.py` (P5-11's `--output-dir`
 refactor).
 
-H. Frozen (previously CLOSED) finding regression re-confirmation
+I. Frozen (previously CLOSED) finding regression re-confirmation
 
 Every Phase 1-4 finding independently closed by prior rounds
 (F-01/F-02/F-03/COV-01, ASSERT-01/ASSERT-02, and every P1-P4 remediation
@@ -290,7 +305,7 @@ remain unchanged, not reopened; `PG17_COMPOSE_VALIDATION` is this
 session's own total-Postgres-unavailability (section B), a stricter
 instance of the same pre-existing class, not a new deferral category.
 
-I. Acceptance criteria
+J. Acceptance criteria
 
 [PASS] All 14 sealed rows (section D) are met, with P5-10 explicitly
 marked `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` for its one
@@ -303,7 +318,7 @@ row was invented, weakened, or silently dropped from the frozen
 contract. No production weight/threshold was retuned. No live/signing
 path exists anywhere in the new code (section D, P5-14).
 
-J. Deviations
+K. Deviations
 
 None from the sealed contract's own scope. One environmental reality is
 disclosed rather than worked around: this session's container has no
@@ -321,7 +336,7 @@ an independently-selectable additional delay -- the closest honest
 reading of "remaining information value at a given delay from first
 observation" the actual evidence supports; never silently assumed.
 
-K. Known bugs / debt
+L. Known bugs / debt
 
 - Carried forward, unchanged: `git diff --check` continues to flag
   trailing whitespace inside raw captured pytest-output evidence `.txt`
@@ -342,7 +357,7 @@ K. Known bugs / debt
 - All Phase 1-4 known-bugs/debt items from `orchestration/checkpoints/
   phase_4_recovery_5.md` section K remain unchanged and not reopened.
 
-L. Security state
+M. Security state
 
 No live-execution, signing, or credential-handling code exists anywhere
 in this round's diff. `argus copyability report` is read-only over
@@ -356,7 +371,7 @@ weights/thresholds are untouched. No `allow_automatic_scale_in` or any
 other live-trading gate was changed. Real live authorization remains
 unconditionally false throughout this phase, as required by P5-14.
 
-M. Next action / STOP
+N. Next action / STOP
 
 STOP. Await independent audit of this sealed 14-row Phase 5 completion
 against `orchestration/AUDITOR_POLICY.md` and this instruction's own
@@ -370,53 +385,33 @@ authorizing Phase 6, or requiring further recovery.
 
 --- git status --porcelain (ok) ---
 $ git status --porcelain
-M scripts/argus_phase4_replay_demo.py
- M src/argus/cli.py
-?? migrations/versions/0022_phase5_copyability_and_readiness.py
-?? orchestration/checkpoints/phase_5.md
-?? orchestration/phase_5/
-?? src/argus/copyability/delay_curves.py
-?? src/argus/copyability/executable_returns.py
-?? src/argus/copyability/identity.py
-?? src/argus/copyability/loaders.py
-?? src/argus/copyability/persistence.py
-?? src/argus/copyability/service.py
-?? src/argus/copyability/size_surprise.py
-?? src/argus/copyability/util.py
-?? src/argus/domain/opportunity_readiness_snapshots.py
-?? src/argus/domain/wallet_copyability_snapshots.py
-?? src/argus/scoring/config_weights.py
-?? src/argus/scoring/copyability.py
-?? src/argus/scoring/readiness.py
-?? tests/integration/test_phase5_persistence_and_report.py
-?? tests/unit/test_phase5_p5_01_identity.py
-?? tests/unit/test_phase5_p5_02_executable_returns.py
-?? tests/unit/test_phase5_p5_03_delay_curves_half_life.py
-?? tests/unit/test_phase5_p5_04_forward_information_grid.py
-?? tests/unit/test_phase5_p5_05_size_surprise.py
-?? tests/unit/test_phase5_p5_06_copyability_score.py
-?? tests/unit/test_phase5_p5_07_firewall.py
-?? tests/unit/test_phase5_p5_08_readiness_gates.py
-?? tests/unit/test_phase5_p5_11_replay_output_dir.py
+M docs/BUILD_STATE.md
+ M orchestration/AGENT_HANDOFF.md
+ M orchestration/bundles/phase_5.txt
+ M orchestration/checkpoints/phase_5.md
 
 --- git log -5 --oneline (ok) ---
 $ git log -5 --oneline
+aac910c Phase 5: COPYABILITY + FORWARD INFORMATION VALUE (M1-M7) first submission
 102e6a4 Approve Phase 4 sealed assertions; authorize Phase 5 frozen acceptance contract
 354ed22 Fill in commit hash for Phase 4 recovery round 5 evidence
 a6922ac Phase 4 recovery round 5: close sealed ASSERT-01/ASSERT-02 contract
 3250313 orchestrator: reissue sealed Phase 4 completion contract
-c0b774f orchestrator: seal acceptance contracts and carry new issues forward
 
 --- git diff --stat HEAD (ok) ---
 $ git diff --stat HEAD
-scripts/argus_phase4_replay_demo.py | 111 ++++++++++++++++++++++++++++++------
- src/argus/cli.py                    |  99 ++++++++++++++++++++++++++++++++
- 2 files changed, 192 insertions(+), 18 deletions(-)
+docs/BUILD_STATE.md                  |   2 +-
+ orchestration/AGENT_HANDOFF.md       |   4 +-
+ orchestration/bundles/phase_5.txt    | 184 ++++++++++++++++++++++++++---------
+ orchestration/checkpoints/phase_5.md |  35 +++++--
+ 4 files changed, 164 insertions(+), 61 deletions(-)
 
 --- git diff --name-status HEAD (ok) ---
 $ git diff --name-status HEAD
-M	scripts/argus_phase4_replay_demo.py
-M	src/argus/cli.py
+M	docs/BUILD_STATE.md
+M	orchestration/AGENT_HANDOFF.md
+M	orchestration/bundles/phase_5.txt
+M	orchestration/checkpoints/phase_5.md
 
 --- repository tree (depth 3) ---
 .
@@ -595,6 +590,7 @@ M	src/argus/cli.py
 ./orchestration/bundles/phase_4_recovery_5.txt
 ./orchestration/bundles/phase_4_remediation_1.txt
 ./orchestration/bundles/phase_4_remediation_2.txt
+./orchestration/bundles/phase_5.txt
 ./orchestration/bundles/watcher_remediation.txt
 ./orchestration/bundles/watcher_remediation_2.txt
 ./orchestration/bundles/watcher_remediation_3.txt
@@ -989,11 +985,11 @@ Machine-and-human-readable state for session recovery (MASTER_SPEC.md section 8)
 Every new implementation session must read this file before doing anything else.
 
 ```yaml
-current_phase: 4  # Phase 4 (PROSPECTIVE MONITORING + SHADOW COPYING) sealed two-assertion completion round 5 complete, awaiting independent audit -- per argus-phase-4-recovery-005's explicit APPROVES_PHASE: NONE / AUTHORIZED_PHASE: 4
-last_completed_phase: 4  # Phase 4 recovery round 5 complete (closes ASSERT-01/ASSERT-02, the SEALED complete blocking contract per orchestration/AUDITOR_POLICY.md; F-01/F-02/F-03/COV-01 confirmed CLOSED unchanged, not reopened; no production code changed) -- see orchestration/checkpoints/phase_4_recovery_5.md. Phase 4 itself is STILL NOT yet orchestrator-approved (this is the SEVENTH submission for Phase 4, not a new phase; an intervening recovery-004 instruction was superseded before this session ever executed it).
-last_orchestrator_approved_phase: 3  # Unchanged this session -- only the orchestrator may advance this to 4. This recovery instruction's own APPROVES_PHASE is NONE (no self-approval).
-approved_commit: efb8837f01ab6aaa451c6ee3263e4effa389c4e6  # Phase 3's orchestrator-approved commit -- unchanged; Phase 4 is not yet approved
-awaiting_orchestrator_review: true  # Phase 4 recovery round 5 complete this session -- checkpoint/bundle/handoff produced, awaiting independent audit per argus-phase-4-recovery-005
+current_phase: 5  # Phase 5 (COPYABILITY + FORWARD INFORMATION VALUE) first submission complete, awaiting independent audit -- per argus-phase-5-001's explicit APPROVES_PHASE: 4 / AUTHORIZED_PHASE: 5
+last_completed_phase: 5  # Phase 5 first submission complete (implements M1-M7, migration 0022, argus copyability report CLI, P5-11 replay-script output-dir refactor; sealed 14-row acceptance contract P5-01..P5-14, see orchestration/checkpoints/phase_5.md section D). Phase 5 itself is NOT yet orchestrator-approved -- this is the FIRST submission for Phase 5, pending independent audit.
+last_orchestrator_approved_phase: 4  # argus-phase-5-001's own APPROVES_PHASE: 4 approved Phase 4 (PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION) in the SAME instruction that authorized Phase 5 -- this is the orchestrator's own explicit approval, not a self-approval by this session.
+approved_commit: 354ed229eb4ba8c16622b008b7494b3687da525e  # argus-phase-5-001's own TARGET_COMMIT field value -- the commit the orchestrator's Phase 4 approval was made against. Phase 5 itself is not yet approved.
+awaiting_orchestrator_review: true  # Phase 5 first submission complete this session -- checkpoint/bundle/handoff produced, awaiting independent audit per argus-phase-5-001
 
 # PG17_COMPOSE_VALIDATION tracks whether `docker compose up postgres`
 # (the actual postgres:17 image, per TECH-004 and compose.yaml) has been
@@ -1122,6 +1118,7 @@ known_blockers:
 | 4 (recovery round 2) | BUILD COMPLETE, AWAITING INDEPENDENT AUDIT (authorized by `argus-phase-4-recovery-002`, target `e2b0edce094f51b329372ccfb0015fece0103033`, `APPROVES_PHASE: NONE`) | a50432946b5ddeede55f84d61c93375047c564df | Bounded root-cause recovery closing exactly the 3 findings (F-01, F-02, F-03) `argus-phase-4-recovery-review-001` froze after auditing recovery round 1; P4-REC-01/04/05 confirmed CLOSED unchanged, not reopened. **F-01** (`src/argus/shadow/quote_jobs._is_positive_raw_amount`, SPEC_BLOCKING): `str.isdigit()` alone accepts non-ASCII Unicode "digit" characters (e.g. superscript-two `"²"`) that `int()` cannot parse, and Python's own global integer-string-conversion length guard raises `ValueError` for an excessively long (thousands-of-digits) all-ASCII digit string -- both previously escaped this function uncaught, crashing the whole probe-processing call (`_classify_quote` runs in the provider try/except's `else` branch, which is NOT covered by that except) instead of recording an honest terminal `NO_ROUTE`. Fixed by requiring `value.isascii() and value.isdigit()` before ever calling `int()`, then wrapping that conversion in a `ValueError`/`OverflowError` guard returning `False` on failure -- Python's own conversion-length limit is left completely untouched (never raised via `sys.set_int_max_str_digits`), proven by an explicit regression asserting the limit is still the Python default (4300) after this fix. **F-02** (`_safe_provider_error_code`/`_classify_provider_exception`, SAFETY_OR_INTEGRITY_BLOCKING): the provider-error-code sanitizer previously checked only type/length (a non-empty string <=128 chars), so an unsafe-shaped string (a URL with an embedded fake API key, a bare `key=value` query fragment, embedded control characters, JSON-body-shaped text) that happened to fit the length bound was persisted verbatim into `failure_evidence`; separately, the HTTP 429 branch returned immediately without ever inspecting the response body, so a genuinely-supplied safe `errorCode` was silently dropped on a 429 even though every other status preserved it. Fixed by replacing the sanitizer with a bounded ASCII identifier grammar (`^[A-Za-z][A-Za-z0-9_]{0,127}$`, a full-match regex -- never a substring/prefix check), and by restructuring `_classify_provider_exception` to parse the response body and extract a sanitized `provider_error_code` BEFORE branching on status code, so a JSON-parse failure can never erase the 429 capacity classification and a genuinely-supplied safe code now survives on 429 exactly like every other status; 429 itself is still always `PROVIDER_CAPACITY_MISS` regardless of what code is or isn't present. **F-03** (checkpoint/bundle artifact validation, SPEC_BLOCKING): the previous round's own submitted checkpoint (`orchestration/checkpoints/phase_4_recovery.md`, left byte-for-byte unmodified as historical evidence) was never actually run through this project's own production `validate_checkpoint_content`/`validate_bundle_content` functions before submission -- it is missing the required terminal end marker entirely and has no section containing the literal (case-insensitive) required phrase "acceptance criteria" (its own section was titled "Row-by-row acceptance matrix"). This round's own checkpoint/bundle (`orchestration/checkpoints/phase_4_recovery_2.md`/`orchestration/bundles/phase_4_recovery_2.txt`) were mechanically validated against BOTH real, unmodified production validator functions after hash-fill, with the actual `(ok, reason)` tuples (both `(True, '')`) recorded verbatim in the checkpoint's own commands-run section -- calling the functions without asserting `ok` is explicitly not validation. Two new focused test files: `tests/unit/test_phase4_recovery_2_contract.py` (52 tests -- the pure parser/artifact rows AM-01/02/04/08/09/12/13, no database) and `tests/integration/test_phase4_recovery_2.py` (16 tests -- the worker/persistence rows AM-01/03/05/06/07/10/11, real `JupiterClient`+`httpx.MockTransport`+real claim/execute/record seam, entry AND reverse probe kinds). Every counterexample was run FIRST against the unmodified pre-fix code and its honest failing output preserved (never `xfail`) in `orchestration/phase_4_recovery_2/evidence/pre_fix_unit_contract_red.txt` (15 failed, 36 passed, 1 skipped) and `.../pre_fix_integration_worker_red.txt` (7 failed, 9 passed) before either fix was implemented. `scripts/argus_phase4_replay_demo.py`'s evidence output directory moved to `orchestration/phase_4_recovery_2/evidence/` for this round (round 1's own frozen `orchestration/phase_4_recovery/evidence/replay_demo_results.json` is preserved byte-for-byte unmodified -- an accidental regeneration during this round's own full-suite run was caught via `git status` before staging and reverted). No schema migration needed this round (the `failure_evidence` JSONB column already exists from P4-REC-03's migration 0021; `alembic heads` unchanged at `0021`). 978 tests passing (up from 911; +67 exactly matches the 2 new test files, net of 1 order-dependent AM-12 skip resolved by the direct post-hash-fill validator invocation), ruff+mypy+format clean across the full repository, migration graph unchanged single head at `0021`, 12/12 real-chain fixtures ok, secret scan clean on this round's 9 changed/new files plus the new `orchestration/phase_4_recovery_2/` evidence directory, no credential entered/disclosed, no signing/execution/broadcast/paid-provider path. See `orchestration/checkpoints/phase_4_recovery_2.md` for the full row-by-row acceptance matrix. `last_orchestrator_approved_phase` remains `3` -- this recovery approves no phase. **Phase 4 remains NOT orchestrator-approved.** **Superseded by the recovery round 3 row below** -- an independent audit (embedded directly in `argus-phase-4-recovery-003`) confirmed F-01/F-02/F-03 genuinely CLOSED but found the submitted tests narrower than recovery-002's own frozen acceptance matrix required (COV-01: helper-only/representative coverage substituted for the required Cartesian worker/persistence/reload proof); this row is kept unmodified as immutable history. |
 | 4 (recovery round 3) | BUILD COMPLETE, AWAITING INDEPENDENT AUDIT (authorized by `argus-phase-4-recovery-003`, target `87e8ba1b5a7969e5afe4a7e1e6c44eb392365f16`, `APPROVES_PHASE: NONE`) | 75e9ece07aa475e1ffc2413d110f5f0ee88f3134 | TEST-AND-EVIDENCE-ONLY completion round closing the single consolidated finding COV-01 an independent audit found after re-confirming F-01/F-02/F-03 genuinely correct (a fresh scratch harness of 118 real `JupiterClient`/`httpx.MockTransport` cases through the same production common executor, plus both final artifact validators returning `(True, '')`) -- recovery-002's own submitted tests satisfied only a representative subset of its own frozen matrix rows AM-01/02/03/04/08/09/10 (e.g. one hard-coded reverse/outAmount case instead of the full kind x field x value Cartesian; one entry-only reload instead of reload coverage for every malformed-value combination; helper-only boolean/string checks standing in for real persisted-executor proof). **No production code in `src/` is touched this round** -- `git diff --stat src/` is empty; F-01, F-02 and F-03 are not reopened or reworked. Adds `tests/integration/test_phase4_recovery_3_matrix.py` (94 new tests, TC-01 through TC-05, using the real `_execute_and_record_probe` common executor recovery-002's own instruction already permitted directly): **TC-01** (AM-01/02/03, 8 cases: both probe kinds x both nested fields x {non-ASCII superscript-two, 5000-ASCII-digit string}) -- each case a real persisted terminal `NO_ROUTE` with `requested_at<=responded_at<=terminal_at`, zero new `ShadowPosition`, exactly one HTTP call, PLUS a fresh-session reload and repeat-processing pass proving the complete persisted record (outcome/clocks/evidence/generation) is byte-for-byte unchanged and no second HTTP request occurs. **TC-02** (AM-04, 26 cases: nested field x {3 valid, 10 invalid} representations, entry kind only per the frozen row's own common-seam exemption) -- valid representations (`"1"`/`"001"`/int `1`) reach real `SUCCESS` with a genuine new `ShadowPosition`; every invalid shape (empty/garbage/zero/negative/bool/float/None/non-ASCII-digit) reaches terminal `NO_ROUTE` with zero new positions. **TC-03** (AM-05/07/10, 8 cases: both kinds x {429/known-code, 400/known-no-route-code, 400/unknown-safe-code, 429/no-route-shaped-code}) -- exact outcome/evidence per case plus the same reload/repeat identity proof as TC-01. **TC-04** (AM-08/10, 44 cases: both kinds x HTTP400/429 x 11 frozen unsafe-code shapes, each response body/headers also carrying ignored fake-secret sibling fields) -- `provider_error_code` absent in every case, only `http_status_code` persisted, no injected secret/body/header/URL material present in the persisted evidence, plus the same reload/repeat identity proof. **TC-05** (AM-09, 8 cases: HTTP400/429 x {1-char, 128-char, digits/underscore identifier, 129-char-rejected} boundary, entry kind only per the frozen row's own common-seam exemption) -- exact code preserved at/under the 128-char boundary, 129 chars rejected with status-only evidence, no trimming/normalization. A collected-case-inventory cross-check (`--collect-only -q`, 94 nodes) confirms every row's own frozen Cartesian size was actually met, not merely an AM-linked test-node label (this round's own root-cause remedy for why recovery-002's overclaim was possible). `scripts/argus_phase4_replay_demo.py`'s evidence output directory moved to `orchestration/phase_4_recovery_3/evidence/` for this round (round 2's own frozen `orchestration/phase_4_recovery_2/evidence/replay_demo_results.json` is preserved byte-for-byte unmodified), the same narrow evidence-destination-only allowance recovery-002 itself used. No schema migration needed this round (`alembic heads` unchanged at `0021`). 1073 tests passing (up from 979; +94 exactly matches the new test file), ruff+mypy+format clean across the full repository (one self-inflicted import-sort/format issue in this round's own new test file caught and fixed during the acceptance-command sequence itself), migration graph unchanged single head at `0021`, 12/12 real-chain fixtures ok, secret scan clean on this round's 3 changed/new paths, no credential entered/disclosed, no signing/execution/broadcast/paid-provider path. See `orchestration/checkpoints/phase_4_recovery_3.md` for the full row-by-row acceptance matrix, including the terminology correction distinguishing an instruction's own commit from that instruction's own `TARGET_COMMIT` field value (a documentation-only correction this round's own audit requested; the historical `phase_4_recovery_2.md` checkpoint is left byte-for-byte unmodified). `last_orchestrator_approved_phase` remains `3` -- this round approves no phase. **Phase 4 remains NOT orchestrator-approved.** **Superseded by the recovery round 5 row below** (an intervening recovery-004 instruction, commit `78b70d151217a84227d8c0363340ffed50149457`, was itself superseded by recovery-005 before this session ever executed it -- no evidence exists for round 4 and none is claimed) -- an independent audit embedded in `argus-phase-4-recovery-005` confirmed F-01/F-02/F-03/COV-01 genuinely closed but sealed two additional frozen assertions (ASSERT-01, ASSERT-02) as the complete remaining blocking contract; this row is kept unmodified as immutable history. |
 | 4 (recovery round 5) | BUILD COMPLETE, AWAITING INDEPENDENT AUDIT (authorized by `argus-phase-4-recovery-005`, target `c0b774f5deb9898bb6e1cfa4f364a1b458242610`, `APPROVES_PHASE: NONE`) | a6922ac8df812f48a34ff637ddc17e45f3c5afab | SEALED two-assertion completion round, per the new `orchestration/AUDITOR_POLICY.md` governance contract (added by the orchestrator between rounds 3 and 5, additive to MASTER_SPEC.md, mandatory reading before self-audit/independent audit). **No production code in `src/` is touched this round** -- `git diff --stat src/` is empty; F-01/F-02/F-03/COV-01 are not reopened or reworked, confirmed already CLOSED by this instruction's own text. **ASSERT-01** (unchanged scoped probe/position counts, SPEC_BLOCKING if failed): `tests/integration/test_phase4_recovery_3_matrix.py`'s shared `_process_and_reprocess` helper (used by TC-01/03/04's 60 non-SUCCESS cases) now also observes the scoped `ShadowQuoteProbe` row count (by the claimed probe's own parent -- `shadow_intent_id` for ENTRY_DELAY, `shadow_position_id` for REVERSE_EXECUTABLE, via a new `_scoped_probe_count` helper) and the seeded-wallet `ShadowPosition` count at three points -- before first execution, after the committed terminal result, and after the fresh-session repeat -- asserting all three observations are identical; never applied to TC-02's own SUCCESS cases, per the frozen row's own explicit exclusion. `_seed_and_claim_entry`/`_seed_and_claim_reverse` now additionally return the claimed probe's own `shadow_intent_id`/`shadow_position_id` (previously only `wallet_id` was threaded through) so every TC-01/03/04 call site can pass the correct scope. **ASSERT-02** (captured-log absence for unsafe TC-04 values, SPEC_BLOCKING if failed): TC-04's own 44 cases now wrap both executor calls (first execution + fresh-session repeat, both already inside `_process_and_reprocess`) in `caplog.at_level(logging.DEBUG)` and assert that none of the four injected inert fake-secret sentinels, nor the case's own unsafe `errorCode` value itself (in both raw and escaped-`repr()` form, for nonempty string values), ever appear in the captured formatted log text. Root-caused via direct source inspection (`grep` across `quote_jobs.py`, the Jupiter client, retry, and usage-recording modules): this call path emits zero log records today, so no production logger change was needed or made -- the frozen test proves the existing, already-silent behavior, exactly per the instruction's own "if current production passes, make test/evidence changes only" clause. The existing 94-case inventory is byte-identical (verified via `--collect-only -q` cross-check) -- no case family was added or removed, only in-place assertion strengthening. An accidental regeneration of round 3's own frozen `orchestration/phase_4_recovery_3/evidence/replay_demo_results.json`, caused by running the targeted regression suite before moving `scripts/argus_phase4_replay_demo.py`'s `EVIDENCE_DIR` to this round's own new `orchestration/phase_4_recovery_5/evidence` path, was caught via `git status` before staging and reverted with `git checkout --`; the move was then completed before any further evidence-generating command ran, and this exact recurring mistake category is now flagged for future rounds to perform first, before any test command. No schema migration needed this round (`alembic heads` unchanged at `0021`). 1073 tests passing (identical total to round 3 -- zero new test nodes, only strengthened assertions inside existing ones), ruff+mypy+format clean across the full repository (one self-inflicted format issue in this round's own edited test file caught and fixed during the acceptance-command sequence itself), migration graph unchanged single head at `0021`, 12/12 real-chain fixtures ok, secret scan clean on this round's changed/new paths, no credential entered/disclosed, no signing/execution/broadcast/paid-provider path. See `orchestration/checkpoints/phase_4_recovery_5.md` for the full builder self-audit two-row ASSERT matrix. `last_orchestrator_approved_phase` remains `3` -- this round approves no phase. **Phase 4 remains NOT orchestrator-approved.** |
+| 5 | BUILD COMPLETE, AWAITING INDEPENDENT AUDIT (authorized by `argus-phase-5-001`, target `354ed229eb4ba8c16622b008b7494b3687da525e`, `APPROVES_PHASE: NONE` for this row's own submission -- Phase 4 was approved by `argus-phase-5-001` itself, see `last_orchestrator_approved_phase` above) | aac910cee873851f266d6d98eb60d90c4be3d49a | First Phase 5 (COPYABILITY + FORWARD INFORMATION VALUE, MASTER_SPEC.md sections 46-53) submission: implements mechanics M1-M7 (`src/argus/copyability/{identity,executable_returns,delay_curves,size_surprise,util,loaders,persistence,service}.py`, `src/argus/scoring/{copyability,readiness,config_weights}.py`), two new additive-only, append-only, idempotently-identified analytical tables (migration `0022`: `wallet_copyability_snapshots`, `opportunity_readiness_snapshots`), the `argus copyability report` CLI command, and P5-11's replay-script `--output-dir` refactor consuming the recovery-005 carryforward CF-P4-01. Uses PRECISELY the existing `copyability_weights`/`trade_readiness_weights` from `config/signals_v1.yaml` -- no retuning. 101 new test nodes across `tests/unit/test_phase5_p5_{01..08,11}_*.py` and `tests/integration/test_phase5_persistence_and_report.py`, mapped one-to-one to the sealed 14-row acceptance contract (P5-01 through P5-14) -- see `orchestration/checkpoints/phase_5.md` section D for the full matrix. This sandbox's own container has no reachable Postgres/Docker daemon at all (a stricter instance of the pre-existing `PG17_COMPOSE_VALIDATION` environmental class) -- every DB-backed test in the ENTIRE repository (Phases 1-5 alike) skips cleanly, never fails; P5-10's own DB-backed CLI test is written and skips identically, substituted by a deterministic SYNTHETIC demonstration (`orchestration/phase_5/evidence/synthetic_copyability_demo.json`) run directly against the same production M1-M6 functions. 839 passed, 335 skipped, 0 failed across the full repository suite; ruff/mypy/format clean; single alembic head `0022`; 12/12 real-chain fixtures ok. No live/signing/credential/paid-provider path anywhere in this round's diff. See `orchestration/checkpoints/phase_5.md` for the complete builder self-audit. `last_orchestrator_approved_phase` is set to `4` by this same instruction's own `APPROVES_PHASE: 4` (Phase 4 approval), NOT self-approved by this row -- Phase 5 itself remains NOT orchestrator-approved pending independent audit of this submission. |
 
 ## Operational tooling
 
@@ -4024,4 +4021,95 @@ audit
   verification.
 - git_commit: (recorded in the second, hash-fill-in commit -- see
   `orchestration/checkpoints/phase_4_recovery_5.md` GIT_COMMIT field)
+
+### 2026-09-02 — Phase 5 first submission: COPYABILITY + FORWARD
+INFORMATION VALUE (M1-M7), awaiting independent audit
+
+- decision: Implemented the complete sealed Phase 5 acceptance contract
+  (`argus-phase-5-001`, `phase-5-v1`) -- MASTER_SPEC.md sections 46-53,
+  mechanics M1 (identity/point-in-time cutoff), M2 (executable-return
+  arithmetic + 6 terminal failure classes), M3 (delay curves/half-life/
+  forward-information grid), M4 (robust size surprise), M5 (copyability
+  score v1), M6 (trade readiness v1, research-only, six hard gates),
+  M7 (discovery-firewall separation). Two new additive-only,
+  append-only, idempotently-identified analytical tables (migration
+  `0022`: `wallet_copyability_snapshots`, `opportunity_readiness_
+  snapshots`), the `argus copyability report` CLI command, and P5-11's
+  consumption of the recovery-005 carryforward CF-P4-01 (an explicit
+  `--output-dir` option on `scripts/argus_phase4_replay_demo.py`, fresh
+  untracked default, refuse-overwrite semantics). This same instruction
+  also carried the orchestrator's own approval of Phase 4
+  (`APPROVES_PHASE: 4`, `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION`)
+  -- reflected in `docs/BUILD_STATE.md`'s `last_orchestrator_approved_
+  phase: 4`, not a self-approval by this session.
+- rationale: M5/M6 use PRECISELY the existing `copyability_weights`/
+  `trade_readiness_weights` blocks already frozen in `config/
+  signals_v1.yaml` -- zero retuning, per this instruction's own explicit
+  config-reuse requirement (`git diff config/signals_v1.yaml` is empty).
+  Every per-component formula (delayed follower alpha, liquidity/
+  executability, post-entry stability, holding-duration suitability,
+  latency tolerance, slippage sensitivity, sample confidence for M5;
+  qualification/copyability/remaining-information/liquidity-impact/
+  price-movement/size-surprise/independent-confirmation for M6) is
+  implemented byte-exact to the sealed contract's own frozen text, with
+  missing components contributing a labeled neutral-50 prior at their
+  original weight rather than being redistributed. The half-life
+  algorithm (`argus.copyability.delay_curves.compute_half_life`) is
+  observation-only -- no fitted decay curve, no forced monotonicity, no
+  interpolation -- and was verified against both of the instruction's
+  own worked numeric examples exactly (peak1/crossing5/elapsed4 and
+  best5/crossing15/elapsed10).
+- evidence: 101 new test nodes across `tests/unit/test_phase5_p5_
+  {01_identity,02_executable_returns,03_delay_curves_half_life,
+  04_forward_information_grid,05_size_surprise,06_copyability_score,
+  07_firewall,08_readiness_gates,11_replay_output_dir}.py` and
+  `tests/integration/test_phase5_persistence_and_report.py` (covering
+  P5-01/P5-07/P5-09/P5-10's DB-backed paths), mapped one-to-one to the
+  sealed 14-row acceptance contract in `orchestration/checkpoints/
+  phase_5.md` section D. Full repository suite: 839 passed, 335
+  skipped, 0 failed; `ruff check .` clean; `ruff format --check .`
+  clean; `mypy src` clean (141 source files); single alembic head
+  `0022`; 12/12 real-chain fixtures ok.
+- environmental limitation (disclosed, not a builder failure): this
+  session's own sandbox container has no reachable Postgres and no
+  running Docker daemon at all (`docker compose up -d postgres` fails:
+  "Cannot connect to the Docker daemon") -- a stricter instance of the
+  pre-existing `PG17_COMPOSE_VALIDATION` environmental class this
+  project has carried since Phase 0, but total rather than merely
+  PG17-specific in this particular container. Every DB-backed test in
+  the ENTIRE repository (Phases 1 through 5 alike) skips cleanly, never
+  fails, confirming this is a pre-existing environmental condition, not
+  a regression this round introduces. P5-10's own "genuine-current-
+  evidence report (actual wallet count, zero/one allowed)" requirement
+  could not be produced for real in this session; the separately
+  required deterministic SYNTHETIC demonstration WAS produced
+  (`orchestration/phase_5/evidence/synthetic_copyability_demo.json`),
+  calling the exact same production M1-M6 functions the CLI command
+  calls, labeled SYNTHETIC throughout, never presented as authentic
+  prospective evidence. P5-10 is marked
+  `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` in the checkpoint's own
+  14-row matrix for this one sub-requirement; every other row and every
+  other P5-10 sub-requirement (CLI wiring, empty-database honesty,
+  synthetic demonstration) is unconditionally PASS.
+- scope: New `src/argus/copyability/*`, `src/argus/scoring/*`,
+  `src/argus/domain/{wallet_copyability_snapshots,opportunity_
+  readiness_snapshots}.py`, migration `0022`, the new Phase 5 test
+  files, and `orchestration/phase_5/evidence/`. Additive-only changes:
+  `src/argus/cli.py` (one new `copyability_app` Typer sub-app, zero
+  lines of any existing command touched) and `scripts/argus_phase4_
+  replay_demo.py` (P5-11's own bounded `--output-dir` refactor).
+  `config/signals_v1.yaml`, `MASTER_SPEC.md`,
+  `orchestration/AUDITOR_POLICY.md`, `orchestration/PROTOCOL.md`,
+  `scripts/argus_orchestrator_watch.py`, and every pre-existing
+  migration are unchanged (`git diff --stat` confirms empty for all).
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` was not modified. This
+  session does not and cannot self-approve Phase 5 -- the checkpoint's
+  own STOP section requires independent audit before the next `ACTIVE`
+  instruction may approve Phase 5 or authorize Phase 6. New evidence is
+  written to entirely new paths (`orchestration/checkpoints/phase_5.md`,
+  `orchestration/bundles/phase_5.txt`, `orchestration/phase_5/
+  evidence/`); every prior round's checkpoint/bundle/evidence is
+  preserved byte-for-byte unmodified.
+- git_commit: (recorded in the second, hash-fill-in commit -- see
+  `orchestration/checkpoints/phase_5.md` GIT_COMMIT field)
 

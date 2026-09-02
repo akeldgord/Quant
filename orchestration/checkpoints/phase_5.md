@@ -12,7 +12,7 @@ governed by `orchestration/AUDITOR_POLICY.md`. Authorized phase: 5 (Phase
 5 is claimed anywhere in this document -- only the orchestrator's
 independent audit may approve Phase 5 or authorize Phase 6.
 STATUS: PASS
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: aac910cee873851f266d6d98eb60d90c4be3d49a
 
 Instruction: `argus-phase-5-001`, ACTIVE at submission.
 
@@ -142,8 +142,8 @@ D. Sealed 14-row acceptance matrix (P5-01 through P5-14)
 | P5-10 | SPEC_BLOCKING | `argus copyability report` (`src/argus/cli.py`), `argus.copyability.service.compute_and_persist_wallet_copyability` | Integration (real CLI via `typer.testing.CliRunner`, exact production `argus.cli.app`): `tests/integration/test_phase5_persistence_and_report.py::test_p5_10_cli_copyability_report_runs_and_prints_required_fields`, `::test_p5_10_cli_copyability_report_empty_database_is_honest`. Synthetic demonstration (real M1-M6 functions, no DB): `orchestration/phase_5/evidence/synthetic_copyability_demo.json` (generation script embedded in `orchestration/phase_5/evidence/full_validation_output.txt`) | DB-backed CLI test: written, collects cleanly, SKIPS (section B). Empty-DB honesty test: ran, passed (does not require `admin_engine`). Synthetic demonstration: ran successfully, produced the required report fields (wallet, qualification score, follower returns by delay, executable outcome, forward-information grid, half-life/best-delay-or-reason, copyability score/components, size surprise, readiness gates/scores, sample size/confidence, versions, explicit limitations), labeled `"SYNTHETIC DEMONSTRATION -- NOT AUTHENTIC PROSPECTIVE EVIDENCE"` throughout | One documented command (`argus copyability report`), read-only over persisted evidence (no quote-provider dispatch, no evidence mutation -- confirmed by code inspection: the command never imports a live Jupiter/DexScreener client); accepts `--as-of` and `--wallet`; loads persisted sources, runs the real calculators, persists/reuses snapshots (`snapshot_reused` field), produces the required report; re-running is stable and non-duplicating (asserted in the DB test); a genuine, real, DB-backed sample is impossible to produce honestly in this session (section B) -- never worked around with a fabricated one | Genuine-current-evidence report (real wallet count, zero/one allowed) is the one row-level requirement this session cannot satisfy for real, per section B; the synthetic demonstration and the written-but-skipping DB test are the honest substitute this instruction's own Environmental rule E allows | PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION |
 | P5-11 | SPEC_BLOCKING | `scripts/argus_phase4_replay_demo.py` (`default_output_dir`, `resolve_results_path`, `ExistingReplayOutputFileError`, `--output-dir` argparse option) | `tests/unit/test_phase5_p5_11_replay_output_dir.py` (6 nodes) | 6/6 passed | Two default invocations resolve to two distinct, untracked, outside-the-repo directories; explicit `--output-dir` (tmp_path) succeeds; an existing sentinel target file is refused (`ExistingReplayOutputFileError`) with its bytes byte-for-byte unchanged; no `--overwrite` flag exists on the parser; path validation creates a missing output directory and happens before any expensive work (proven structurally: `main()` calls `resolve_results_path` before scratch-database creation -- code inspection, section F); the module no longer defines a tracked-path `EVIDENCE_DIR`/`RESULTS_PATH` constant at all | None -- this row needed no DB | PASS |
 | P5-12 | SPEC_BLOCKING | (process row -- see sections E/F) | `uv run pytest -q` (full suite); named regression files; `ruff check .`; `ruff format --check .`; `mypy src`; `alembic heads`; `argus fixtures validate-real-chain` | 839 passed, 335 skipped (all skips are the pre-existing, session-wide Postgres-unreachable condition, section B -- zero new failures, zero new non-environmental skips beyond the newly-written Phase 5 DB tests themselves, which skip for the identical reason every other DB test in the suite does), 0 failed. `ruff check .`: all checks passed. `ruff format --check .`: 289 files already formatted. `mypy src`: success, 141 source files. `alembic heads`: single head `0022`. `argus fixtures validate-real-chain`: 12/12 ok | Full command sequence run, raw output captured verbatim in `orchestration/phase_5/evidence/full_validation_output.txt`; no non-environmental failure anywhere; 94-case `test_phase4_recovery_3_matrix.py` inventory unchanged (`--collect-only -q` re-confirms 94 nodes); baseline tests not removed/weakened/skipped (only newly environment-gated by the same pre-existing condition every prior-phase DB test already carries) | Every DB-dependent test (Phase 1 through 5 alike) skips in this session -- pre-existing, not introduced by this round | PASS |
-| P5-13 | SPEC_BLOCKING | This checkpoint, `orchestration/bundles/phase_5.txt`, `orchestration/phase_5/evidence/` | This document itself; bundle validated post-hash-fill against `scripts/argus_orchestrator_watch.py`'s real `validate_checkpoint_content`/`validate_bundle_content` (section F, run after the second commit's hash fill) | All 14 rows enumerated with implementation symbols, exact test nodes/commands, actual results, pass conditions, and E-limitations (this table); report/manifest/version/hash/migration/count evidence in sections C/D/F; changed-file list in section G; carryforward/debt/authority state in sections I/J/K | Complete 14-row matrix present before READY_FOR_AUDIT; validators return `(True, '')` against the FINAL hash-filled bytes; bundle contains the checkpoint's exact bytes verbatim; all historical checkpoints/bundles/evidence preserved unmodified | None | PASS |
-| P5-14 | SAFETY_OR_INTEGRITY_BLOCKING | Scope/secret-safety/handoff (see sections H, K, L) | `git diff --stat` against every prohibited path; secret scan (section F); code inspection of every new/changed file for a live-dispatch, signing, or credential-handling path | No live/mainnet order, canary, signing/private-key/seed access, credential entry/disclosure, paid-provider dispatch, live arming, evidence rewrite, phase skip, or threshold relaxation anywhere in this round's diff. `argus copyability report` never imports a live quote/signing client (code inspection: only `argus.copyability.service`/`argus.scoring.*`/ORM reads). No environment-dump logging anywhere in new code | Zero prohibited-path changes; zero live/signing/credential paths in new code; existing weights in `config/signals_v1.yaml` unmodified (only the new, additive Phase 5 migration/config-schema-adjacent identity fields were added, no existing weight/threshold changed); handoff carries `CURRENT_PHASE: 5`, `LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-5-001`, clean worktree at push time | None | PASS |
+| P5-13 | SPEC_BLOCKING | This checkpoint, `orchestration/bundles/phase_5.txt`, `orchestration/phase_5/evidence/` | This document itself; bundle validated post-hash-fill against `scripts/argus_orchestrator_watch.py`'s real `validate_checkpoint_content`/`validate_bundle_content` (section F, run after the second commit's hash fill) | All 14 rows enumerated with implementation symbols, exact test nodes/commands, actual results, pass conditions, and E-limitations (this table); report/manifest/version/hash/migration/count evidence in sections C/D/F; changed-file list in section H; carryforward/debt/authority state in sections K/L/M | Complete 14-row matrix present before READY_FOR_AUDIT; validators return `(True, '')` against the FINAL hash-filled bytes; bundle contains the checkpoint's exact bytes verbatim; all historical checkpoints/bundles/evidence preserved unmodified | None | PASS |
+| P5-14 | SAFETY_OR_INTEGRITY_BLOCKING | Scope/secret-safety/handoff (see sections I, L, M) | `git diff --stat` against every prohibited path; secret scan (section F); code inspection of every new/changed file for a live-dispatch, signing, or credential-handling path | No live/mainnet order, canary, signing/private-key/seed access, credential entry/disclosure, paid-provider dispatch, live arming, evidence rewrite, phase skip, or threshold relaxation anywhere in this round's diff. `argus copyability report` never imports a live quote/signing client (code inspection: only `argus.copyability.service`/`argus.scoring.*`/ORM reads). No environment-dump logging anywhere in new code | Zero prohibited-path changes; zero live/signing/credential paths in new code; existing weights in `config/signals_v1.yaml` unmodified (only the new, additive Phase 5 migration/config-schema-adjacent identity fields were added, no existing weight/threshold changed); handoff carries `CURRENT_PHASE: 5`, `LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-5-001`, clean worktree at push time | None | PASS |
 
 E. DO-NOT / allowed-files compliance
 
@@ -254,7 +254,22 @@ $ git diff --stat config/ MASTER_SPEC.md orchestration/PROTOCOL.md scripts/argus
   pre-existing migration)
 ```
 
-G. Changed/new files this round
+G. Test results
+
+101 new Phase 5 test nodes total: 96 unit (unconditional, all passing --
+`tests/unit/test_phase5_p5_{01_identity(6),02_executable_returns(13),
+03_delay_curves_half_life(13),04_forward_information_grid(8),
+05_size_surprise(10),06_copyability_score(14),07_firewall(4),
+08_readiness_gates(22),11_replay_output_dir(6)}.py`) + 5 integration
+(`tests/integration/test_phase5_persistence_and_report.py` -- 1 passing
+unconditionally, 4 skipping for the environmental reason in section B).
+Full repository suite: 839 passed, 335 skipped, 0 failed
+(`uv run pytest -q`) -- identical zero-failure result to every prior
+round; the skip count reflects this session's own total Postgres
+unavailability (section B), not a new condition. See section D for the
+full per-row mapping and section F for raw command output.
+
+H. Changed/new files this round
 
 New: `migrations/versions/0022_phase5_copyability_and_readiness.py`;
 `src/argus/domain/wallet_copyability_snapshots.py`;
@@ -272,7 +287,7 @@ sub-app + `copyability report` command, appended after the last existing
 command); `scripts/argus_phase4_replay_demo.py` (P5-11's `--output-dir`
 refactor).
 
-H. Frozen (previously CLOSED) finding regression re-confirmation
+I. Frozen (previously CLOSED) finding regression re-confirmation
 
 Every Phase 1-4 finding independently closed by prior rounds
 (F-01/F-02/F-03/COV-01, ASSERT-01/ASSERT-02, and every P1-P4 remediation
@@ -286,7 +301,7 @@ remain unchanged, not reopened; `PG17_COMPOSE_VALIDATION` is this
 session's own total-Postgres-unavailability (section B), a stricter
 instance of the same pre-existing class, not a new deferral category.
 
-I. Acceptance criteria
+J. Acceptance criteria
 
 [PASS] All 14 sealed rows (section D) are met, with P5-10 explicitly
 marked `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` for its one
@@ -299,7 +314,7 @@ row was invented, weakened, or silently dropped from the frozen
 contract. No production weight/threshold was retuned. No live/signing
 path exists anywhere in the new code (section D, P5-14).
 
-J. Deviations
+K. Deviations
 
 None from the sealed contract's own scope. One environmental reality is
 disclosed rather than worked around: this session's container has no
@@ -317,7 +332,7 @@ an independently-selectable additional delay -- the closest honest
 reading of "remaining information value at a given delay from first
 observation" the actual evidence supports; never silently assumed.
 
-K. Known bugs / debt
+L. Known bugs / debt
 
 - Carried forward, unchanged: `git diff --check` continues to flag
   trailing whitespace inside raw captured pytest-output evidence `.txt`
@@ -338,7 +353,7 @@ K. Known bugs / debt
 - All Phase 1-4 known-bugs/debt items from `orchestration/checkpoints/
   phase_4_recovery_5.md` section K remain unchanged and not reopened.
 
-L. Security state
+M. Security state
 
 No live-execution, signing, or credential-handling code exists anywhere
 in this round's diff. `argus copyability report` is read-only over
@@ -352,7 +367,7 @@ weights/thresholds are untouched. No `allow_automatic_scale_in` or any
 other live-trading gate was changed. Real live authorization remains
 unconditionally false throughout this phase, as required by P5-14.
 
-M. Next action / STOP
+N. Next action / STOP
 
 STOP. Await independent audit of this sealed 14-row Phase 5 completion
 against `orchestration/AUDITOR_POLICY.md` and this instruction's own
