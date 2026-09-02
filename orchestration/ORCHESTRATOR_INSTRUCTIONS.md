@@ -3,122 +3,120 @@
 OWNER: ARGUS ORCHESTRATOR. The implementation agent must not modify this file.
 MASTER_SPEC.md remains authoritative. Execute only this ACTIVE instruction.
 
-INSTRUCTION_ID: argus-phase-4-recovery-002
-ISSUED_AT: 2026-09-02T13:07:46Z
-TARGET_COMMIT: 055e3a2141983d4b8a7b01e91e177588dddaea6b
-AUTHORIZED_ACTION: PHASE_4_ROOT_CAUSE_RECOVERY
+INSTRUCTION_ID: argus-phase-4-recovery-003
+ISSUED_AT: 2026-09-02T14:22:09Z
+TARGET_COMMIT: 87e8ba1b5a7969e5afe4a7e1e6c44eb392365f16
+AUTHORIZED_ACTION: PHASE_4_TEST_AND_EVIDENCE_COMPLETION
 AUTHORIZED_PHASE: 4
 APPROVES_PHASE: NONE
 STATUS: ACTIVE
 
-## Authority, scope and disposition
+## Decision and authority
 
-The human explicitly approved the process correction: complete root-cause review, freeze a recovery contract and continue automatically within existing authority; do not require another human restart solely because a phase failed. This supersedes the idle human-approval STOP in argus-phase-4-recovery-review-001. It does not waive any implementation gate, grant live authority, reset attempt history or approve Phase 4.
+Phase 4 is not yet approved. This is a TEST-AND-EVIDENCE-ONLY recovery, not another production-code repair. The production fixes for F-01 and F-02, and F-03's final checkpoint/bundle format and embedding, pass the independent checks described below. Keep them closed. The remaining SPEC_BLOCKING finding is missing execution/persistence coverage expressly required by recovery-002's frozen acceptance matrix, with broader PASS claims than the supplied tests prove.
 
-The prior completed audit/review is preserved at commit 055e3a2141983d4b8a7b01e91e177588dddaea6b, path orchestration/ORCHESTRATOR_INSTRUCTIONS.md. Its audited implementation/handoff target was 29a49ff4aa2618ae016a6ed90cd8ba680310a95e. Current HEAD adds only that review instruction to the audited implementation. This contract uses the established findings; it does not claim a new implementation audit.
+The completed root-cause review below authorizes immediate safe continuation under the user's updated autonomous-recovery instruction. Do not wait for another human approval. Phase 5 and every live action remain blocked. No new strategy, provider, threshold, route policy, score, schema, migration or production-code change is authorized.
 
-Implement ONLY F-01, F-02 and F-03 from that review, as frozen below. Phase 4 remains FAIL_REMEDIATION_REQUIRED until independent re-audit; Phase 5 remains blocked. No additional ordinary remediation round is being issued. History remains: initial Phase 4 build, ordinary remediation-001, previously issued remediation-002, root-cause review-001, human-authorized recovery-001, recovery-review-001, this recovery-002. Do not hide or reset these attempts.
+Preserve the complete attempt history: initial Phase 4 build; remediation-001; remediation-002; failure-review-001; recovery-001; recovery-review-001; recovery-002; this reviewed, bounded recovery-003. Do not rename these as a fresh initial build or reset the ordinary remediation count. One ordinary remediation remains the default maximum; subsequent work requires an actual completed review, not a repeated patch packet.
 
-Closed findings remain CLOSED: P4-REC-01 (time cutoffs), P4-REC-04 (populated migration compatibility), P4-REC-05 (report-end history), earlier R2/R3/R5/R7 and all other independently closed findings. Exercise existing regression tests; do not redesign or re-open them. Classifications are only SPEC_BLOCKING, SAFETY_OR_INTEGRITY_BLOCKING and HARDENING_BACKLOG. Hardening never blocks. Do not promote SHOULD/MAY to MUST.
+## Pinned independent audit
 
-## Completed root-cause review and process correction
+Audited remote HEAD: 87e8ba1b5a7969e5afe4a7e1e6c44eb392365f16.
+Implementation parent: a50432946b5ddeede55f84d61c93375047c564df.
+Active instruction at submission: e2b0edce094f51b329372ccfb0015fece0103033, ID argus-phase-4-recovery-002.
+Handoff: handoff-0029-phase-4-recovery-2.
+Evidence: orchestration/checkpoints/phase_4_recovery_2.md and orchestration/bundles/phase_4_recovery_2.txt.
 
-1. Frozen gate clarity: malformed required amounts already had to produce terminal non-success, but the architect's examples missed Python isdigit/int conversion failures. Supplied safe HTTP429 codes, value sanitization, and checkpoint validators were explicit. Freeze executable negative cases before changing code.
-2. Implementation failure: an unguarded conversion escaped; HTTP429 returned before extracting code; a type/length check substituted for sanitization; the builder did not assert final artifact-validator results. Fix these shared paths, not unrelated architecture.
-3. No moving goalposts: all three failures derive from P4-REC-02, P4-REC-03 or existing MASTER_SPEC section 104 / PROTOCOL section 5. No route economics, fee normalization, new sample target, live-provider validation or Phase 5 feature is added.
-4. Tests missed the defects because ASCII garbage never entered failing int(), the 429 fixture omitted errorCode, unsafe values were only in ignored sibling keys/headers, and generated checkpoint bytes were not mechanically checked. New regressions must exercise those exact failure branches and demonstrate pre-fix failure before implementation.
+The git chain is correct: 055e3a2141983d4b8a7b01e91e177588dddaea6b -> e2b0edce094f51b329372ccfb0015fece0103033 -> a50432946b5ddeede55f84d61c93375047c564df -> 87e8ba1b5a7969e5afe4a7e1e6c44eb392365f16. Both Claude commits have the exact terminal recovery-002 trailer. The instruction was unchanged and the final diff does not alter earlier checkpoint/bundle/evidence files. Worktree was clean.
 
-The review is complete, so Claude now has authorized bounded work. If this recovery fails, the orchestrator must review the remaining legitimate defects and root causes before another recovery contract. A repeat failure is not permission for blind patches, changed acceptance thresholds, or reopening unrelated closed rows. Within delegated safe scope, the orchestrator should publish the supported recovery in the same run; stop for human input only for a real authority/strategy decision or when no evidence-backed safe recovery can be specified. Tool permission denials must be reported and never bypassed.
+Fresh independent results on this exact target:
 
-## Frozen implementation decisions
+- `uv run pytest tests/unit tests/golden tests/phase_1_5 -q`: 712 passed.
+- `uv run pytest tests/unit/test_phase4_recovery_2_contract.py -q`: 52 passed, including the now-present final artifacts (not skipped).
+- Independent scratch harness: 118 real JupiterClient/MockTransport cases exercised the production common executor with controlled session objects, plus repeated-call terminal guards. Both worker kinds, both malformed nested fields, superscript/5000-digit/ordinary invalid values, positive representations through the reverse common seam, HTTP400/429 safe/unsafe codes and identifier boundaries passed. These are NOT PostgreSQL persistence or restart results. Entry/reverse callers at quote_jobs.py invoke the same executor; no new classification or persistence branch was introduced by this diff.
+- Both final production artifact validators returned `(True, '')`; complete checkpoint bytes are embedded in the bundle. This closes the earlier artifact-format/validation defect.
+- Ruff check passed; formatter reported 261 files already formatted; mypy passed for 128 source files; alembic head 0021; authentic fixture validation passed 12/12.
+- Fresh integration attempt stopped in fixture setup: missing ARGUS_DB_ADMIN_PASSWORD in the auditor environment. No credential was requested, entered or disclosed. This is an environmental limitation, NOT a product test failure. Builder evidence reports 978 passed/1 pre-artifact skip and 67 passed/1 pre-artifact skip; those counts are builder evidence, not an independent PostgreSQL rerun.
+- `git diff --check` reported whitespace in preserved raw pytest output and a bundle trailing blank line. This is HARDENING_BACKLOG, not a phase blocker. Do not rewrite old raw evidence to make this check cosmetically clean.
 
-### F-01 — SPEC_BLOCKING: total nested raw-amount validation
+Closed, not to be reworked: F-01 total amount parsing; F-02 safe error-code format and HTTP429 evidence; F-03 final artifact validator/embedding behavior; P4-REC-01/04/05; all earlier independently closed R1-R7 findings. No production defect was demonstrated in this recovery's fixes. Environmental validations remain deferred as previously recorded, including PG17_COMPOSE_VALIDATION, LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION and BQ_PUBLIC_DATASET_ACCESS. No live-provider validation is added here.
 
-Source: P4-REC-02 malformed-field non-success obligation, condition 5, and shared terminal/replay behavior. Known surface: src/argus/shadow/quote_jobs.py, _is_positive_raw_amount, _is_structurally_valid_route_entry, _classify_quote, _execute_and_record_probe; nested swapInfo.inAmount and outAmount; entry and reverse probes.
+## One consolidated remaining finding: COV-01 — SPEC_BLOCKING
 
-At the audited target, superscript-two ("\u00b2") passes isdigit() but int() raises ValueError. A 5000-digit ASCII string exceeds the default Python conversion guard. _classify_quote executes in the provider try/except's else block; the error escapes and no terminal record is written.
+Frozen source: recovery-002's matrix AM-01/02/03/04/08/09/10 and ordered steps 2, 3 and 5. That instruction explicitly required worker/persistence tests, actual reload/replay, and truthful row-by-row proof; it explicitly allowed exercising the proven common execution seam. Helper-only tests and one representative reload do not satisfy the stated case matrix.
 
-Keep bool rejected before the int branch; real positive ints remain accepted. For strings require nonempty ASCII decimal digits, then convert inside a ValueError/OverflowError guard and return false on failure or nonpositive value. Preserve normal positive numeric representations, including leading zeroes. Do not alter Python's global conversion limit, add a trading threshold, coerce floats, or catch unrelated errors as success. These invalid route fields use the existing NO_ROUTE classification from the structural-route validator. The shared worker must persist that terminal non-success, retain actual request/response timing, create no shadow position and make no repeated provider request when processed again. Do not add new schema or change ownership/timing guards.
+Concrete gaps in the submitted test sources:
 
-### F-02 — SAFETY_OR_INTEGRITY_BLOCKING: preserve only safe supplied error evidence
-
-Source: P4-REC-03 conditions 2 and 6. Known surface: quote_jobs._safe_provider_error_code, _classify_provider_exception and shared entry/reverse failure_evidence persistence.
-
-Extract safe evidence before HTTP status outcome selection. Keep only http_status_code plus provider_error_code when actually supplied and valid. Choose the following bounded identifier grammar for the provider code: ASCII full-match [A-Za-z][A-Za-z0-9_]{0,127}. Preserve valid unknown identifiers verbatim; do not invent their meaning. Empty, wrong-type, overlong, URL/query/assignment/control/body-like values remain unavailable. Do not truncate, transform, log or copy a rejected value into another evidence field; do not persist the body, request URL or headers. This is a format policy for identifiers, not a claim to detect every possible secret hidden in arbitrary text.
-
-HTTP429 always remains PROVIDER_CAPACITY_MISS, even when code is absent, malformed or equals the known no-route identifier. Preserve a supplied valid code with its status. Other status responses retain the already-established known no-route-code mapping; unknown/missing/unsafe codes remain QUOTE_FAILED with status. Invalid/non-object JSON yields status only and the appropriate status-derived outcome; parsing failure must not erase HTTP429 capacity classification. Preserve the already-closed controlled RequestDropped reason/priority path. No provider endpoints, schema, score or credential changes are required.
-
-### F-03 — SPEC_BLOCKING: validate the exact final handoff artifacts
-
-Source: MASTER_SPEC section 104 and orchestration/PROTOCOL.md section 5. Existing implementation: scripts/argus_orchestrator_watch.py, validate_checkpoint_content and validate_bundle_content, both returning (ok, reason).
-
-Create NEW paths:
-- orchestration/checkpoints/phase_4_recovery_2.md
-- orchestration/bundles/phase_4_recovery_2.txt
-- any newly generated replay evidence: orchestration/phase_4_recovery_2/evidence/
-
-Do not overwrite any prior checkpoint, bundle or replay evidence. If the existing replay demonstration is run, route its new output to the new evidence directory before execution; changing only that output destination and its corresponding test expectation is allowed. Do not run cleanup against any existing database/history. Preserve the accepted disposable scratch replay isolation.
-
-Checkpoint first line: ================ ARGUS ORCHESTRATOR CHECKPOINT ================
-Checkpoint last nonblank line: ================ END ARGUS CHECKPOINT =========================
-
-Include PROJECT: ARGUS, authorized phase 4, exactly one STATUS field and one GIT_COMMIT field containing a full actual commit SHA created during this run. Include explicit sections Commands actually run, Test results, Acceptance criteria, Deviations, Known bugs/debt, Security state and Next action/STOP. Include the matrix below row by row with implementation path/symbol, test node, actual result and limitation. Missing proof is FAIL/BLOCKED, never inferred PASS. The bundle must embed the final checkpoint exactly and contain raw command output, code diff/identity and limitations.
-
-After final hash-fill changes, assert BOTH existing validator return values. Calling the functions without asserting ok is not validation. Additionally assert the complete checkpoint text is contained in the bundle (no paraphrase or stale embedded version). Preserve the existing negative-validator tests. Do not edit or weaken the watcher, protocol, master spec or previous evidence.
-
-## Atomic acceptance matrix — frozen before implementation
-
-All rows use deterministic mocked transport and controlled test state, not live providers. Cover entry and reverse worker kinds through their production caller or prove and exercise their common execution seam. Expected outcomes below derive from the frozen contract, not the implementation. Add tests in tests/integration/test_phase4_recovery_2.py for worker/persistence rows and tests/unit/test_phase4_recovery_2_contract.py for parser/artifact rows, using repository fixtures.
-
-| ID | Setup and action | Required pass condition / evidence |
+| Frozen row | Supplied proof | Missing required proof |
 |---|---|---|
-| AM-01 | Real JupiterClient + MockTransport HTTP200 valid top-level quote, one valid route, one nested field set to "\u00b2"; parameterize inAmount/outAmount and entry/reverse. Process via worker. | No exception; NO_ROUTE; terminal_at set; real dispatch/response clocks present and ordered; no new ShadowPosition. Pre-fix escapes ValueError. |
-| AM-02 | Same four combinations with "1" repeated 5000 times under the existing interpreter default conversion guard. | Same terminal NO_ROUTE/no-fill assertions. Do not disable/change global conversion guard. Pre-fix raises ValueError. |
-| AM-03 | Fresh-session reload of each AM-01/02 terminal record, then process again. | Same identity/outcome/timing; zero additional HTTP and zero additional shadow positions; no duplicate terminal evidence. |
-| AM-04 | Parameterize either nested amount with "1", "001", integer 1; normal complete route. Also empty/ASCII garbage/"0"/0/"-1"/-1/True/1.5/None/non-ASCII digits. | Valid positive cases retain SUCCESS; invalid cases terminal NO_ROUTE and no fill. Both nested fields use total validator; existing top-level mint/impact gates stay green. |
-| AM-05 | Real-adapter HTTP429 body {"errorCode":"AUDIT_RATE_LIMIT"}, both worker kinds. | PROVIDER_CAPACITY_MISS; persisted evidence exactly {"http_status_code":429,"provider_error_code":"AUDIT_RATE_LIMIT"}. Pre-fix loses code. |
-| AM-06 | HTTP429 with absent errorCode, invalid JSON, non-object JSON, or unsafe/wrong-type code. | PROVIDER_CAPACITY_MISS; status 429 retained; no invented provider_error_code. |
-| AM-07 | HTTP400 known COULD_NOT_FIND_ANY_ROUTE; HTTP400 UNKNOWN_SAFE_CODE; HTTP429 with known no-route code. | Respectively NO_ROUTE, QUOTE_FAILED, PROVIDER_CAPACITY_MISS; exact supplied valid code/status retained. No invented unknown mapping. |
-| AM-08 | errorCode values URL with inert api_key query, "api_key=AUDIT_ONLY_FAKE_SECRET", embedded newline/control, JSON-body-shaped string, empty string, 129 ASCII letters, bool, integer, dict/list. Put inert secret/header fields in ignored siblings too. Test 400 and 429. | provider_error_code absent; only status persisted; 400 QUOTE_FAILED / 429 PROVIDER_CAPACITY_MISS. Rejected strings and body/header/URL absent from persisted evidence and any new logs. Use fake literals only. Pre-fix short unsafe strings survive. |
-| AM-09 | Valid identifier boundary: 1 and 128 ASCII characters, plus unknown identifier with digits/underscore; test 400/429. | Exact code preserved, appropriate unchanged coarse outcome; 129 rejected. No trimming or normalization. |
-| AM-10 | Fresh-session reload + repeated processing after AM-05/07/08; parameterize both worker kinds. | Exact sanitized evidence survives reload; zero additional HTTP, no new fill/duplicate row or changed terminal clocks. |
-| AM-11 | Existing real PriorityScheduler rejection path. | Controlled drop reason/priority preserved, zero HTTP, requested_at/responded_at null, terminal timestamp present, replay unchanged. Existing passing test may supply proof; do not redesign. |
-| AM-12 | After all generation/hash-fill steps read NEW checkpoint and bundle exact UTF-8 contents. Call production validators, inspect (ok, reason), check exact embedding. | Both ok are true with empty reasons, complete matrix included, exact valid first/last markers; checkpoint and handoff commits resolve to this run. Record validation output. |
-| AM-13 | Negative artifact fixtures: missing end marker; marker present but acceptance-criteria section missing; mismatched embedded checkpoint. | Existing validators return false for each; no production validator edits. Existing failing recovery checkpoint remains untouched. |
-| AM-14 | Run focused prior observation/provider/phase4/concurrency/migration/report/isolation suites plus full prior-phase regression and static checks below. | No new product regression; legitimate environment limits reported separately. Previously closed rows stay closed unless a concrete change-induced regression is proven. |
-| AM-15 | Inspect final diff, trailers, fresh remote SHA, new paths and handoff. | Only authorized surfaces changed; exact new instruction ID, new handoff ID, clean/pushed state; all previous evidence unchanged; no Phase4 self-approval/Phase5 work or live action. |
+| AM-01 | Entry superscript case parameterizes both fields; reverse superscript case hard-codes outAmount. | Reverse/inAmount case with terminal clocks and no-new-position assertions. |
+| AM-02 | Unit helper rejects 5000 digits; AM-03 integration uses entry/inAmount. | Remaining kind/field combinations through the production executor, terminal/no-fill behavior. The helper itself cannot prove the checkpoint's claimed terminal NO_ROUTE. |
+| AM-03 | One entry/inAmount/5000-digit reload checks outcome, terminal_at and HTTP count. | Reload/repeat for the AM-01/02 matrix, retaining identity and all request/response/terminal clocks, position count and terminal-record count. |
+| AM-04 | Parser validity matrix and structural-mint helper checks. | Valid/invalid nested amounts through real-adapter/common-executor processing with the frozen SUCCESS/NO_ROUTE and no-fill assertions. |
+| AM-08 | Unsafe-code helper tests; one unsafe URL HTTP429 integration case. | Frozen unsafe values at HTTP400 and HTTP429 through executor persistence; ignored fake body/header/URL material absent from evidence and captured logs. |
+| AM-09 | Identifier boundary helper tests only. | HTTP400/429 worker outcomes and exact retained code at 1/128 characters, digits/underscore, and rejected 129 characters. |
+| AM-10 | One entry/429/AUDIT_RATE_LIMIT reload. | Reload/repeat after the AM-05/07/08 cases for both kinds, all terminal clocks/identity, no additional requests/fills/rows. |
 
-## Ordered execution and self-audit
+AM-05/06/07 behavior, AM-11 existing scheduler behavior, AM-12/13 final and negative validators, and unchanged authorized-scope checks are accepted. Preserve them; reuse existing tests. AM-14's environmental caveat stays separate. Do not call the entire frozen matrix PASS until COV-01 is closed.
 
-1. Follow PROTOCOL session-start/read order. Verify clean worktree and freshly fetched remote HEAD. The instruction commit must be the sole instruction-only commit directly above TARGET_COMMIT. Reject mismatched parent or extra file changes. Read preserved review at TARGET_COMMIT for detailed proof; all current obligations are frozen here.
-2. Add named regressions mapped to AM-01 through AM-13. Run the applicable counterexamples against pre-fix production code and retain honest failing output; do not use xfail to disguise missing closure. Existing correct cases need not fail.
-3. Implement only F-01 shared validation and F-02 shared extraction/classification. No schema changes, new providers, live network or score changes. Run targeted tests, including actual persisted reload/replay on the already-authorized test environment.
-4. Run the acceptance commands. Use only previously authorized disposable test databases with existing test setup. Do not enter/disclose credentials, create paid accounts, access live wallet signing, or run destructive operations against persistent evidence.
-5. Create the new checkpoint/bundle and update docs/BUILD_STATE.md, docs/DECISION_LOG.md and orchestration/AGENT_HANDOFF.md truthfully. Preserve approved phase 3/approved commit and current phase 4 until independent approval. Do not rewrite failed historical evidence.
-6. Validate final artifact bytes, field counts, instruction ID and terminal trailers after hash-fill. Commit/push with exact terminal trailer ARGUS-INSTRUCTION-ID: argus-phase-4-recovery-002 and nothing after it on every Claude commit.
-7. Stop for independent audit. No builder self-approval. Handoff LAST_ORCHESTRATOR_INSTRUCTION_ID must be exactly argus-phase-4-recovery-002; CHECKPOINT_PATH and BUNDLE_PATH exactly as above; new HANDOFF_ID; phase 4; actual commit from this run; WORKING_TREE clean; WORK_STATUS AWAITING_ORCHESTRATOR_INSTRUCTION.
+The recovery-002 checkpoint also describes its instruction commit e2b0ed... as TARGET_COMMIT; the actual recovery-002 TARGET_COMMIT was 055e3a2.... Git ancestry itself is correct. In NEW records distinguish the instruction commit from its TARGET_COMMIT and describe this prior wording error; do not edit the historical checkpoint. This is a documentation correction, not a new runtime blocker.
 
-## Acceptance commands and proof
+## Completed Phase Failure Root-Cause Review
 
-Run from repository root:
-- uv run pytest tests/unit/test_phase4_recovery_2_contract.py tests/integration/test_phase4_recovery_2.py -q
-- uv run pytest tests/integration/test_shadow_phase4_remediation_observation.py tests/integration/test_shadow_quote_jobs_provider_remediation.py tests/integration/test_shadow_phase4.py tests/integration/test_shadow_phase4_concurrency_remediation.py tests/integration/test_migrations.py tests/integration/test_daily_report_remediation.py tests/integration/test_replay_demo_isolation.py -q
-- uv run pytest -q
-- uv run ruff check .
-- uv run ruff format --check .
-- uv run mypy src
-- uv run alembic heads
-- uv run argus fixtures validate-real-chain
-- Existing checkpoint/bundle validators with explicit ok/reason assertions on final files; inspect exact bytes after hash-fill.
-- Existing secret-scan procedure on changed files/new evidence, without printing any discovered secret.
-- git diff --check; git status --porcelain; verify changed-path list and git log commit messages/trailers.
+1. **Was the frozen gate unclear?** The required Cartesian cases, HTTP statuses and fresh-session assertions were explicit before implementation. The architect nevertheless allowed a multi-case row to look complete when a single helper test was linked to it. Correct the instruction-generation/self-audit process by using the executable parameter inventory below and checking collected case IDs, not a row label alone. No product behavior is being added.
+2. **Was clear behavior implemented incorrectly?** No new production defect was found. The implementation agent supplied narrower tests and overclaimed their coverage. Finish the existing test contract; do not perturb working production logic. Reuse the common executor already permitted by the old contract to keep this small.
+3. **Did the audit add a requirement?** No. Every gap above quotes a recovery-002 case or pass condition. Do not add other payload fuzzing, economic constraints, live validation, new database semantics, or Phase 5 features. Earlier closed findings stay closed.
+4. **Why did tests miss this?** Green helper tests checked booleans/strings, not persistence; representative entry-only restart tests did not cover the explicitly required matrix. The self-audit treated the existence of an AM-named node as proof of all its cases. The remedy is a single parameterized executor/reload harness, collected case inventory, assertions on the complete record snapshot, and accurate limitations. New coverage may already pass on current production code; do not manufacture red output or alter code merely to produce a failing test.
 
-Record actual command outputs, counts, exit codes, skips and environment. No fabricated PASS, silent skip or aggregate count substituted for a matrix row. alembic heads is graph evidence, not a database-upgrade claim. Keep prior approved environmental deferrals LIVE_HELIUS_RPC_VALIDATION, LIVE_HELIUS_WSS_VALIDATION, PG17_COMPOSE_VALIDATION and BQ_PUBLIC_DATASET_ACCESS unchanged; PG16 substitute stays accepted where previously accepted. Unavailable local DB setup is an explicit environment limitation, not permission for credentials/new infrastructure. Existing ordinary integration tests still need honest evidence from an already authorized environment; do not relabel a missing product fix as environmental deferral.
+This review supports a bounded safe recovery without human input. It does not support another production patch.
 
-## Safety boundaries and next orchestration action
+### Seven-part no-moving-goalposts justification
 
-No mainnet trading, canary, signing/private keys/seeds, credential entry/disclosure, new paid/provider use, live arming, threshold relaxation, strategy change, destructive production migration, history deletion, evidence rewrite or phase skip. Mock quotes do not prove live readiness. The accepted replay-only path and honest one-wallet Phase3 limitation stay accepted.
+1. Prior frozen authority: recovery-002 at e2b0edce094f51b329372ccfb0015fece0103033, AM rows identified above.
+2. Pinned failure evidence: the exact test nodes and parameterization gaps in a504329.../87e8ba1...; no hypothetical new defect.
+3. Unchanged acceptance: same values, statuses, kinds, terminal timing, no-fill, sanitized evidence and reload behavior; no extra product threshold.
+4. Why another bounded pass: production is fixed but mandatory test/evidence deliverables are incomplete; ordinary remediation is not silently restarted.
+5. Why earlier tests missed it: helper/representative coverage substituted for the frozen matrix; full suite green does not prove absent test cases.
+6. Consolidated scope and exit: only COV-01, test harness and new evidence; all prior closed production findings remain closed; stop at the new handoff.
+7. Authority and process: user's automatic safe-recovery policy authorizes this completed-review continuation. No funds, paid data, credentials, live activation, strategy change or destructive evidence operation is involved. A later failure requires another actual root-cause review; no blind repetition or expanded criteria.
 
-On a matching handoff, the orchestrator independently audits this frozen matrix and affected safety/integrity regressions. If PASS, authorize immediate Phase5 only if the master gate permits, with its acceptance matrix frozen first. If FAIL, complete the root-cause review and issue a safe bounded recovery within delegated authority; escalate only an actual authority decision or inability to specify a supported safe path. Neither green builder tests nor this process rule authorizes later phases automatically without independent acceptance.
+## Frozen test-only completion matrix
 
-Claude: execute this bounded recovery, submit its exact evidence, then STOP for independent audit.
+Use `tests/integration/test_phase4_recovery_3_matrix.py` for the missing worker/reload coverage. You may import/reuse existing recovery-002 test helpers or add test-only helpers. Production callers or the unchanged `_execute_and_record_probe` common seam are both acceptable, as already frozen. Use the real JupiterClient with MockTransport, existing disposable PostgreSQL fixture/session setup, and persisted ShadowQuoteProbe records for both kinds. Do not replace the classifier/executor with a mock. Target probes by ID to avoid unrelated due probes changing counts.
+
+| ID / source | Exact setup and assertions |
+|---|---|
+| TC-01 / AM-01,02,03 | Parameterize kind ENTRY_DELAY/REVERSE_EXECUTABLE x nested inAmount/outAmount x malformed value superscript-two (`"²"`)/5000 ASCII `1` characters: 8 cases. Valid top-level quote and otherwise valid route. Each result is NO_ROUTE with requested_at <= responded_at <= terminal_at, no new position and one HTTP request. Persist, close session, reload in a fresh session, repeat processing of that probe, and reload again. Assert identical probe ID, outcome, requested_at, responded_at, terminal_at, evidence, and row/position counts; no second HTTP request. Never change the interpreter conversion guard. |
+| TC-02 / AM-04 | Exercise each nested field with valid `"1"`, `"001"`, integer 1 and invalid `""`, `"garbage"`, `"0"`, 0, `"-1"`, -1, True, 1.5, None and a non-ASCII decimal digit. Use the proven common executor. Valid values retain SUCCESS; invalid values become terminal NO_ROUTE and create no fill. Existing mint/impact tests remain green. This row does not add a fresh-reload requirement for every valid value. |
+| TC-03 / AM-05,07,10 | Both kinds: 429/AUDIT_RATE_LIMIT; 400/COULD_NOT_FIND_ANY_ROUTE; 400/UNKNOWN_SAFE_CODE; 429/COULD_NOT_FIND_ANY_ROUTE. Outcomes respectively capacity miss, NO_ROUTE, QUOTE_FAILED, capacity miss. Evidence contains only exact status and exact supplied safe code. Fresh persisted reload/repeat uses TC-01's identity/clocks/counts/no-request assertions. |
+| TC-04 / AM-08,10 | Both kinds x HTTP400/429 x each frozen unsafe code: inert URL with api_key query, bare `api_key=AUDIT_ONLY_FAKE_SECRET`, embedded newline, embedded control character, JSON-body-shaped string, empty string, 129 ASCII letters, bool, integer, dict, list. Add ignored sibling fake-secret fields and fake headers to the response. Only http_status_code is persisted; no raw error body/code/header/URL in evidence or new captured logs. 400 => QUOTE_FAILED, 429 => PROVIDER_CAPACITY_MISS. Fresh persisted reload/repeat uses TC-01's complete unchanged-record/no-request/count assertions. Use inert literals only. |
+| TC-05 / AM-09 | HTTP400/429 with safe code `A`, 128 ASCII letters, and an unknown identifier containing digits/underscore; also 129 ASCII letters. Exercise common executor. Exact safe code survives with appropriate coarse outcome; 129 rejected with only status. No trimming/normalization. Shared sanitizer is a format policy, not arbitrary-secret detection. |
+| TC-06 / AM-12,13,14,15 | Retain existing passing tests for accepted rows and run required regressions. Validate NEW final artifact bytes with BOTH `(ok, reason)` assertions and exact embedding after hash-fill. Record collected case IDs and observed results for TC-01..05, and map all original AM rows to actual tests. Missing cases are FAIL/BLOCKED, not PASS. Preserve all old evidence, instruction ownership and correct git identity. |
+
+For TC-02 and TC-05, common-seam coverage need not be duplicated per kind after TC-01/03/04 prove both callers share it; the old contract expressly allowed this. This is not permission to omit the explicit both-kind reload matrix in TC-01/03/04. Tests should use one helper to capture before/after immutable record fields and scoped row counts, not many almost-identical tests. Keep the provider open during repeat processing and count transport calls, so accidental re-execution cannot be hidden by a closed-client exception.
+
+## Allowed files, evidence and execution
+
+Allowed: new test module above; minimal test-only helper changes if needed; new `orchestration/checkpoints/phase_4_recovery_3.md`; new `orchestration/bundles/phase_4_recovery_3.txt`; new `orchestration/phase_4_recovery_3/evidence/`; docs/BUILD_STATE.md, append-only docs/DECISION_LOG.md and orchestration/AGENT_HANDOFF.md. Keep src/, migrations/, config, MASTER_SPEC.md, PROTOCOL.md and both watcher scripts unchanged. No rework of quote_jobs.py. Do not overwrite any existing evidence, including recovery-002 artifacts. The accepted replay demonstration need not be separately regenerated for this test-only completion. However, the existing full/regression suite invokes that generator as a subprocess. BEFORE those commands, change ONLY its EVIDENCE_DIR destination in `scripts/argus_phase4_replay_demo.py` to the new `orchestration/phase_4_recovery_3/evidence` directory, just as recovery-002 was explicitly allowed to move its artifact destination. This narrow evidence-output change is authorized; no replay lifecycle, provider or database-isolation behavior change is allowed. Do not run the full suite first and repair overwritten historical evidence afterward.
+
+1. Synchronize, verify clean worktree, follow PROTOCOL read order. Verify this instruction's commit changes only orchestration/ORCHESTRATOR_INSTRUCTIONS.md and has direct parent TARGET_COMMIT above. Use the actual instruction field, not the instruction commit, when recording TARGET_COMMIT.
+2. Add tests for TC-01..05. Collect their IDs and compare against the frozen parameter inventory BEFORE claiming completeness. Run them against current production code unchanged. New tests may immediately pass; record that truthfully. If a frozen expectation genuinely fails, keep the failing test/evidence and report it; no production fix is authorized under this test-only instruction.
+3. Use only the already-authorized disposable test environment and existing local test setup. No credential entry/disclosure, new provider, paid service, signing, live trade, persistent-history cleanup or production database mutation.
+4. Run:
+   - `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py --collect-only -q`
+   - `uv run pytest tests/integration/test_phase4_recovery_3_matrix.py tests/integration/test_phase4_recovery_2.py tests/unit/test_phase4_recovery_2_contract.py -q`
+   - `uv run pytest tests/integration/test_shadow_phase4_remediation_observation.py tests/integration/test_shadow_quote_jobs_provider_remediation.py tests/integration/test_shadow_phase4.py tests/integration/test_shadow_phase4_concurrency_remediation.py tests/integration/test_migrations.py tests/integration/test_daily_report_remediation.py tests/integration/test_replay_demo_isolation.py -q`
+   - `uv run pytest -q`
+   - `uv run ruff check .`
+   - `uv run ruff format --check .`
+   - `uv run mypy src`
+   - `uv run alembic heads`
+   - `uv run argus fixtures validate-real-chain`
+   - Existing secret-scan/checkpoint validation workflow, git diff/status/trailer/identity checks. Never print real secrets. Report raw-log whitespace separately; don't alter preserved evidence to erase it.
+5. Create the NEW checkpoint with exact protocol first/last markers, PROJECT: ARGUS, phase 4, exactly one STATUS and one actual full GIT_COMMIT from this run. Include Commands actually run, Test results, Acceptance criteria, Deviations, Known bugs/debt, Security state, Next action/STOP. Map original AM-01..15 plus TC-01..06 to implementation/seam, collected node IDs, actual result and honest limitation. Distinguish independent prior audit results, builder results and unavailable environments. Preserve earlier overclaims as history and correct them only in new records.
+6. Bundle exact final checkpoint bytes with raw test/collection results, final diff and identity. After all generation/hash-fill steps assert both existing production validators return `(True, '')` and the full checkpoint text is present in the bundle. Do not weaken validators. An artifact test skipped before generation is not final proof; run it on final files.
+7. Keep approved phase 3 / approved commit efb8837f01ab6aaa451c6ee3263e4effa389c4e6 until independent Phase 4 approval. Handoff must use a new HANDOFF_ID, LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-4-recovery-003, CURRENT_PHASE: 4, WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION, WORKING_TREE: clean, and the new checkpoint/bundle paths. Every Claude commit must end with exactly `ARGUS-INSTRUCTION-ID: argus-phase-4-recovery-003` and nothing after it. Push, verify fresh remote commit and clean worktree, then STOP. Do not self-approve or begin Phase 5.
+
+## Next independent decision
+
+Audit only COV-01 and affected regressions. Do not reopen the proven production fixes or add optional test cases. If the frozen coverage is complete and green, approve Phase 4 with the existing environmental limitations, then freeze Phase 5's complete acceptance matrix and authorize that immediate next phase in the same run unless MASTER_SPEC has a genuine human gate. If a new mandatory failure appears, complete a real root-cause review and issue only an evidence-backed safe recovery within delegated authority. Pause for human input only for actual authority/strategy decisions, or when no safe supported continuation exists. Report tool permission failures and never bypass them. An instruction publication is not proof that Claude has started; confirm start only from subsequent repository evidence.
