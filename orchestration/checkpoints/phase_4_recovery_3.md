@@ -14,7 +14,7 @@ before it was issued. Authorized phase: 4. Phase 4 remains
 FAIL_REMEDIATION_REQUIRED pending independent re-audit; Phase 5 remains
 blocked; no self-approval is claimed anywhere in this document.
 STATUS: PASS
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: 75e9ece07aa475e1ffc2413d110f5f0ee88f3134
 
 Instruction: argus-phase-4-recovery-003, ACTIVE at submission.
 

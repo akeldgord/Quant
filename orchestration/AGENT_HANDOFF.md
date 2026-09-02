@@ -9,13 +9,13 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 HANDOFF_ID: handoff-0030-phase-4-recovery-3
 UTC_TIMESTAMP: 2026-09-02T15:35:00Z
-CURRENT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+CURRENT_COMMIT: 75e9ece07aa475e1ffc2413d110f5f0ee88f3134
 CURRENT_PHASE: 4
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
 LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-4-recovery-003
 CHECKPOINT_PATH: orchestration/checkpoints/phase_4_recovery_3.md
 BUNDLE_PATH: orchestration/bundles/phase_4_recovery_3.txt
-TEST_STATUS: 94/94 new `tests/integration/test_phase4_recovery_3_matrix.py` (TC-01 8, TC-02 26, TC-03 8, TC-04 44, TC-05 8 -- collected-case count cross-checked against the frozen Cartesian sizes); combined with recovery-002's own files 162/162 (`test_phase4_recovery_3_matrix.py` + `test_phase4_recovery_2.py` + `test_phase4_recovery_2_contract.py`); targeted regression re-run 128/128; full repository suite 1073/1073 passed, 0 failed, 0 skipped (`uv run pytest -q`); ruff clean (1 self-inflicted import-sort issue in this round's own new file caught and fixed); ruff format clean (262 files); mypy clean (128 source files); alembic single head `0021` (unchanged -- no new migration); 12/12 real-chain fixtures ok; secret scan clean on this round's 3 changed/new paths; both real production checkpoint/bundle validators explicitly invoked against the final hash-filled bytes and asserted `(True, '')` -- ALL RAW COMMAND OUTPUT embedded verbatim in the paired bundle
+TEST_STATUS: 94/94 new `tests/integration/test_phase4_recovery_3_matrix.py` (TC-01 8, TC-02 26, TC-03 8, TC-04 44, TC-05 8 -- collected-case count cross-checked against the frozen Cartesian sizes); combined with recovery-002's own files 162/162 (`test_phase4_recovery_3_matrix.py` + `test_phase4_recovery_2.py` + `test_phase4_recovery_2_contract.py`); targeted regression re-run 128/128; full repository suite 1073/1073 passed, 0 failed, 0 skipped (`uv run pytest -q`); ruff clean (1 self-inflicted import-sort issue in this round's own new file caught and fixed); ruff format clean (262 files); mypy clean (128 source files); alembic single head `0021` (unchanged -- no new migration); 12/12 real-chain fixtures ok; secret scan clean on this round's 12 changed/new paths; both real production checkpoint/bundle validators explicitly invoked against the final hash-filled bytes and asserted `(True, '')` -- ALL RAW COMMAND OUTPUT embedded verbatim in the paired bundle
 WORKING_TREE: clean (verified via `git status --porcelain` before this commit)
 ORCHESTRATOR_REVIEW_REQUIRED: whether this round's 94 new tests genuinely close COV-01 exactly as frozen (checkpoint section C/D maps every TC row to its own collected node IDs and cross-checks the Cartesian count), whether F-01/F-02/F-03 and P4-REC-01/04/05 remain genuinely untouched (checkpoint section E confirms `git diff --stat src/` is empty), whether the new checkpoint/bundle genuinely satisfy the production validators on independent re-inspection, and whether Phase 4 should now be approved and Phase 5 authorized, or further recovery/remediation required. This session does not and cannot apply Phase 4 approval itself.
 
