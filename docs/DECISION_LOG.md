@@ -3330,3 +3330,104 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   uses).
 - next: proceed to Phase 9 (COUNTERFACTUAL ALPHA + SPECIALISTS).
 - git_commit: (recorded with this phase's own work)
+
+### 2026-09-03 — Phase 9 (COUNTERFACTUAL ALPHA + SPECIALISTS): matched controls, entry/discovery/validation/exit specialists, predation, exit convergence
+
+- decision: build all four MASTER_SPEC.md Phase 9 build-list items by
+  maximally reusing already-built infrastructure rather than inventing
+  parallel machinery per item -- consistent with how little genuinely
+  new statistical machinery Phases 7/8 needed once their own primitives
+  existed.
+- COUNTERFACTUAL ALPHA (section 55): for each real wallet entry
+  (`prospective_events`, reusing Phase 7's `load_wallet_token_entries`
+  unchanged), at each of 6 disclosed horizons (5m/15m/30m/1h/6h/24h,
+  matching section 56's own Alpha Ancestry horizon list), builds a
+  matched-token control set and computes `residual_selection_alpha =
+  wallet_token_forward_return - mean(matched_universe_forward_returns)`.
+  Matching uses ONLY point-in-time features (`token_market_snapshots` at
+  or before the entry, token age from `tokens.first_observed_at`) --
+  satisfies section 55's own "no future variable may enter matching".
+  Scope limitation (disclosed, not fabricated): matching uses only
+  market-cap bucket, liquidity bucket, token-age bucket, and launch
+  venue (all sourced from a single `token_market_snapshots` row lookup
+  per candidate) -- "recent momentum", "volume", "transaction rate", and
+  "broad market regime" are NOT used as matching dimensions in this
+  build, since no cheap, non-fragile infrastructure exists yet for
+  computing them across a full candidate-token universe (no volume/
+  tx-rate/momentum field exists anywhere in the schema; "market regime"
+  has zero prior art in this codebase). Forward-return prices use a
+  nearest-snapshot-within-tolerance lookup (never reusing a stale
+  pre-entry price to represent a future horizon price) -- `None`,
+  never fabricated, when no sufficiently close snapshot exists.
+  Fixed, disclosed bucket-edge thresholds (not adaptive quantiles, which
+  would need a large sample this project does not yet have).
+- SPECIALISTS (section 62): four scores per wallet, each reusing an
+  already-built primitive rather than new computation --
+  `entry_specialist_score` = mean `residual_selection_alpha` at the
+  shortest horizon (this phase's own output); `discovery_specialist_score`
+  = mean `effect_size` of the wallet's own significant OUTGOING Phase 7
+  directional edges (as leader); `validation_specialist_score` = fraction
+  of the wallet's own Phase 8 confirmation events (as follower) that are
+  NOT ABSENT; `exit_specialist_score` = the wallet's own latest Phase 3
+  `exit_capture` component (`wallet_score_snapshots.component_values`),
+  reused unchanged, never recomputed. Because these four score types are
+  incommensurable (a return percentage, a graph effect size, a
+  confirmation rate, a 0-100 skill score), `dominant_specialty` compares
+  them via non-parametric percentile rank within each specialty's own
+  population (the same empirical philosophy Phase 8 used for convergence
+  surprisal) rather than comparing raw magnitudes -- a disclosed,
+  deterministic alphabetical tie-break when two specialties rank equally.
+- PREDATION DETECTION (section 61): `follower_influx_mean` reuses Phase
+  7's persisted `lead_follow_observations` (distinct followers per leader
+  entry, within a configurable window); `exit_after_influx_rate` needed a
+  genuinely new raw-evidence source -- no prior phase persisted a
+  per-wallet-per-token "sold" observational unit (`prospective_events` is
+  BUY-only by Phase 4's own design). `argus.counterfactual.loaders.
+  load_wallet_token_exits` derives sell events directly from the raw
+  `swaps` ledger (Phase 1), the same architectural move Phase 4 itself
+  made deriving BUY-side `prospective_events` from that same ledger --
+  not new fabricated evidence, just going one step further upstream to
+  the raw evidence Phase 4 already had available. `predation_score` is
+  an explicitly disclosed V1 heuristic composite (normalized follower
+  influx × exit-after-influx rate), not a calibrated probability (the
+  same "V1 priors to be evaluated prospectively" status section 38 gives
+  the wallet qualification score weights). `price_impact_mean` is always
+  `NULL` in this build -- a disclosed scope limitation (would require
+  synchronized pre/post-entry price snapshots, rarely available), not a
+  fabricated value.
+- EXIT ORACLES / EXIT_CONVERGENCE (section 63): reuses Phase 8's
+  `argus.convergence.episodes`/`independence`/`stats` pure logic
+  UNCHANGED against the new exit-event population (`load_wallet_token_exits`),
+  restricted to wallets whose `exit_specialist_score` clears a disclosed
+  threshold (70, on Phase 3's own 0-100 scale) -- "among independent exit
+  specialists" (section 63's own phrase) and "do not require that the
+  wallet originally sourced the position" (also section 63 -- exit
+  convergence is computed over ALL of a specialist's sell events, not
+  only sells of positions they themselves discovered).
+- migration: `0027_phase9_counterfactual_alpha_and_specialists.py`,
+  additive on top of `0026` (never rewriting it), same GRANT pattern
+  every prior phase uses. Four new tables:
+  `counterfactual_alpha_estimates`, `wallet_specialist_scores`,
+  `wallet_predation_scores`, `exit_convergence_events`.
+- orchestration: `argus.counterfactual.service.compute_and_persist_phase9`
+  computes Phase 8's own convergence/confirmation evidence first (reusing
+  `compute_and_persist_phase8` unchanged, which itself computes Phase 7's
+  directional edges), since discovery/validation specialist scores and
+  predation's follower-influx figure are all defined in terms of that
+  already-persisted evidence -- mirrors MASTER_SPEC's own "Alpha Ancestry
+  -> Convergence Surprise -> entry/exit specialists" pipeline ordering.
+- CLI: `argus counterfactual report` (Typer sub-app `counterfactual`),
+  following the same JSON-report pattern as `argus graph report`/`argus
+  convergence report`.
+- validation: `uv run pytest -q` -> 1164 passed, 355 skipped (0
+  failed); `uv run ruff check .` and `uv run ruff format --check .`
+  clean; `uv run mypy src` clean (197 source files); `uv run alembic
+  heads` -> single head `0027`. New tests: 27 unit across 4 files
+  (`test_phase9_buckets.py`, `test_phase9_matching.py`,
+  `test_phase9_specialists.py`, `test_phase9_predation.py`), 3
+  integration (`test_phase9_counterfactual_persistence_and_report.py`,
+  DB-backed, SKIP cleanly with no reachable Postgres in this sandbox --
+  same `admin_engine`-gated pattern every prior phase's DB-backed test
+  uses).
+- next: proceed to Phase 10 (SYNTHETIC SUPER-WALLET, shadow-only).
+- git_commit: (recorded with this phase's own work)

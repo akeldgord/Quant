@@ -71,6 +71,11 @@ convergence_app = typer.Typer(
     help="Convergence surprise + dog-that-didn't-bark negative evidence reports (Phase 8)",
 )
 app.add_typer(convergence_app, name="convergence")
+counterfactual_app = typer.Typer(
+    add_completion=False,
+    help="Counterfactual alpha + entry/discovery/validation/exit specialist reports (Phase 9)",
+)
+app.add_typer(counterfactual_app, name="counterfactual")
 
 console = Console()
 
@@ -2292,6 +2297,267 @@ def convergence_report(
                         "worse or better forward outcomes is not tested in this build "
                         "(section 60's own 'do not assume it does') -- see "
                         "docs/DECISION_LOG.md",
+                    ],
+                }
+        finally:
+            await engine.dispose()
+
+        console.print(json.dumps(report, indent=2, default=str))
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@counterfactual_app.command("report")
+def counterfactual_report(
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO-8601 cutoff (default: now). Point-in-time honest."
+    ),
+    horizon_minutes: list[int] | None = typer.Option(  # noqa: B008 - required Typer CLI-option idiom
+        None,
+        "--horizon-minutes",
+        help="Forward-return horizons in minutes (default: 5/15/30/60/360/1440).",
+    ),
+    max_lag_minutes: int = typer.Option(
+        60, "--max-lag-minutes", help="Same Phase 7/8 leader-to-follower lag window."
+    ),
+    top_n: int = typer.Option(
+        20, "--top-n", help="Number of top residual_selection_alpha estimates to print."
+    ),
+) -> None:
+    """Print top counterfactual-alpha estimates and specialist/predation/
+    exit-convergence summaries (MASTER_SPEC.md Phase 9) -- purely
+    observational statistics, never a causal claim; matching uses only
+    market-cap bucket, liquidity bucket, token-age bucket, and launch
+    venue in this build (see the ``limitations`` field)."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
+    from argus.counterfactual.service import (
+        BUILD_HASH,
+        Phase9RunConfig,
+        compute_and_persist_phase9,
+    )
+    from argus.domain.tokens import Token
+    from argus.domain.wallet_predation_scores import WalletPredationScore
+    from argus.domain.wallet_specialist_scores import WalletSpecialistScore
+    from argus.domain.wallets import Wallet
+    from argus.graph.service import GraphRunConfig
+
+    resolved_horizon_minutes = horizon_minutes or [5, 15, 30, 60, 360, 1440]
+    as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+    graph_config = GraphRunConfig(
+        max_lag=timedelta(minutes=max_lag_minutes),
+        min_observations=3,
+        q_value_threshold=Decimal("0.05"),
+    )
+    phase8_config = Phase8RunConfig(
+        window=timedelta(minutes=30),
+        unknown_independence_weight=Decimal("0.75"),
+        q_value_threshold=Decimal("0.05"),
+        min_observations=3,
+        strong_surprisal_threshold=Decimal("3.0"),
+    )
+    config = Phase9RunConfig(
+        horizons=tuple(timedelta(minutes=m) for m in resolved_horizon_minutes),
+        max_price_staleness=timedelta(minutes=30),
+        max_control_tokens=50,
+        entry_specialist_horizon=timedelta(minutes=resolved_horizon_minutes[0]),
+        discovery_min_observations=3,
+        discovery_q_value_threshold=Decimal("0.05"),
+        follower_influx_window=timedelta(minutes=max_lag_minutes),
+        exit_after_influx_window=timedelta(minutes=max_lag_minutes),
+        predation_influx_normalization_cap=Decimal(10),
+        exit_convergence_window=timedelta(minutes=30),
+        exit_convergence_unknown_independence_weight=Decimal("0.75"),
+        min_exit_specialist_score=Decimal(70),
+    )
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            async with sessionmaker() as session, session.begin():
+                result = await compute_and_persist_phase9(
+                    session,
+                    cutoff=as_of_dt,
+                    graph_config=graph_config,
+                    phase8_config=phase8_config,
+                    config=config,
+                    computed_at=datetime.now(UTC),
+                )
+
+                from argus.domain.counterfactual_alpha_estimates import (
+                    CounterfactualAlphaEstimate,
+                )
+
+                top_estimates = (
+                    (
+                        await session.execute(
+                            select(CounterfactualAlphaEstimate)
+                            .where(
+                                CounterfactualAlphaEstimate.as_of == as_of_dt,
+                                CounterfactualAlphaEstimate.algorithm_version
+                                == "counterfactual_alpha_specialists_v1",
+                                CounterfactualAlphaEstimate.config_hash == config.config_hash(),
+                                CounterfactualAlphaEstimate.residual_selection_alpha.is_not(None),
+                            )
+                            .order_by(CounterfactualAlphaEstimate.residual_selection_alpha.desc())
+                            .limit(top_n)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                specialist_rows = (
+                    (
+                        await session.execute(
+                            select(WalletSpecialistScore).where(
+                                WalletSpecialistScore.as_of == as_of_dt,
+                                WalletSpecialistScore.algorithm_version
+                                == "counterfactual_alpha_specialists_v1",
+                                WalletSpecialistScore.config_hash == config.config_hash(),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                predation_rows = (
+                    (
+                        await session.execute(
+                            select(WalletPredationScore).where(
+                                WalletPredationScore.as_of == as_of_dt,
+                                WalletPredationScore.algorithm_version
+                                == "counterfactual_alpha_specialists_v1",
+                                WalletPredationScore.config_hash == config.config_hash(),
+                                WalletPredationScore.predation_score.is_not(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                wallet_ids = (
+                    {e.wallet_id for e in top_estimates}
+                    | {r.wallet_id for r in specialist_rows}
+                    | {r.wallet_id for r in predation_rows}
+                )
+                token_ids = {e.token_id for e in top_estimates}
+                wallet_addresses: dict[str, str] = {}
+                token_mints: dict[str, str] = {}
+                if wallet_ids:
+                    rows = (
+                        (
+                            await session.execute(
+                                select(Wallet).where(Wallet.wallet_id.in_(wallet_ids))
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    wallet_addresses = {str(r.wallet_id): r.wallet_address for r in rows}
+                if token_ids:
+                    rows = (
+                        (await session.execute(select(Token).where(Token.token_id.in_(token_ids))))
+                        .scalars()
+                        .all()
+                    )
+                    token_mints = {str(r.token_id): r.mint for r in rows}
+
+                report = {
+                    "as_of": result.as_of.isoformat(),
+                    "algorithm_version": "counterfactual_alpha_specialists_v1",
+                    "config_hash": config.config_hash(),
+                    "build_hash": BUILD_HASH,
+                    "git_commit": git_commit,
+                    "alpha_estimate_count": result.alpha_estimate_count,
+                    "specialist_score_count": result.specialist_score_count,
+                    "predation_score_count": result.predation_score_count,
+                    "exit_convergence_event_count": result.exit_convergence_event_count,
+                    "top_residual_selection_alpha": [
+                        {
+                            "wallet": wallet_addresses.get(str(e.wallet_id), str(e.wallet_id)),
+                            "token_mint": token_mints.get(str(e.token_id), str(e.token_id)),
+                            "horizon_seconds": e.horizon_seconds,
+                            "wallet_token_forward_return": str(e.wallet_token_forward_return),
+                            "matched_universe_forward_return": str(
+                                e.matched_universe_forward_return
+                            ),
+                            "residual_selection_alpha": str(e.residual_selection_alpha),
+                            "matched_control_count": e.matched_control_count,
+                        }
+                        for e in top_estimates
+                    ],
+                    "specialists": [
+                        {
+                            "wallet": wallet_addresses.get(str(r.wallet_id), str(r.wallet_id)),
+                            "entry_specialist_score": (
+                                str(r.entry_specialist_score)
+                                if r.entry_specialist_score is not None
+                                else None
+                            ),
+                            "discovery_specialist_score": (
+                                str(r.discovery_specialist_score)
+                                if r.discovery_specialist_score is not None
+                                else None
+                            ),
+                            "validation_specialist_score": (
+                                str(r.validation_specialist_score)
+                                if r.validation_specialist_score is not None
+                                else None
+                            ),
+                            "exit_specialist_score": (
+                                str(r.exit_specialist_score)
+                                if r.exit_specialist_score is not None
+                                else None
+                            ),
+                            "dominant_specialty": r.dominant_specialty,
+                        }
+                        for r in specialist_rows
+                    ],
+                    "predation_scores": [
+                        {
+                            "wallet": wallet_addresses.get(str(r.wallet_id), str(r.wallet_id)),
+                            "follower_influx_mean": (
+                                str(r.follower_influx_mean)
+                                if r.follower_influx_mean is not None
+                                else None
+                            ),
+                            "exit_after_influx_rate": (
+                                str(r.exit_after_influx_rate)
+                                if r.exit_after_influx_rate is not None
+                                else None
+                            ),
+                            "predation_score": str(r.predation_score),
+                        }
+                        for r in sorted(
+                            predation_rows,
+                            key=lambda r: r.predation_score or Decimal(0),
+                            reverse=True,
+                        )[:top_n]
+                    ],
+                    "limitations": [
+                        "purely observational/correlational -- never a causal claim "
+                        "(MASTER_SPEC section 7's own explicit rule)",
+                        "matched-token controls use only market-cap bucket, liquidity "
+                        "bucket, token-age bucket, and launch venue in this build -- "
+                        "'recent momentum', 'volume', 'transaction rate', and 'broad "
+                        "market regime' are not used as matching dimensions (no cheap, "
+                        "non-fragile infrastructure exists yet for computing them across "
+                        "a full candidate-token universe); see docs/DECISION_LOG.md",
+                        "price_impact_mean in predation scoring is always null in this "
+                        "build -- a disclosed scope limitation, not a fabricated value",
+                        "predation_score and dominant_specialty are disclosed V1 "
+                        "heuristics, not calibrated probabilities (section 38's own "
+                        "'V1 priors to be evaluated prospectively' precedent)",
                     ],
                 }
         finally:
