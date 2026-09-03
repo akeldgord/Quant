@@ -66,6 +66,11 @@ graph_app = typer.Typer(
     add_completion=False, help="Alpha-ancestry lead/follow graph reports (Phase 7)"
 )
 app.add_typer(graph_app, name="graph")
+convergence_app = typer.Typer(
+    add_completion=False,
+    help="Convergence surprise + dog-that-didn't-bark negative evidence reports (Phase 8)",
+)
+app.add_typer(convergence_app, name="convergence")
 
 console = Console()
 
@@ -2144,6 +2149,151 @@ def graph_report(
                             }
                             for c in candidates
                         ]
+        finally:
+            await engine.dispose()
+
+        console.print(json.dumps(report, indent=2, default=str))
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@convergence_app.command("report")
+def convergence_report(
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO-8601 cutoff (default: now). Point-in-time honest."
+    ),
+    convergence_window_minutes: int = typer.Option(
+        30,
+        "--convergence-window-minutes",
+        help="Episode window anchored at a token's first entrant.",
+    ),
+    max_lag_minutes: int = typer.Option(
+        60, "--max-lag-minutes", help="Same Phase 7 leader-to-follower lag window (section 7)."
+    ),
+    min_observations: int = typer.Option(
+        3,
+        "--min-observations",
+        help="Minimum observation count for a significant directional edge.",
+    ),
+    q_value_threshold: str = typer.Option(
+        "0.05",
+        "--q-value-threshold",
+        help="Benjamini-Hochberg FDR threshold for significant edges.",
+    ),
+    strong_surprisal_threshold: str = typer.Option(
+        "3.0",
+        "--strong-surprisal-threshold",
+        help="Convergence surprisal above which STRONG applies.",
+    ),
+    top_n: int = typer.Option(20, "--top-n", help="Number of top convergence episodes to print."),
+) -> None:
+    """Print top convergence episodes by surprisal (MASTER_SPEC.md Phase
+    8, CONVERGENCE SURPRISE) and dog-that-didn't-bark confirmation outcome
+    counts (section 60) -- purely observational statistics, never a
+    causal claim; no 0-100 score is ever produced (section 59's own
+    explicit prohibition until calibration is defined)."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.convergence.service import (
+        BUILD_HASH,
+        ConvergenceRunConfig,
+        compute_and_persist_phase8,
+    )
+    from argus.domain.tokens import Token
+    from argus.graph.service import GraphRunConfig
+
+    as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+    graph_config = GraphRunConfig(
+        max_lag=timedelta(minutes=max_lag_minutes),
+        min_observations=min_observations,
+        q_value_threshold=Decimal(q_value_threshold),
+    )
+    config = ConvergenceRunConfig(
+        window=timedelta(minutes=convergence_window_minutes),
+        unknown_independence_weight=Decimal("0.75"),
+        q_value_threshold=Decimal(q_value_threshold),
+        min_observations=min_observations,
+        strong_surprisal_threshold=Decimal(strong_surprisal_threshold),
+    )
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            async with sessionmaker() as session, session.begin():
+                result = await compute_and_persist_phase8(
+                    session,
+                    cutoff=as_of_dt,
+                    graph_config=graph_config,
+                    config=config,
+                    computed_at=datetime.now(UTC),
+                )
+
+                token_mints: dict[str, str] = {}
+                token_ids = {c.episode.token_id for c in result.convergence_events}
+                if token_ids:
+                    rows = (
+                        (await session.execute(select(Token).where(Token.token_id.in_(token_ids))))
+                        .scalars()
+                        .all()
+                    )
+                    token_mints = {str(r.token_id): r.mint for r in rows}
+
+                sorted_events = sorted(
+                    result.convergence_events, key=lambda c: c.surprisal, reverse=True
+                )[:top_n]
+
+                report = {
+                    "as_of": result.as_of.isoformat(),
+                    "algorithm_version": "convergence_negative_evidence_v1",
+                    "config_hash": config.config_hash(),
+                    "graph_config_hash": graph_config.config_hash(),
+                    "build_hash": BUILD_HASH,
+                    "git_commit": git_commit,
+                    "convergence_episode_count": len(result.convergence_events),
+                    "top_convergence_events": [
+                        {
+                            "token_mint": token_mints.get(
+                                str(c.episode.token_id), str(c.episode.token_id)
+                            ),
+                            "window_start": c.episode.window_start.isoformat(),
+                            "window_end": c.episode.window_end.isoformat(),
+                            "raw_wallet_count": c.episode.raw_wallet_count,
+                            "estimated_independent_actors": str(c.estimated_independent_actors),
+                            "expected_overlap": str(c.row.expected_overlap),
+                            "empirical_probability": str(c.row.empirical_probability),
+                            "surprisal": str(c.surprisal),
+                            "sample_size": c.row.sample_size,
+                            "calibration_confidence": c.calibration_confidence,
+                        }
+                        for c in sorted_events
+                    ],
+                    "expected_confirmation_total": result.expected_confirmation_total,
+                    "expected_confirmation_outcome_counts": (
+                        result.expected_confirmation_outcome_counts
+                    ),
+                    "limitations": [
+                        "purely observational/correlational -- never a causal claim "
+                        "(MASTER_SPEC section 7's own explicit rule)",
+                        "no 0-100 convergence score is ever produced -- section 59's own "
+                        "explicit prohibition until calibration is defined; "
+                        "calibration_confidence is a disclosed sample-size bucket instead",
+                        "effective independent-actor count uses only each wallet's single "
+                        "strongest pairwise cluster link (Phase 3's own scope limit), not a "
+                        "transitive clique closure -- can undercount a group of 3+ mutually "
+                        "linked wallets with no one dominant pairwise link",
+                        "whether ABSENT/EARLY/LATE/STRONG confirmation outcomes predict "
+                        "worse or better forward outcomes is not tested in this build "
+                        "(section 60's own 'do not assume it does') -- see "
+                        "docs/DECISION_LOG.md",
+                    ],
+                }
         finally:
             await engine.dispose()
 

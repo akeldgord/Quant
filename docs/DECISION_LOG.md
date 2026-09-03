@@ -3226,3 +3226,107 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   uses).
 - next: proceed to Phase 8 (CONVERGENCE + NEGATIVE EVIDENCE).
 - git_commit: (recorded with this phase's own work)
+
+### 2026-09-03 — Phase 8 (CONVERGENCE + NEGATIVE EVIDENCE): convergence surprise + dog-that-didn't-bark
+
+- decision: build Phase 8 as two purely observational report families
+  over already-persisted evidence: (1) section 59 CONVERGENCE SURPRISE
+  -- for each token's own first wave of tracked-wallet interest, a
+  cluster-corrected effective independent-actor count and a
+  non-parametric empirical overlap probability/surprisal; (2) section 60
+  DOG-THAT-DIDN'T-BARK SIGNAL -- for each significant Phase 7
+  directional edge and the leader's own real buy entry, whether the
+  historically-expected follower confirmation occurred, and how
+  (ABSENT/EARLY/LATE/STRONG/NORMAL). Never a causal claim, never a 0-100
+  score (section 59's own explicit prohibition until calibration is
+  defined).
+- effective independent-actor count: reuses Phase 3's own per-wallet
+  cluster-risk assessment (`argus.wallets.clustering.
+  assess_wallet_cluster_risk`) rather than inventing new independence
+  math, restricted per convergence episode to pairwise links where BOTH
+  endpoints are members of that same episode (a link to a wallet that
+  did not converge on this token carries no information about this
+  group's own independence). Section 43's own example -- "three
+  addresses likely belonging to one actor count approximately as one
+  source of information" -- falls out naturally: a wallet with a strong
+  pairwise link gets a low weight, so the pair's combined contribution
+  collapses toward 1. Disclosed limitation (inherited from Phase 3's own
+  scope limit): only the single strongest pairwise link per wallet is
+  used, not a transitive clique closure, so a group of 3+ mutually
+  linked wallets with no one dominant link can undercount rather than
+  converge to ~1. A wallet with zero recorded cluster-link evidence
+  against its own group gets a disclosed policy-constant weight (0.75,
+  `DEFAULT_UNKNOWN_INDEPENDENCE_WEIGHT`) -- section 43's own rule that
+  "uncertain dependence contributes less than confidently independent
+  actors" -- never a fabricated full-independence (1.0) or
+  full-dependence (0.0) default.
+- empirical overlap probability/surprisal: rather than assuming a
+  parametric distribution, `expected_overlap` and `empirical_probability`
+  are derived directly from PRIOR episodes' own observed
+  independent-actor counts within the same run (point-in-time correct --
+  only episodes with a strictly earlier `window_start` are used as an
+  episode's own baseline) -- MASTER_SPEC's own "empirical overlap
+  probabilities" term (plural: built from data, not assumed). Uses a
+  Laplace/add-one upper-tail estimate, `(1 + count(historical >=
+  observed)) / (1 + n)`, so a genuinely unprecedented observation never
+  collapses probability to exactly 0 (and surprisal to infinity) --
+  standard, disclosed smoothing, not a fabricated number.
+  `calibration_confidence` is a disclosed sample-size bucket
+  (INSUFFICIENT_SAMPLE/LOW/MEDIUM/HIGH) -- never a 0-100 score.
+- dog-that-didn't-bark: for each Phase 7 directional edge clearing this
+  phase's own significance bar (its own `q_value_threshold`/
+  `min_observations`, independent of whatever threshold the underlying
+  Phase 7 run used for candidate generation), and each of the leader's
+  own real buy entries with at least one PRIOR (point-in-time correct)
+  historical lag observation for that same edge, classify against the
+  edge's own empirical [p10, p90] historical lag band (nearest-rank
+  percentile): no qualifying follower entry within the lag window ->
+  ABSENT; before p10 -> EARLY; after p90 -> LATE; an unusually high
+  independent-actor convergence (this run's own already-computed
+  convergence surprisal for that token, above a disclosed
+  `strong_surprisal_threshold`) -> STRONG (checked before EARLY/LATE);
+  otherwise NORMAL. Precedence (ABSENT > STRONG > EARLY/LATE > NORMAL)
+  is a disclosed, deterministic policy choice -- MASTER_SPEC.md does not
+  itself specify how these labels compose when more than one could
+  apply. The leader's own FIRST-EVER entry for an edge has no prior
+  history to build an expected window from and is skipped (not
+  persisted with a fabricated window).
+- persistence: reused the exact F5-05 idempotent pattern (`INSERT ...
+  ON CONFLICT DO NOTHING` + re-select-within-transaction) for both new
+  tables (`convergence_events`, `expected_confirmation_events`), with
+  `config_hash` bound into each table's own unique identity.
+  `expected_confirmation_events.convergence_event_id` links a STRONG
+  classification back to the specific convergence episode that
+  justified it.
+- migration: `0026_phase8_convergence_and_negative_evidence.py`,
+  additive on top of `0025` (never rewriting it), same GRANT pattern
+  every prior phase uses.
+- orchestration: `argus.convergence.service.compute_and_persist_phase8`
+  computes Phase 7's own directional edges first (reusing
+  `compute_and_persist_directional_edges` unchanged -- idempotent, so a
+  prior run at the same cutoff/config is reused) since dog-that-didn't-
+  bark classification is defined in terms of Phase 7's own significant
+  edges, mirroring MASTER_SPEC's own "Alpha Ancestry -> Convergence
+  Surprise" pipeline ordering.
+- CLI: `argus convergence report` (Typer sub-app `convergence`),
+  following the same JSON-report pattern as `argus graph report`.
+- scope limitation (disclosed, not fabricated): whether ABSENT/EARLY/
+  LATE/STRONG confirmation outcomes (or ordinary vs. high-surprisal
+  convergence) predict worse or better forward outcomes is NOT tested in
+  this build -- section 60's own explicit "test whether missing
+  downstream confirmation predicts poor outcomes; do not assume it
+  does" is left for a follow-up study (naturally suited to Phase 9's own
+  matched-control machinery) rather than a fragile ad hoc join against
+  Phase 4 shadow outcomes in this phase.
+- validation: `uv run pytest -q` -> 1137 passed, 352 skipped (0
+  failed); `uv run ruff check .` and `uv run ruff format --check .`
+  clean; `uv run mypy src` clean (185 source files); `uv run alembic
+  heads` -> single head `0026`. New tests: 27 unit across 4 files
+  (`test_phase8_convergence_stats.py`, `test_phase8_convergence_episodes.py`,
+  `test_phase8_independence.py`, `test_phase8_confirmation.py`), 5
+  integration (`test_phase8_convergence_persistence_and_report.py`,
+  DB-backed, SKIP cleanly with no reachable Postgres in this sandbox --
+  same `admin_engine`-gated pattern every prior phase's DB-backed test
+  uses).
+- next: proceed to Phase 9 (COUNTERFACTUAL ALPHA + SPECIALISTS).
+- git_commit: (recorded with this phase's own work)
