@@ -3431,3 +3431,95 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   uses).
 - next: proceed to Phase 10 (SYNTHETIC SUPER-WALLET, shadow-only).
 - git_commit: (recorded with this phase's own work)
+
+### 2026-09-03 — Phase 10 (SYNTHETIC SUPER-WALLET, shadow-only): five prospective strategy backtests
+
+- decision: build all five MASTER_SPEC.md Phase 10 strategies (A-E) as
+  a single shared backtest engine, with strategy-specific behavior
+  expressed entirely through which already-persisted Phase 4/7/8/9
+  evidence feeds its entry/exit triggers -- no new signal-detection
+  logic anywhere in this phase, only a simulation/pricing/stats layer
+  that consumes what Phases 7-9 already computed. "Shadow only unless
+  later approved" (section 64): this phase adds zero live-execution
+  capability, and per MASTER_SPEC's own explicit instruction, no
+  strategy is ever enabled live automatically.
+- strategy definitions (PHASE 10's own A-E list, section 64's R -> A ->
+  K -> E pipeline):
+  - A (source entry -> source exit): any tracked wallet's real buy
+    (Phase 7's `load_wallet_token_entries`), held until that SAME
+    wallet's own sell.
+  - B (discovery specialist -> source exit): Strategy A's population
+    restricted to wallets Phase 9 classified `dominant_specialty =
+    DISCOVERY`.
+  - C (discovery -> confirmation -> source exit): a discovery
+    specialist's buy, but the ENTRY fires only once a follower
+    CONFIRMS it (Phase 8's `ExpectedConfirmationEvent.outcome !=
+    ABSENT`), at the follower's own confirmation timestamp -- never
+    look-ahead to the leader's own earlier entry -- held until the
+    ORIGINAL leader's exit.
+  - D (discovery -> confirmation -> exit oracle): the same
+    confirmed-entry trigger as C, but exits on ANY qualifying exit
+    specialist's sell of that token (Phase 9's own
+    `exit_specialist_score` threshold), not necessarily the original
+    leader.
+  - E (high convergence -> exit convergence): entry triggered by a
+    Phase 8 `ConvergenceEvent` with unusually high surprisal for that
+    token; exit triggered by a Phase 9 `ExitConvergenceEvent` for that
+    same token. Both anchored at the episode's own `window_end` (never
+    `window_start`) -- an episode's full evidence, and therefore its
+    surprisal, is not actually known until its window closes;
+    anchoring at `window_start` would be look-ahead bias.
+- backtest mechanics: `argus.synthetic.matching.match_strategy_trades`
+  is one shared, strategy-agnostic matching engine parameterized by an
+  `exit_matches` predicate. Enforces section 65's ONE OPEN POSITION PER
+  MINT rule by reusing `argus.executor.position_policy.evaluate_scale_in`
+  UNCHANGED -- the exact same pure policy function Phase 6's live
+  executor uses, applied here to a historical simulation instead of a
+  live position table -- plus a global concurrent-position cap (this
+  run's own capital-utilization ceiling). Entry/exit prices use Phase
+  9's own `load_nearest_token_market_snapshot` (nearest-within-tolerance,
+  never a stale substitute). A disclosed V1 realistic-cost haircut (100
+  bps round-trip, split across entry/exit) is applied -- no disclosed
+  default cost assumption existed anywhere else in this project; this is
+  a new, explicit V1 prior, in the same spirit as section 38's "V1
+  priors to be evaluated prospectively."
+- stats: win rate, profit factor, failure rate computed directly;
+  `max_drawdown` on a simple additive (non-compounding), unit-normalized
+  equity curve -- a disclosed simplification versus true dollar-weighted
+  portfolio compounding, since this backtest does not model real
+  position sizing in dollars; `capital_utilization` is the mean
+  concurrent-open-position count sampled at each entry, divided by the
+  run's own concurrency cap -- a disclosed proxy for true
+  time-integrated utilization. `profit_factor` is `NULL` (never a
+  fabricated infinity) when a strategy has zero losing trades.
+- persistence: reused the exact F5-05 idempotent pattern for both new
+  tables (`synthetic_strategy_trades`, `synthetic_strategy_summaries`).
+  Every trade row records its entry/exit trigger evidence reference
+  (CORE-004) -- exactly which `prospective_event`/`directional_edge`/
+  `confirmation_event`/`convergence_event`/swap justified it. A trade
+  that never found a matching exit trigger, or lacked a sufficiently
+  fresh price, is recorded honestly as a failure outcome -- never
+  silently dropped or fabricated as a win/loss.
+- migration: `0028_phase10_synthetic_super_wallet.py`, additive on top
+  of `0027` (never rewriting it), same GRANT pattern every prior phase
+  uses.
+- orchestration: `argus.synthetic.service.compute_and_persist_phase10`
+  computes Phase 9's own full evidence cascade first (reusing
+  `compute_and_persist_phase9` unchanged, itself cascading through
+  Phase 8 and Phase 7), since every one of the five strategies' triggers
+  is read directly from that already-persisted evidence.
+- CLI: `argus synthetic report` (Typer sub-app `synthetic`), explicitly
+  labeled `shadow_only: true` in its own JSON output plus a dedicated
+  limitations disclosure, following the same JSON-report pattern as the
+  prior phases' report commands.
+- validation: `uv run pytest -q` -> 1187 passed, 358 skipped (0
+  failed); `uv run ruff check .` and `uv run ruff format --check .`
+  clean; `uv run mypy src` clean (206 source files); `uv run alembic
+  heads` -> single head `0028`. New tests: 23 unit across 3 files
+  (`test_phase10_costs.py`, `test_phase10_matching.py`,
+  `test_phase10_stats.py`), 3 integration
+  (`test_phase10_synthetic_persistence_and_report.py`, DB-backed, SKIP
+  cleanly with no reachable Postgres in this sandbox -- same
+  `admin_engine`-gated pattern every prior phase's DB-backed test uses).
+- next: proceed to Phase 11 (PREDICT INFORMED ORDER FLOW).
+- git_commit: (recorded with this phase's own work)

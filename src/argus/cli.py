@@ -71,6 +71,11 @@ convergence_app = typer.Typer(
     help="Convergence surprise + dog-that-didn't-bark negative evidence reports (Phase 8)",
 )
 app.add_typer(convergence_app, name="convergence")
+synthetic_app = typer.Typer(
+    add_completion=False,
+    help="Synthetic super-wallet prospective strategy backtest reports (Phase 10, shadow-only)",
+)
+app.add_typer(synthetic_app, name="synthetic")
 counterfactual_app = typer.Typer(
     add_completion=False,
     help="Counterfactual alpha + entry/discovery/validation/exit specialist reports (Phase 9)",
@@ -2558,6 +2563,170 @@ def counterfactual_report(
                         "predation_score and dominant_specialty are disclosed V1 "
                         "heuristics, not calibrated probabilities (section 38's own "
                         "'V1 priors to be evaluated prospectively' precedent)",
+                    ],
+                }
+        finally:
+            await engine.dispose()
+
+        console.print(json.dumps(report, indent=2, default=str))
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@synthetic_app.command("report")
+def synthetic_report(
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO-8601 cutoff (default: now). Point-in-time honest."
+    ),
+    max_lag_minutes: int = typer.Option(
+        60, "--max-lag-minutes", help="Same Phase 7/8/9 leader-to-follower lag window."
+    ),
+    max_hold_hours: int = typer.Option(
+        24, "--max-hold-hours", help="Max simulated holding period before FAILURE_NO_EXIT_TRIGGER."
+    ),
+    cost_bps: str = typer.Option(
+        "100", "--cost-bps", help="Disclosed round-trip realistic-cost haircut in basis points."
+    ),
+) -> None:
+    """Print the five MASTER_SPEC.md Phase 10 (SYNTHETIC SUPER-WALLET)
+    prospective strategy backtests -- SHADOW ONLY, no live-execution
+    bearing whatsoever; never enables anything automatically (MASTER_SPEC's
+    own explicit instruction)."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from argus.config import resolve_production_git_commit
+    from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
+    from argus.counterfactual.service import Phase9RunConfig
+    from argus.graph.service import GraphRunConfig
+    from argus.synthetic.service import (
+        BUILD_HASH,
+        STRATEGY_CODES,
+        STRATEGY_DESCRIPTIONS,
+        Phase10RunConfig,
+        compute_and_persist_phase10,
+    )
+
+    as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+    graph_config = GraphRunConfig(
+        max_lag=timedelta(minutes=max_lag_minutes),
+        min_observations=3,
+        q_value_threshold=Decimal("0.05"),
+    )
+    phase8_config = Phase8RunConfig(
+        window=timedelta(minutes=30),
+        unknown_independence_weight=Decimal("0.75"),
+        q_value_threshold=Decimal("0.05"),
+        min_observations=3,
+        strong_surprisal_threshold=Decimal("3.0"),
+    )
+    phase9_config = Phase9RunConfig(
+        horizons=(timedelta(minutes=5), timedelta(minutes=15), timedelta(minutes=30)),
+        max_price_staleness=timedelta(minutes=30),
+        max_control_tokens=50,
+        entry_specialist_horizon=timedelta(minutes=5),
+        discovery_min_observations=3,
+        discovery_q_value_threshold=Decimal("0.05"),
+        follower_influx_window=timedelta(minutes=max_lag_minutes),
+        exit_after_influx_window=timedelta(minutes=max_lag_minutes),
+        predation_influx_normalization_cap=Decimal(10),
+        exit_convergence_window=timedelta(minutes=30),
+        exit_convergence_unknown_independence_weight=Decimal("0.75"),
+        min_exit_specialist_score=Decimal(70),
+    )
+    config = Phase10RunConfig(
+        entry_exit_price_max_staleness=timedelta(minutes=30),
+        cost_bps=Decimal(cost_bps),
+        max_concurrent_positions=10,
+        high_convergence_surprisal_threshold=Decimal("3.0"),
+        min_exit_specialist_score=Decimal(70),
+        max_hold_duration=timedelta(hours=max_hold_hours),
+    )
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            async with sessionmaker() as session, session.begin():
+                result = await compute_and_persist_phase10(
+                    session,
+                    cutoff=as_of_dt,
+                    graph_config=graph_config,
+                    phase8_config=phase8_config,
+                    phase9_config=phase9_config,
+                    config=config,
+                    computed_at=datetime.now(UTC),
+                )
+
+                report = {
+                    "as_of": result.as_of.isoformat(),
+                    "algorithm_version": "synthetic_super_wallet_v1",
+                    "config_hash": config.config_hash(),
+                    "build_hash": BUILD_HASH,
+                    "git_commit": git_commit,
+                    "shadow_only": True,
+                    "strategies": {
+                        code: {
+                            "description": STRATEGY_DESCRIPTIONS[code],
+                            "trade_count": result.summaries[code].trade_count,
+                            "resolved_count": result.summaries[code].resolved_count,
+                            "failure_count": result.summaries[code].failure_count,
+                            "failure_rate": (
+                                str(result.summaries[code].failure_rate)
+                                if result.summaries[code].failure_rate is not None
+                                else None
+                            ),
+                            "win_rate": (
+                                str(result.summaries[code].win_rate)
+                                if result.summaries[code].win_rate is not None
+                                else None
+                            ),
+                            "profit_factor": (
+                                str(result.summaries[code].profit_factor)
+                                if result.summaries[code].profit_factor is not None
+                                else None
+                            ),
+                            "max_drawdown": (
+                                str(result.summaries[code].max_drawdown)
+                                if result.summaries[code].max_drawdown is not None
+                                else None
+                            ),
+                            "capital_utilization": (
+                                str(result.summaries[code].capital_utilization)
+                                if result.summaries[code].capital_utilization is not None
+                                else None
+                            ),
+                            "mean_net_return": (
+                                str(result.summaries[code].mean_net_return)
+                                if result.summaries[code].mean_net_return is not None
+                                else None
+                            ),
+                            "median_net_return": (
+                                str(result.summaries[code].median_net_return)
+                                if result.summaries[code].median_net_return is not None
+                                else None
+                            ),
+                        }
+                        for code in STRATEGY_CODES
+                    },
+                    "limitations": [
+                        "SHADOW ONLY -- purely a backtest over already-persisted historical "
+                        "evidence; no live-execution bearing whatsoever, and no strategy is "
+                        "ever enabled live automatically (MASTER_SPEC section 64's own explicit "
+                        "instruction)",
+                        "cost_bps is a disclosed V1 placeholder haircut, not a modeled estimate "
+                        "of any specific token's real liquidity/slippage",
+                        "max_drawdown is computed on a simple additive, unit-normalized equity "
+                        "curve (non-compounding) -- a disclosed simplification versus true "
+                        "dollar-weighted portfolio compounding",
+                        "capital_utilization is the mean concurrent-position count sampled at "
+                        "each entry, divided by this run's own concurrency cap -- a disclosed "
+                        "proxy, not an exact continuous-time integral",
+                        "entry/exit prices use a nearest-snapshot-within-tolerance lookup over "
+                        "token_market_snapshots -- a trade with no sufficiently fresh snapshot "
+                        "is recorded as a failure, never fabricated",
                     ],
                 }
         finally:
