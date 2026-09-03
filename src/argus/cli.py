@@ -58,6 +58,10 @@ copyability_app = typer.Typer(
     add_completion=False, help="Copyability + forward information value research reports (Phase 5)"
 )
 app.add_typer(copyability_app, name="copyability")
+executor_app = typer.Typer(
+    add_completion=False, help="Hardened isolated executor software-readiness reporting (Phase 6)"
+)
+app.add_typer(executor_app, name="executor")
 
 console = Console()
 
@@ -1965,6 +1969,30 @@ def copyability_report(
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
+
+
+@executor_app.command("readiness")
+def executor_readiness() -> None:
+    """Print the honest Phase 6 (hardened isolated executor) software-
+    readiness disposition (P6-17). This command never touches a signer,
+    a live provider, or a real arm file -- ``LIVE_CANARY_PASSED`` and
+    ``LIVE_ARMED`` are unconditionally ``false`` in its output regardless
+    of every ``software_criteria`` entry being met (MASTER_SPEC section
+    82: software readiness is never the same thing as live readiness)."""
+    import json
+
+    from argus.config import resolve_production_git_commit
+    from argus.executor.service import BUILD_HASH, build_phase6_disposition
+
+    config = load_config()
+    git_commit = resolve_production_git_commit(allow_unverified=True)
+    disposition = build_phase6_disposition()
+    payload = disposition.as_dict()
+    payload["build_hash"] = BUILD_HASH
+    payload["config_hash"] = config.config_hash
+    payload["master_spec_hash"] = config.spec_hash
+    payload["git_commit"] = git_commit
+    console.print(json.dumps(payload, indent=2, default=str))
 
 
 if __name__ == "__main__":

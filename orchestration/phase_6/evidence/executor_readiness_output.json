@@ -1,0 +1,24 @@
+{
+  "LIVE_READY_SOFTWARE": true,
+  "LIVE_CANARY_PASSED": false,
+  "LIVE_ARMED": false,
+  "software_criteria": {
+    "state_machine_matches_spec_11_states_3_terminal": true,
+    "default_dispatch_guard_never_dispatches": true,
+    "capital_defaults_are_zero": true,
+    "automatic_scale_in_prohibited": true,
+    "live_risk_gate_count_is_23": true,
+    "token_safety_flag_count_is_8": true,
+    "host_reconciliation_dimension_count_is_7": true
+  },
+  "limitations": [
+    "no real on-disk-keypair signer implementation exists in this codebase by design -- only the Signer protocol plus FakeSigner/RaisingSigner test doubles -- since this coding session is absolutely prohibited from ever handling real key material (MASTER_SPEC section 70)",
+    "no live quote-provider dispatch or order-submission subsystem exists -- risk/safety/sellability gates take typed evidence as parameters rather than calling a live provider",
+    "PostgresLeaseStore and the DB-backed persistence paths are structurally implemented but unexercised in this sandbox (no reachable Postgres); the executor-singleton concurrency guarantee is proven instead via InMemoryLeaseStore with two independent simulated callers",
+    "LIVE_CANARY_PASSED and LIVE_ARMED are unconditionally false in every report this module can produce -- no mainnet canary has run and no human-authorized external arm file exists"
+  ],
+  "build_hash": "3a947a8aeed4397af234ebd9d08bef6b8fb81a3a3a9e55a6c6db9934e5404b93",
+  "config_hash": "7fd7e8046952c0050d03555b74c5d97b6de92fd97eb5e167e73741c46a355ea8",
+  "master_spec_hash": "41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011",
+  "git_commit": "GIT_COMMIT_UNAVAILABLE"
+}
