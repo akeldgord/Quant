@@ -27,7 +27,13 @@ def test_migration_0024_down_revision_is_0023() -> None:
     assert module_globals["down_revision"] == "0023"
 
 
-def test_alembic_has_exactly_one_head_and_it_is_0024() -> None:
+def test_alembic_has_exactly_one_head() -> None:
+    """The migration graph never branches -- exactly one head at all
+    times. This no longer hardcodes ``0024`` as the head: later phases
+    (Phase 7's ``0025`` onward) append additional migrations on top of
+    ``0024`` without rewriting it, so the head advances legitimately as
+    the build progresses. What must never happen is a second, diverging
+    head."""
     result = subprocess.run(
         ["uv", "run", "alembic", "heads"],
         cwd=_REPO_ROOT,
@@ -38,7 +44,6 @@ def test_alembic_has_exactly_one_head_and_it_is_0024() -> None:
     assert result.returncode == 0, result.stderr
     heads = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(heads) == 1, f"expected exactly one alembic head, got: {heads}"
-    assert "0024" in heads[0]
 
 
 def test_all_eight_phase6_domain_models_import_cleanly() -> None:

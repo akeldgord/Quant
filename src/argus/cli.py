@@ -62,6 +62,10 @@ executor_app = typer.Typer(
     add_completion=False, help="Hardened isolated executor software-readiness reporting (Phase 6)"
 )
 app.add_typer(executor_app, name="executor")
+graph_app = typer.Typer(
+    add_completion=False, help="Alpha-ancestry lead/follow graph reports (Phase 7)"
+)
+app.add_typer(graph_app, name="graph")
 
 console = Console()
 
@@ -1993,6 +1997,160 @@ def executor_readiness() -> None:
     payload["master_spec_hash"] = config.spec_hash
     payload["git_commit"] = git_commit
     console.print(json.dumps(payload, indent=2, default=str))
+
+
+@graph_app.command("report")
+def graph_report(
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO-8601 cutoff (default: now). Point-in-time honest."
+    ),
+    max_lag_minutes: int = typer.Option(
+        60, "--max-lag-minutes", help="Maximum leader-to-follower lag considered (section 7)."
+    ),
+    min_observations: int = typer.Option(
+        3, "--min-observations", help="Minimum observation count for an upstream candidate."
+    ),
+    q_value_threshold: str = typer.Option(
+        "0.05", "--q-value-threshold", help="Benjamini-Hochberg FDR threshold for candidates."
+    ),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="If set, also list upstream candidates for this wallet address."
+    ),
+    top_n: int = typer.Option(20, "--top-n", help="Number of top directional edges to print."),
+) -> None:
+    """Print top directional lead/follow edges (MASTER_SPEC.md Phase 7,
+    ALPHA ANCESTRY) -- purely observational statistics, never a causal
+    claim (see argus.graph.lead_follow's own docstring)."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from argus.config import resolve_production_git_commit
+    from argus.domain.wallets import Wallet
+    from argus.graph.lead_follow import generate_upstream_candidates
+    from argus.graph.service import (
+        BUILD_HASH,
+        GraphRunConfig,
+        compute_and_persist_directional_edges,
+    )
+
+    as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+    config = GraphRunConfig(
+        max_lag=timedelta(minutes=max_lag_minutes),
+        min_observations=min_observations,
+        q_value_threshold=Decimal(q_value_threshold),
+    )
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            async with sessionmaker() as session, session.begin():
+                result = await compute_and_persist_directional_edges(
+                    session, cutoff=as_of_dt, config=config, computed_at=datetime.now(UTC)
+                )
+
+                wallet_addresses: dict[str, str] = {}
+                wallet_ids = {e.edge.leader_wallet_id for e in result.edges} | {
+                    e.edge.follower_wallet_id for e in result.edges
+                }
+                if wallet_ids:
+                    rows = (
+                        (
+                            await session.execute(
+                                select(Wallet).where(Wallet.wallet_id.in_(wallet_ids))
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    wallet_addresses = {str(r.wallet_id): r.wallet_address for r in rows}
+
+                sorted_edges = sorted(
+                    result.edges,
+                    key=lambda e: (e.q_value, -(e.edge.effect_size or Decimal("-Infinity"))),
+                )[:top_n]
+
+                report = {
+                    "as_of": result.as_of.isoformat(),
+                    "algorithm_version": "alpha_ancestry_v1",
+                    "config_hash": config.config_hash(),
+                    "build_hash": BUILD_HASH,
+                    "git_commit": git_commit,
+                    "wallets_observed": result.wallet_count,
+                    "total_observations": result.observation_count,
+                    "top_directional_edges": [
+                        {
+                            "leader_wallet": wallet_addresses.get(
+                                str(e.edge.leader_wallet_id), str(e.edge.leader_wallet_id)
+                            ),
+                            "follower_wallet": wallet_addresses.get(
+                                str(e.edge.follower_wallet_id), str(e.edge.follower_wallet_id)
+                            ),
+                            "observation_count": e.edge.observation_count,
+                            "lift": str(e.edge.lift) if e.edge.lift is not None else None,
+                            "median_lag_seconds": str(e.edge.median_lag_seconds),
+                            "effect_size": (
+                                str(e.edge.effect_size) if e.edge.effect_size is not None else None
+                            ),
+                            "p_value": str(e.edge.p_value),
+                            "q_value": str(e.q_value),
+                            "forward_information_after_leader_pct": None,
+                        }
+                        for e in sorted_edges
+                    ],
+                    "limitations": [
+                        "purely observational/correlational -- never a causal claim "
+                        "(MASTER_SPEC section 7's own explicit rule)",
+                        "forward_information_after_leader_pct is always null in this build -- "
+                        "computing it honestly requires reusing Phase 5's cohort-matched "
+                        "executable-return evidence per observation, deferred (see "
+                        "docs/DECISION_LOG.md)",
+                    ],
+                }
+
+                if wallet:
+                    target = (
+                        await session.execute(select(Wallet).where(Wallet.wallet_address == wallet))
+                    ).scalar_one_or_none()
+                    if target is None:
+                        report["upstream_candidates_for_wallet"] = None
+                        report["upstream_candidates_unavailable_reason"] = (
+                            f"no wallet found with address {wallet!r}"
+                        )
+                    else:
+                        candidates = generate_upstream_candidates(
+                            result.edges,
+                            follower_wallet_id=target.wallet_id,
+                            q_value_threshold=config.q_value_threshold,
+                            min_observations=config.min_observations,
+                        )
+                        report["upstream_candidates_for_wallet"] = wallet
+                        report["upstream_candidates"] = [
+                            {
+                                "leader_wallet": wallet_addresses.get(
+                                    str(c.edge.leader_wallet_id), str(c.edge.leader_wallet_id)
+                                ),
+                                "observation_count": c.edge.observation_count,
+                                "lift": str(c.edge.lift) if c.edge.lift is not None else None,
+                                "effect_size": (
+                                    str(c.edge.effect_size)
+                                    if c.edge.effect_size is not None
+                                    else None
+                                ),
+                                "q_value": str(c.q_value),
+                            }
+                            for c in candidates
+                        ]
+        finally:
+            await engine.dispose()
+
+        console.print(json.dumps(report, indent=2, default=str))
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
 
 
 if __name__ == "__main__":

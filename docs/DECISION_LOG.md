@@ -3108,3 +3108,121 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   preserved byte-for-byte unmodified.
 - git_commit: (recorded in the second, hash-fill-in commit -- see
   `orchestration/checkpoints/phase_6.md` GIT_COMMIT field)
+
+### 2026-09-03 — Governance change: external orchestrator (ChatGPT)
+### unavailable; user authorizes continued self-directed build
+
+- decision: at the direct instruction of the human operator in this
+  session ("ChatGPT is out. Just finish up the build, we'll audit it
+  later"), this session stops waiting for a per-phase external
+  orchestrator audit/approval cycle and continues building the
+  remaining MASTER_SPEC.md phases sequentially. This is a genuine,
+  explicit instruction from the human operator, which
+  `orchestration/PROTOCOL.md` section 6 recognizes as an alternative
+  source of authorization alongside an `ACTIVE` instruction in
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`.
+- rationale: every prior phase in this project was gated on an external
+  ARGUS ORCHESTRATOR (a separate ChatGPT-driven review process, per
+  the Job 1/GitHub-App-access work early in this project's history)
+  reading this repository's evidence and issuing the next `ACTIVE`
+  instruction. That reviewer is now unavailable. The human operator who
+  owns this project has decided the build should continue without
+  blocking on that specific review mechanism, and has taken on the
+  audit role themselves, for a later time.
+- what this does NOT change: `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`
+  is still never edited by this session. Every ABSOLUTE PROHIBITION in
+  MASTER_SPEC.md still applies unconditionally, regardless of who is
+  auditing -- no live wallet, no real signing key, no seed/private-key
+  access, no live arm file creation/modification, no mainnet
+  transaction, no canary initiation, no paid-provider upgrade, no
+  capital allocation. Phase 6.5 (HUMAN-AUTHORIZED MAINNET CANARY) is
+  explicitly written in MASTER_SPEC.md as "NOT automatically performed
+  by the coding agent" -- this session will never execute it, only
+  provide operational commands if directly asked. Full validation
+  (tests/ruff/mypy/migrations) still runs before every commit; honest
+  `docs/BUILD_STATE.md`/`docs/DECISION_LOG.md` entries are still kept
+  for later audit -- only the elaborate multi-page "ARGUS ORCHESTRATOR
+  CHECKPOINT" bundle ceremony (which existed specifically to feed that
+  external reviewer's own process) is dropped in favor of lighter,
+  still-accurate per-phase documentation, since the audience for that
+  ceremony no longer exists.
+- what changes going forward: `docs/BUILD_STATE.md`'s `current_phase`/
+  `last_completed_phase` advance as each phase's build is completed and
+  validated, without a separate `last_orchestrator_approved_phase`
+  gate blocking the next phase's start -- the human operator is now
+  that gate, exercised whenever they choose to audit, not on a fixed
+  per-phase cadence.
+- next: proceed to Phase 7 (ALPHA ANCESTRY), then 8 (CONVERGENCE +
+  NEGATIVE EVIDENCE), 9 (COUNTERFACTUAL ALPHA + SPECIALISTS), 10
+  (SYNTHETIC SUPER-WALLET, shadow-only), 11 (PREDICT INFORMED ORDER
+  FLOW), each with its own migration/build/tests/commit. Phase 6.5 is
+  skipped entirely (human-only, per above).
+- git_commit: (recorded with this phase's own work)
+
+### 2026-09-03 — Phase 7 (ALPHA ANCESTRY): lead/follow graph build
+
+- decision: build Phase 7 as a purely observational directional-edge
+  graph over already-persisted Phase 4 `prospective_events` rows (real
+  tracked-wallet buy entries), never a causal claim, per MASTER_SPEC.md's
+  own "no unsupported causal claims" rule for this phase.
+- data source: `prospective_events` was deliberately pre-seeded back in
+  Phase 4 with a Phase-7-forward-reference sentinel in its
+  `graph_state_snapshot` field (`{"available": false, "reason": "Phase 7
+  (ALPHA ANCESTRY) not yet implemented"}`), confirming it is the
+  intended source. Only rows with a resolved `token_id` and a BUY-only
+  entry (per `argus.shadow.prospective._is_entry`'s own input/output
+  mint classification) are used.
+- point-in-time discipline: reused Phase 5's `known_by_cutoff` (M1
+  pattern) unchanged -- an entry is only known as of a cutoff if both
+  its `created_at` and its effective `first_seen_at` are <= cutoff.
+- methodology: for each ordered (leader, follower) wallet pair, observe
+  every case where the follower entered the same token within
+  `max_lag` after the leader. Compare the follower's observed follow
+  rate against their own empirical unconditional base rate of entering
+  any token drawn from the same universe (not a fixed prior), using an
+  exact binomial upper-tail test (`math.comb`, with a normal-approximation
+  fallback above n=300 to avoid combinatorial blowup) and a z-score
+  effect size. Every edge computed in the same run is corrected together
+  with standard Benjamini-Hochberg step-up FDR (verified against a
+  hand-computed textbook example before trusting it) -- this is a
+  multi-hypothesis graph, not one test in isolation. Candidate upstream
+  wallets are then filtered by `q_value_threshold` and
+  `min_observations`.
+- scope limitation (disclosed, not fabricated): `directional_edges.
+  forward_information_after_leader_pct` is always persisted as `None`
+  in this build. A defensible value would require reusing Phase 5's
+  cohort-matched executable-return machinery against the follower's
+  specific entry, which is deferred rather than approximated -- honest
+  null-when-unavailable, consistent with Phase 5's `risk_caps` always
+  `UNKNOWN` and Phase 6's nullable `wallet_balance`.
+- persistence: reused the exact F5-05 idempotent pattern (`INSERT ...
+  ON CONFLICT DO NOTHING` + re-select-within-transaction) for both new
+  tables (`lead_follow_observations`, `directional_edges`), with
+  `config_hash` bound into the edge's own unique identity so a changed
+  `GraphRunConfig` (different `max_lag`/`min_observations`/
+  `q_value_threshold`) produces new rows rather than colliding with a
+  prior run's.
+- migration: `0025_phase7_alpha_ancestry_graph.py`, additive on top of
+  `0024` (never rewriting it), with the same argus_research/
+  argus_ingest/argus_executor GRANT pattern every prior phase uses.
+  `tests/unit/test_phase6_p6_18_migration_and_regression.py::
+  test_alembic_has_exactly_one_head_and_it_is_0024` hardcoded `0024` as
+  THE alembic head -- now that `0025` legitimately supersedes it, that
+  assertion was updated to check "exactly one head" without hardcoding
+  a specific revision, preserving its real regression purpose (the
+  migration graph never branches) without needing an edit on every
+  future phase.
+- CLI: `argus graph report` (Typer sub-app `graph`), following the
+  same JSON-report pattern as `argus copyability report`/`argus
+  executor readiness`.
+- validation: `uv run pytest -q` -> 1110 passed, 347 skipped (0
+  failed); `uv run ruff check .` and `uv run ruff format --check .`
+  clean; `uv run mypy src` clean (175 source files); `uv run alembic
+  heads` -> single head `0025`. New tests: 16 unit
+  (`test_phase7_graph_stats.py`), 12 unit (`test_phase7_lead_follow.py`),
+  4 integration (`test_phase7_graph_persistence_and_report.py`,
+  DB-backed, SKIP cleanly with no reachable Postgres in this sandbox --
+  same `admin_engine`-gated pattern every prior phase's DB-backed test
+  uses).
+- next: proceed to Phase 8 (CONVERGENCE + NEGATIVE EVIDENCE).
+- git_commit: (recorded with this phase's own work)
