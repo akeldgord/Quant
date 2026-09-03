@@ -12,7 +12,7 @@ sections 65-84 (primarily 67-84), per orchestrator instruction
 is claimed anywhere in this document -- only the orchestrator's own
 independent audit may approve Phase 6 or authorize Phase 6.5/7.
 STATUS: PASS_WITH_DISCLOSED_ENVIRONMENTAL_DEFERRAL
-GIT_COMMIT: PLACEHOLDER_FILLED_IN_SECOND_COMMIT
+GIT_COMMIT: cdba30bd8f60ce68c56210995d0df868de286a60
 
 Instruction: `argus-phase-6-001`, ACTIVE at submission.
 
