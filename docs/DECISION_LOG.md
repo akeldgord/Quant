@@ -3523,3 +3523,162 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   `admin_engine`-gated pattern every prior phase's DB-backed test uses).
 - next: proceed to Phase 11 (PREDICT INFORMED ORDER FLOW).
 - git_commit: (recorded with this phase's own work)
+
+### 2026-09-03 — Phase 11 (PREDICT INFORMED ORDER FLOW): 4 baselines + 3 models, strict temporal validation, honest INSUFFICIENT_SAMPLE gate
+
+- decision: build MASTER_SPEC.md PHASE 11 exactly as its own frozen
+  text specifies -- P(elite wallet enters within 5m/15m/30m/1h),
+  4 named baselines (random/base rate, token momentum only, wallet
+  history only, graph + token state) and 3 named models (logistic
+  regression, regularized logistic regression, gradient-boosted trees),
+  under strict temporal (never random) validation. "Do not build a
+  neural network until simpler models are convincingly beaten out of
+  sample" -- none of the 7 model families is one. "Only begin with
+  adequate clean prospective sample" -- implemented as an explicit,
+  disclosed sample-size/class-balance gate rather than a vague
+  aspiration: a (horizon, model family) combination whose
+  feature-filtered, temporally-split train/test population does not
+  contain at least `--min-class-count` of EACH label class in BOTH
+  splits is recorded as `INSUFFICIENT_SAMPLE` with every metric `NULL`
+  -- never a number fit or evaluated on too little (or single-class)
+  data. This mirrors the project's dominant honest-null ethos
+  established since Phase 3's `sample_gate_reason`.
+- new dependency: `scikit-learn>=1.4,<2.0` (added via `uv add`,
+  installed `scikit-learn==1.9.0` with its `numpy`/`scipy` transitive
+  deps) -- the first numerical/ML dependency in this project. AUC-ROC,
+  log-loss, and gradient-boosted trees are correctness-critical enough
+  that a mature, widely-audited library is the honest choice over a
+  hand-rolled implementation, a deliberate departure from every prior
+  phase's preference for small hand-rolled statistics.
+- observation population + labels (`argus.prediction.labels`): an
+  "observation" is a real, non-elite tracked-wallet entry (Phase 7's
+  own `load_wallet_token_entries`) -- entries by a wallet already
+  ELITE (Phase 3's `LIVE_ELIGIBLE_CANDIDATE_TIERS` = tier A/S, reused
+  unchanged via `argus.prediction.elite.ELITE_TIERS`) AT ITS OWN ENTRY
+  TIME are excluded, since predicting "does an already-elite wallet's
+  own entry count as an elite entry" is circular. The label at each
+  horizon is whether ANY OTHER wallet, itself elite AT ITS OWN ENTRY
+  TIME, enters the same token strictly after (never at-or-before) this
+  entry and within the horizon deadline. `tier_at_entry` comes from a
+  NEW point-in-time lookup over `wallet_tier_history`
+  (`argus.prediction.loaders.tier_at`), extending
+  `argus.copyability.identity.known_by_cutoff` (M1, established Phase
+  5) to that table for the first time: a transition is only "known" at
+  a wallet's own entry moment if it was both effective
+  (`transitioned_at`) and recorded (`created_at`) by then -- a
+  transition recorded after the fact but backdated to look earlier
+  must never leak a wallet's LATER promotion into an EARLIER
+  observation's label.
+- features (`argus.prediction.features`): one unified `RawFeatures` /
+  `build_feature_dict()` superset, with each baseline/model selecting
+  only its own named subset via `select_features()` -- which returns
+  `None` (dropping that row for that specific feature set, never
+  imputing a value) if any named feature is missing. Token
+  market-cap/liquidity/age buckets reuse Phase 9's own
+  `argus.counterfactual.buckets` fixed edges unchanged; token momentum
+  is a new backward-looking window (default 1 hour before entry) built
+  by reusing `argus.counterfactual.matching.compute_forward_return` in
+  reverse (prior price -> entry price, the same % formula Phase 9 uses
+  forward); wallet-history features reuse Phase 3's
+  `wallet_score_snapshots.component_values` (`selection_alpha`,
+  `consistency`, `forward_information`) via a new point-in-time
+  `wallet_fingerprint_at()` lookup (same `known_by_cutoff` pattern
+  `argus.counterfactual.loaders.load_latest_exit_skill` already
+  established for the same table); the graph feature reuses Phase 9's
+  own `wallet_specialist_scores.discovery_specialist_score` computed
+  ONCE at the overall run cutoff and reused for every observation
+  regardless of its individual `entered_at` -- a disclosed scope
+  simplification, consistent with how Phase 10 reused Phase 9's output
+  wholesale rather than re-deriving it per observation.
+- the 7 model families
+  (`argus.domain.order_flow_prediction_runs.MODEL_FAMILIES`): the 3
+  single-feature-set baselines (token momentum / wallet history /
+  graph+token-state) are all unregularized logistic regression on
+  their own named subset -- baselines FOR FEATURE VALUE (does this
+  group of signals alone predict anything), not a second, competing
+  regularization scheme; "logistic regression" vs "regularized models"
+  is reserved for the two full-feature-set model entries. "Random/base
+  rate" is the TRAINING split's own positive rate, predicted
+  identically for every test row -- deterministic and CORE-004
+  reproducible, never a literal coin flip that would make an exact
+  replay of the same run produce a different score.
+  `argus.prediction.models` wraps `sklearn.linear_model.
+  LogisticRegression` (C=1e6 for "unregularized", C=1.0 L2 for
+  "regularized", `StandardScaler` fit ONLY on the training split --
+  fitting it on combined train+test would leak test-set distribution
+  information into the transform) and
+  `sklearn.ensemble.GradientBoostingClassifier` (100 trees, max depth
+  3, fixed `random_state=0` for CORE-004 reproducibility; no scaling
+  needed -- tree splits are threshold-based and scale-invariant).
+- validation (`argus.prediction.validation`): strict chronological
+  split -- train on strictly earlier observations, test on strictly
+  later ones, MASTER_SPEC's own explicit rule against random
+  train/test splitting when overlapping forward-return windows could
+  leak information. `has_adequate_sample()` is the sample gate itself:
+  both splits must contain at least `min_class_count` of EACH class.
+- metrics (`argus.prediction.evaluation`): AUC-ROC, log-loss, Brier
+  score, accuracy-at-threshold via `sklearn.metrics`, with an explicit
+  guard for the one real edge case a small temporally-split test set
+  produces -- AUC-ROC is mathematically undefined with only one class
+  present in the test labels, so it is `None` there rather than let
+  sklearn raise or return a degenerate number; `labels=[0, 1]` is
+  passed explicitly to `log_loss` for the same single-class-test-split
+  reason.
+- persistence: `order_flow_prediction_runs`
+  (migration `0029_phase11_predict_informed_order_flow.py`, additive on
+  top of `0028`), one row per (horizon, model_family, as_of,
+  algorithm_version, config_hash) -- the exact F5-05 idempotent
+  `INSERT ... ON CONFLICT DO NOTHING` + re-select pattern reused
+  unchanged. A DB check constraint enforces the honesty rule at the
+  schema level, not just in application code: every metric column MUST
+  be `NULL` when `status = 'INSUFFICIENT_SAMPLE'`, and non-`NULL`
+  otherwise -- an `EVALUATED` row with a missing metric, or an
+  `INSUFFICIENT_SAMPLE` row with a fabricated one, cannot physically be
+  written to this table. `feature_set` (JSONB) always records the
+  exact named feature list actually used for that row (CORE-004
+  reproducibility) -- `[]` for `BASELINE_RANDOM`, which uses none.
+- orchestration:
+  `argus.prediction.service.compute_and_persist_phase11` computes
+  Phase 9's own full evidence cascade first (reusing
+  `compute_and_persist_phase9` unchanged, itself cascading through
+  Phase 8 and Phase 7) for the discovery-specialist graph feature,
+  then evaluates all 7 model families x 4 horizons (28 combinations
+  per run).
+- CLI: `argus predict report` (Typer sub-app `predict`), with
+  `--train-fraction` and `--min-class-count` operator-tunable, JSON
+  output nested by horizon then model family, always including a
+  `limitations` disclosure covering the sample gate, the graph
+  feature's single-cutoff scope simplification, the fixed 1-hour
+  momentum window, the deterministic base-rate baseline, and the
+  no-neural-network rule.
+- validation: `uv run pytest -q` -> 1227 passed, 362 skipped (0
+  failed); `uv run ruff check .` and `uv run ruff format --check .`
+  clean; `uv run mypy src` clean (217 source files); `uv run alembic
+  heads` -> single head `0029`. New tests: 40 unit across 6 files
+  (`test_phase11_elite.py`, `test_phase11_labels.py`,
+  `test_phase11_features.py`, `test_phase11_validation.py`,
+  `test_phase11_evaluation.py`, `test_phase11_models.py`), 4
+  integration
+  (`test_phase11_prediction_persistence_and_report.py`, DB-backed,
+  including a deliberately class-balanced fixture proving
+  `BASELINE_RANDOM` reaches `EVALUATED` end to end while the
+  feature-dependent families honestly report `INSUFFICIENT_SAMPLE` on
+  the same minimal evidence -- SKIP cleanly with no reachable Postgres
+  in this sandbox, same `admin_engine`-gated pattern every prior
+  phase's DB-backed test uses).
+- scope limitations (disclosed, not fabricated): the discovery
+  specialist graph feature is computed once per run at the overall
+  cutoff, not per observation's own `entered_at` (see above); token
+  momentum uses a single fixed backward-looking window, not a richer
+  multi-window feature; no live sandbox evidence exists yet to exercise
+  the 3 feature-dependent baselines or the 3 real models end to end --
+  that requires real `token_market_snapshots`/`wallet_score_snapshots`
+  history this sandbox does not have, exactly the same gap every prior
+  phase's report commands already disclose.
+- this completes every MASTER_SPEC.md phase 0-11 except Phase 6.5
+  (HUMAN-AUTHORIZED MAINNET CANARY), which MASTER_SPEC itself states is
+  "NOT automatically performed by the coding agent" and remains
+  permanently human-only.
+- next: none remaining under the coding agent's own authorization;
+  Phase 6.5 stays human-only. Awaiting the user's own audit.
+- git_commit: (recorded with this phase's own work)

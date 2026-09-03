@@ -81,6 +81,11 @@ counterfactual_app = typer.Typer(
     help="Counterfactual alpha + entry/discovery/validation/exit specialist reports (Phase 9)",
 )
 app.add_typer(counterfactual_app, name="counterfactual")
+predict_app = typer.Typer(
+    add_completion=False,
+    help="Predict-informed-order-flow model evaluation reports (Phase 11)",
+)
+app.add_typer(predict_app, name="predict")
 
 console = Console()
 
@@ -2727,6 +2732,206 @@ def synthetic_report(
                         "entry/exit prices use a nearest-snapshot-within-tolerance lookup over "
                         "token_market_snapshots -- a trade with no sufficiently fresh snapshot "
                         "is recorded as a failure, never fabricated",
+                    ],
+                }
+        finally:
+            await engine.dispose()
+
+        console.print(json.dumps(report, indent=2, default=str))
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
+@predict_app.command("report")
+def predict_report(
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO-8601 cutoff (default: now). Point-in-time honest."
+    ),
+    max_lag_minutes: int = typer.Option(
+        60, "--max-lag-minutes", help="Same Phase 7/8/9 leader-to-follower lag window."
+    ),
+    train_fraction: str = typer.Option(
+        "0.7", "--train-fraction", help="Chronological train-split fraction (strictly (0, 1))."
+    ),
+    min_class_count: int = typer.Option(
+        20,
+        "--min-class-count",
+        help="Minimum positives AND negatives required in BOTH the train and test split.",
+    ),
+) -> None:
+    """Print the MASTER_SPEC.md Phase 11 (PREDICT INFORMED ORDER FLOW)
+    per-(horizon, model family) evaluation report -- P(elite wallet enters
+    within 5m/15m/30m/1h), 4 baselines + 3 models, strict temporal (never
+    random) validation. A combination without adequate clean prospective
+    sample is reported honestly as INSUFFICIENT_SAMPLE with every metric
+    null, never a number trained on too little data."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from argus.config import resolve_production_git_commit
+    from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
+    from argus.counterfactual.service import Phase9RunConfig
+    from argus.domain.order_flow_prediction_runs import MODEL_FAMILIES
+    from argus.graph.service import GraphRunConfig
+    from argus.prediction.service import (
+        ALGORITHM_VERSION,
+        BUILD_HASH,
+        Phase11RunConfig,
+        compute_and_persist_phase11,
+    )
+
+    as_of_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+    graph_config = GraphRunConfig(
+        max_lag=timedelta(minutes=max_lag_minutes),
+        min_observations=3,
+        q_value_threshold=Decimal("0.05"),
+    )
+    phase8_config = Phase8RunConfig(
+        window=timedelta(minutes=30),
+        unknown_independence_weight=Decimal("0.75"),
+        q_value_threshold=Decimal("0.05"),
+        min_observations=3,
+        strong_surprisal_threshold=Decimal("3.0"),
+    )
+    phase9_config = Phase9RunConfig(
+        horizons=(timedelta(minutes=5), timedelta(minutes=15), timedelta(minutes=30)),
+        max_price_staleness=timedelta(minutes=30),
+        max_control_tokens=50,
+        entry_specialist_horizon=timedelta(minutes=5),
+        discovery_min_observations=3,
+        discovery_q_value_threshold=Decimal("0.05"),
+        follower_influx_window=timedelta(minutes=max_lag_minutes),
+        exit_after_influx_window=timedelta(minutes=max_lag_minutes),
+        predation_influx_normalization_cap=Decimal(10),
+        exit_convergence_window=timedelta(minutes=30),
+        exit_convergence_unknown_independence_weight=Decimal("0.75"),
+        min_exit_specialist_score=Decimal(70),
+    )
+    config = Phase11RunConfig(
+        horizons=(
+            timedelta(minutes=5),
+            timedelta(minutes=15),
+            timedelta(minutes=30),
+            timedelta(hours=1),
+        ),
+        train_fraction=Decimal(train_fraction),
+        min_class_count=min_class_count,
+        max_price_staleness=timedelta(minutes=30),
+        token_momentum_window=timedelta(hours=1),
+        classification_threshold=Decimal("0.5"),
+    )
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            git_commit = resolve_production_git_commit(allow_unverified=True)
+            async with sessionmaker() as session, session.begin():
+                result = await compute_and_persist_phase11(
+                    session,
+                    cutoff=as_of_dt,
+                    graph_config=graph_config,
+                    phase8_config=phase8_config,
+                    phase9_config=phase9_config,
+                    config=config,
+                    computed_at=datetime.now(UTC),
+                )
+
+                from sqlalchemy import select
+
+                from argus.domain.order_flow_prediction_runs import OrderFlowPredictionRun
+
+                rows = (
+                    (
+                        await session.execute(
+                            select(OrderFlowPredictionRun).where(
+                                OrderFlowPredictionRun.as_of == as_of_dt,
+                                OrderFlowPredictionRun.algorithm_version == ALGORITHM_VERSION,
+                                OrderFlowPredictionRun.config_hash == config.config_hash(),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                rows_by_key = {(r.horizon_seconds, r.model_family): r for r in rows}
+
+                report = {
+                    "as_of": result.as_of.isoformat(),
+                    "algorithm_version": ALGORITHM_VERSION,
+                    "config_hash": config.config_hash(),
+                    "build_hash": BUILD_HASH,
+                    "git_commit": git_commit,
+                    "run_count": result.run_count,
+                    "evaluated_count": result.evaluated_count,
+                    "insufficient_sample_count": result.insufficient_sample_count,
+                    "horizons": {
+                        str(int(horizon.total_seconds())): {
+                            model_family: (
+                                {
+                                    "status": row.status,
+                                    "train_sample_size": row.train_sample_size,
+                                    "test_sample_size": row.test_sample_size,
+                                    "positive_rate_train": (
+                                        str(row.positive_rate_train)
+                                        if row.positive_rate_train is not None
+                                        else None
+                                    ),
+                                    "positive_rate_test": (
+                                        str(row.positive_rate_test)
+                                        if row.positive_rate_test is not None
+                                        else None
+                                    ),
+                                    "auc_roc": str(row.auc_roc)
+                                    if row.auc_roc is not None
+                                    else None,
+                                    "log_loss": (
+                                        str(row.log_loss) if row.log_loss is not None else None
+                                    ),
+                                    "brier_score": (
+                                        str(row.brier_score)
+                                        if row.brier_score is not None
+                                        else None
+                                    ),
+                                    "accuracy_at_threshold": (
+                                        str(row.accuracy_at_threshold)
+                                        if row.accuracy_at_threshold is not None
+                                        else None
+                                    ),
+                                    "feature_set": row.feature_set,
+                                }
+                                if (
+                                    row := rows_by_key.get(
+                                        (int(horizon.total_seconds()), model_family)
+                                    )
+                                )
+                                is not None
+                                else None
+                            )
+                            for model_family in MODEL_FAMILIES
+                        }
+                        for horizon in config.horizons
+                    },
+                    "limitations": [
+                        "a horizon x model-family combination without adequate clean prospective "
+                        "sample (fewer than --min-class-count positives OR negatives in either "
+                        "split) is reported as INSUFFICIENT_SAMPLE with every metric null, never "
+                        "a number trained on too little or single-class data",
+                        "the discovery-specialist graph feature is Phase 9's own "
+                        "discovery_specialist_score computed ONCE at this run's overall cutoff, "
+                        "reused for every observation regardless of its individual entered_at -- "
+                        "a disclosed scope simplification, consistent with how Phase 10 reused "
+                        "Phase 9's own output",
+                        "token momentum is a single backward-looking window (--token-momentum "
+                        "fixed at 1 hour before entry) over token_market_snapshots, not a richer "
+                        "multi-window momentum feature",
+                        "'random/base rate' is the deterministic training-split positive rate "
+                        "predicted for every test row, not a literal random coin flip -- CORE-004 "
+                        "replay of an identical run must always reproduce an identical score",
+                        "never a neural network at this stage (MASTER_SPEC's own explicit "
+                        "instruction: 'Do not build a neural network until simpler models are "
+                        "convincingly beaten out of sample')",
                     ],
                 }
         finally:
