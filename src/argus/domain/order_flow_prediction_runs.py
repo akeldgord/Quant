@@ -86,6 +86,19 @@ class OrderFlowPredictionRun(Base):
             "train_sample_size >= 0 AND test_sample_size >= 0",
             name="ck_order_flow_prediction_runs_sample_sizes_nonneg",
         ),
+        CheckConstraint("purged_count >= 0", name="ck_order_flow_prediction_runs_purged_nonneg"),
+        CheckConstraint(
+            "embargo_seconds IS NULL OR embargo_seconds > 0",
+            name="ck_order_flow_prediction_runs_embargo_positive",
+        ),
+        CheckConstraint(
+            "(train_range_start IS NULL) = (train_range_end IS NULL)",
+            name="ck_order_flow_prediction_runs_train_range_consistency",
+        ),
+        CheckConstraint(
+            "(test_range_start IS NULL) = (test_range_end IS NULL)",
+            name="ck_order_flow_prediction_runs_test_range_consistency",
+        ),
         CheckConstraint(
             "auc_roc IS NULL OR (auc_roc >= 0 AND auc_roc <= 1)",
             name="ck_order_flow_prediction_runs_auc_range",
@@ -130,6 +143,24 @@ class OrderFlowPredictionRun(Base):
     # The exact list of feature names actually used, for reproducibility
     # (CORE-004) -- baselines and models use different, disclosed subsets.
     feature_set: Mapped[list] = mapped_column(JSONB, nullable=False)
+
+    # FSR-11: the deterministic purged+embargoed split's own required
+    # metadata -- NULL only when no candidate rows existed at all for this
+    # horizon (no split was ever attempted); always populated once a split
+    # was attempted, even for an INSUFFICIENT_SAMPLE outcome (FSR-11's own
+    # "class/sample sufficiency is evaluated after purge/embargo, not
+    # before").
+    split_boundary: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    embargo_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    purged_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    train_range_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    train_range_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    test_range_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    test_range_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)

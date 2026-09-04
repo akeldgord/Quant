@@ -2921,6 +2921,29 @@ def predict_report(
                                         else None
                                     ),
                                     "feature_set": row.feature_set,
+                                    "split_boundary": (
+                                        row.split_boundary.isoformat()
+                                        if row.split_boundary is not None
+                                        else None
+                                    ),
+                                    "embargo_seconds": row.embargo_seconds,
+                                    "purged_count": row.purged_count,
+                                    "train_range": (
+                                        [
+                                            row.train_range_start.isoformat(),
+                                            row.train_range_end.isoformat(),
+                                        ]
+                                        if row.train_range_start is not None
+                                        else None
+                                    ),
+                                    "test_range": (
+                                        [
+                                            row.test_range_start.isoformat(),
+                                            row.test_range_end.isoformat(),
+                                        ]
+                                        if row.test_range_start is not None
+                                        else None
+                                    ),
                                 }
                                 if (
                                     row := rows_by_key.get(
@@ -2939,11 +2962,19 @@ def predict_report(
                         "sample (fewer than --min-class-count positives OR negatives in either "
                         "split) is reported as INSUFFICIENT_SAMPLE with every metric null, never "
                         "a number trained on too little or single-class data",
-                        "the discovery-specialist graph feature is Phase 9's own "
-                        "discovery_specialist_score computed ONCE at this run's overall cutoff, "
-                        "reused for every observation regardless of its individual entered_at -- "
-                        "a disclosed scope simplification, consistent with how Phase 10 reused "
-                        "Phase 9's own output",
+                        "FSR-09: every feature (including the discovery-specialist graph feature, "
+                        "Phase 9's own discovery_specialist_score) is that observation's own "
+                        "AS-OF value known AT ITS OWN entered_at, never a value computed once at "
+                        "the run's overall cutoff and reused backward",
+                        "FSR-10: a horizon whose full label window is not yet observable as of "
+                        "cutoff (entered_at + horizon > cutoff) is right-censored -- excluded "
+                        "from that horizon's population entirely, never a fabricated negative",
+                        "FSR-11: train/test uses a deterministic purged+embargoed split per "
+                        "horizon, not a plain chronological split -- a row whose own label window "
+                        "crosses the split boundary is purged (present in neither split), and the "
+                        "earliest test row is held back by an embargo of at least that horizon's "
+                        "own length past the boundary (see each result's own split_boundary/"
+                        "embargo_seconds/purged_count/train_range/test_range)",
                         "token momentum is a single backward-looking window (--token-momentum "
                         "fixed at 1 hour before entry) over token_market_snapshots, not a richer "
                         "multi-window momentum feature",

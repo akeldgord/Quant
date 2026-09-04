@@ -70,7 +70,7 @@ from argus.prediction.models import (
     predict_base_rate,
 )
 from argus.prediction.persistence import get_or_create_order_flow_prediction_run
-from argus.prediction.validation import has_adequate_sample, temporal_train_test_split
+from argus.prediction.validation import has_adequate_sample, purged_embargoed_split
 
 ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v1"
 
@@ -156,6 +156,11 @@ async def _persist_insufficient_sample(
     feature_set: tuple[str, ...],
     y_train: list[bool],
     y_test: list[bool],
+    split_boundary: datetime | None,
+    embargo: timedelta | None,
+    purged_count: int,
+    train_range: tuple[datetime, datetime] | None,
+    test_range: tuple[datetime, datetime] | None,
     cutoff: datetime,
     config_hash: str,
     computed_at: datetime,
@@ -174,6 +179,11 @@ async def _persist_insufficient_sample(
         brier_score=None,
         accuracy_at_threshold=None,
         feature_set=list(feature_set),
+        split_boundary=split_boundary,
+        embargo=embargo,
+        purged_count=purged_count,
+        train_range=train_range,
+        test_range=test_range,
         as_of=cutoff,
         algorithm_version=ALGORITHM_VERSION,
         config_hash=config_hash,
@@ -193,21 +203,33 @@ async def _run_model_family(
     computed_at: datetime,
 ) -> str:
     config_hash = config.config_hash()
+    horizon = timedelta(seconds=horizon_seconds)
 
+    # FSR-10: an observation whose label at THIS horizon is right-censored
+    # (``None`` -- the label window is not yet fully observable as of
+    # cutoff) is excluded from this horizon's population entirely, never
+    # coerced to False.
     if model_family == MODEL_BASELINE_RANDOM:
         feature_set: tuple[str, ...] = ()
-        rows: list[tuple[LabeledObservation, list[float]]] = [(obs, []) for obs in observations]
+        rows: list[tuple[LabeledObservation, list[float], bool]] = [
+            (obs, [], label)
+            for obs in observations
+            if (label := obs.labels[horizon_seconds]) is not None
+        ]
     else:
         feature_set = _MODEL_FEATURE_SETS[model_family]
         rows = []
         for obs in observations:
+            label = obs.labels[horizon_seconds]
+            if label is None:
+                continue
             feature_dict = feature_dicts.get((obs.wallet_id, obs.token_id, obs.entered_at))
             if feature_dict is None:
                 continue
             selected = select_features(feature_dict, feature_set)
             if selected is None:
                 continue
-            rows.append((obs, selected))
+            rows.append((obs, selected, label))
 
     if not rows:
         await _persist_insufficient_sample(
@@ -217,17 +239,28 @@ async def _run_model_family(
             feature_set=feature_set,
             y_train=[],
             y_test=[],
+            split_boundary=None,
+            embargo=None,
+            purged_count=0,
+            train_range=None,
+            test_range=None,
             cutoff=cutoff,
             config_hash=config_hash,
             computed_at=computed_at,
         )
         return STATUS_INSUFFICIENT_SAMPLE
 
-    timestamps = [obs.entered_at for obs, _ in rows]
-    split = temporal_train_test_split(timestamps, train_fraction=config.train_fraction)
+    # FSR-11: a deterministic purged + embargoed split, never a plain
+    # chronological one -- a row whose own complete label window crosses
+    # the boundary is purged from training, and the earliest test row is
+    # held back by at least this horizon's own length past the boundary.
+    timestamps = [obs.entered_at for obs, _, _ in rows]
+    split = purged_embargoed_split(
+        timestamps, horizon=horizon, train_fraction=config.train_fraction
+    )
 
-    y_all = [obs.labels[horizon_seconds] for obs, _ in rows]
-    x_all = [features for _, features in rows]
+    y_all = [label for _, _, label in rows]
+    x_all = [features for _, features, _ in rows]
 
     y_train = [y_all[i] for i in split.train_indices]
     y_test = [y_all[i] for i in split.test_indices]
@@ -242,6 +275,11 @@ async def _run_model_family(
             feature_set=feature_set,
             y_train=y_train,
             y_test=y_test,
+            split_boundary=split.boundary,
+            embargo=split.embargo,
+            purged_count=split.purged_count,
+            train_range=split.train_range,
+            test_range=split.test_range,
             cutoff=cutoff,
             config_hash=config_hash,
             computed_at=computed_at,
@@ -275,6 +313,11 @@ async def _run_model_family(
         brier_score=metrics.brier_score,
         accuracy_at_threshold=metrics.accuracy_at_threshold,
         feature_set=list(feature_set),
+        split_boundary=split.boundary,
+        embargo=split.embargo,
+        purged_count=split.purged_count,
+        train_range=split.train_range,
+        test_range=split.test_range,
         as_of=cutoff,
         algorithm_version=ALGORITHM_VERSION,
         config_hash=config_hash,
@@ -304,7 +347,7 @@ async def compute_and_persist_phase11(
 
     tiered_entries = await load_tiered_entries(session, cutoff=cutoff)
     observations = build_labeled_observations(
-        tiered_entries, horizons=config.horizons, elite_tiers=ELITE_TIERS
+        tiered_entries, horizons=config.horizons, elite_tiers=ELITE_TIERS, cutoff=cutoff
     )
 
     token_ids = {o.token_id for o in observations}
@@ -317,16 +360,39 @@ async def compute_and_persist_phase11(
 
     wallet_ids = {o.wallet_id for o in observations}
     fingerprints_by_wallet = await load_wallet_fingerprints(session, wallet_ids=wallet_ids)
-    discovery_effect_size_by_wallet = await load_discovery_effect_size_by_wallet(
-        session,
-        cutoff=cutoff,
-        algorithm_version=PHASE9_ALGORITHM_VERSION,
-        config_hash=phase9_config.config_hash(),
-    )
+
+    # FSR-09: the discovery-specialist graph feature must be each
+    # observation's own AS-OF value known AT ITS OWN ``entered_at``, never
+    # a value computed once at the final run cutoff and reused backward.
+    # Phase 9 only ever persists one snapshot per cutoff it is invoked
+    # with, so every DISTINCT decision time actually needed here is
+    # recomputed through Phase 9's own idempotent cascade (the same
+    # disclosed O(distinct decision times) pattern FSR-08 established for
+    # ``argus.synthetic.service``) and then queried back.
+    phase9_config_hash = phase9_config.config_hash()
+    decision_times = {o.entered_at for o in observations}
+    discovery_effect_size_by_time: dict[datetime, dict[uuid.UUID, Decimal]] = {}
+    for decision_time in decision_times:
+        if decision_time != cutoff:
+            await compute_and_persist_phase9(
+                session,
+                cutoff=decision_time,
+                graph_config=graph_config,
+                phase8_config=phase8_config,
+                config=phase9_config,
+                computed_at=computed_at,
+            )
+        discovery_effect_size_by_time[decision_time] = await load_discovery_effect_size_by_wallet(
+            session,
+            cutoff=decision_time,
+            algorithm_version=PHASE9_ALGORITHM_VERSION,
+            config_hash=phase9_config_hash,
+        )
 
     max_staleness_seconds = config.max_price_staleness.total_seconds()
     feature_dicts: dict[tuple[uuid.UUID, uuid.UUID, datetime], dict[str, float | None]] = {}
     for obs in observations:
+        discovery_effect_size_by_wallet = discovery_effect_size_by_time.get(obs.entered_at, {})
         raw = await compute_raw_features(
             session,
             wallet_id=obs.wallet_id,

@@ -25,10 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.copyability.identity import known_by_cutoff
 from argus.counterfactual.buckets import liquidity_bucket, market_cap_bucket, token_age_bucket
-from argus.counterfactual.loaders import (
-    load_nearest_token_market_snapshot,
-    load_token_market_snapshot_at_or_before,
-)
+from argus.counterfactual.loaders import load_token_market_snapshot_at_or_before
 from argus.counterfactual.matching import compute_forward_return
 from argus.domain.tokens import Token
 from argus.domain.wallet_score_snapshots import WalletScoreSnapshot
@@ -150,7 +147,11 @@ async def load_discovery_effect_size_by_wallet(
     session: AsyncSession, *, cutoff: datetime, algorithm_version: str, config_hash: str
 ) -> dict[uuid.UUID, Decimal]:
     """Phase 9's own already-computed ``discovery_specialist_score`` per
-    wallet at this run's cutoff -- reused unchanged, never recomputed."""
+    wallet, AS OF ``cutoff`` -- reused unchanged, never recomputed. FSR-09:
+    callers must invoke this once per DISTINCT observation decision time
+    actually needed (never once at the final run cutoff, reused backward
+    for every observation) -- the same per-decision-time pattern FSR-08
+    established for ``argus.synthetic.service``."""
     rows = (
         (
             await session.execute(
@@ -171,6 +172,21 @@ async def load_discovery_effect_size_by_wallet(
     }
 
 
+def _snapshot_price_at_or_before(
+    snapshot, *, target: datetime, max_staleness_seconds: float
+) -> Decimal | None:
+    """FSR-09: honors the same ``max_staleness_seconds`` freshness bound
+    the market_cap/liquidity buckets already apply, but NEVER looks past
+    ``target`` -- a nearest-snapshot lookup (before OR after) is forbidden
+    here since a closer post-observation price would leak a future price
+    as though it were known at ``target``."""
+    if snapshot is None or snapshot.price_usd is None:
+        return None
+    if (target - snapshot.observed_at).total_seconds() > max_staleness_seconds:
+        return None
+    return snapshot.price_usd
+
+
 async def compute_raw_features(
     session: AsyncSession,
     *,
@@ -183,6 +199,11 @@ async def compute_raw_features(
     max_staleness_seconds: float,
     momentum_window: timedelta,
 ) -> RawFeatures:
+    """``discovery_effect_size_by_wallet`` must already be the map for
+    THIS OBSERVATION's own ``entered_at`` decision time (FSR-09) -- the
+    caller (``argus.prediction.service``) is responsible for selecting the
+    correct per-decision-time slice, never a single map reused across
+    every observation's own entry time."""
     token = token_by_id.get(token_id)
     market_cap_b: str | None = None
     liquidity_b: str | None = None
@@ -206,27 +227,24 @@ async def compute_raw_features(
         if age >= timedelta(0):
             age_b = token_age_bucket(age)
 
-        entry_price_snapshot = await load_nearest_token_market_snapshot(
-            session,
-            token_id=token_id,
-            target=entered_at,
-            max_staleness_seconds=max_staleness_seconds,
+        # FSR-09: both price points are the latest snapshot AT OR BEFORE
+        # their own respective target time -- never the "nearest" snapshot
+        # (which could be strictly after ``entered_at`` itself).
+        entry_price_snapshot = await load_token_market_snapshot_at_or_before(
+            session, token_id=token_id, at=entered_at
         )
-        prior_price_snapshot = await load_nearest_token_market_snapshot(
-            session,
-            token_id=token_id,
-            target=entered_at - momentum_window,
-            max_staleness_seconds=max_staleness_seconds,
+        entry_price = _snapshot_price_at_or_before(
+            entry_price_snapshot, target=entered_at, max_staleness_seconds=max_staleness_seconds
         )
-        if (
-            entry_price_snapshot is not None
-            and prior_price_snapshot is not None
-            and entry_price_snapshot.price_usd is not None
-            and prior_price_snapshot.price_usd is not None
-        ):
-            momentum_pct = compute_forward_return(
-                prior_price_snapshot.price_usd, entry_price_snapshot.price_usd
-            )
+        prior_target = entered_at - momentum_window
+        prior_price_snapshot = await load_token_market_snapshot_at_or_before(
+            session, token_id=token_id, at=prior_target
+        )
+        prior_price = _snapshot_price_at_or_before(
+            prior_price_snapshot, target=prior_target, max_staleness_seconds=max_staleness_seconds
+        )
+        if entry_price is not None and prior_price is not None:
+            momentum_pct = compute_forward_return(prior_price, entry_price)
 
     selection_alpha, consistency, forward_information = wallet_fingerprint_at(
         fingerprints_by_wallet.get(wallet_id, []), at=entered_at

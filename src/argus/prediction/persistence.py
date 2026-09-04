@@ -8,7 +8,7 @@ every phase since.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -37,6 +37,11 @@ async def get_or_create_order_flow_prediction_run(
     brier_score: Decimal | None,
     accuracy_at_threshold: Decimal | None,
     feature_set: list[str],
+    split_boundary: datetime | None,
+    embargo: timedelta | None,
+    purged_count: int,
+    train_range: tuple[datetime, datetime] | None,
+    test_range: tuple[datetime, datetime] | None,
     as_of: datetime,
     algorithm_version: str,
     config_hash: str,
@@ -69,6 +74,13 @@ async def get_or_create_order_flow_prediction_run(
         brier_score=brier_score,
         accuracy_at_threshold=accuracy_at_threshold,
         feature_set=feature_set,
+        split_boundary=split_boundary,
+        embargo_seconds=int(embargo.total_seconds()) if embargo is not None else None,
+        purged_count=purged_count,
+        train_range_start=train_range[0] if train_range is not None else None,
+        train_range_end=train_range[1] if train_range is not None else None,
+        test_range_start=test_range[0] if test_range is not None else None,
+        test_range_end=test_range[1] if test_range is not None else None,
         as_of=as_of,
         algorithm_version=algorithm_version,
         config_hash=config_hash,
