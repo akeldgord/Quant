@@ -33,6 +33,7 @@ per-wallet probability estimate.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
 from decimal import Decimal
 from typing import Final
 
@@ -47,11 +48,19 @@ CLUSTER_UNCERTAINTY_PENALTY: Final[Decimal] = Decimal("10")
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class ClusterLinkEvidence:
-    """The subset of one ``wallet_cluster_links`` row this module needs."""
+    """The subset of one ``wallet_cluster_links`` row this module needs.
+
+    FSR-04: ``as_of``/``created_at`` carry the row's own M1 point-in-time
+    identity through unchanged -- this module's own aggregation never
+    needs them (a caller that must restrict evidence to what was known
+    by some cutoff, e.g. ``argus.convergence.independence``, filters on
+    them before calling :func:`assess_wallet_cluster_risk`)."""
 
     other_wallet_id: str
     evidence_type: str
     probability: Decimal
+    as_of: datetime
+    created_at: datetime
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

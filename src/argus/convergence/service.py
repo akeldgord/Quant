@@ -137,6 +137,7 @@ async def _compute_and_persist_convergence_events(
         weights = compute_independence_weights(
             member_wallet_ids,
             links_by_wallet,
+            cutoff=episode.window_end,
             unknown_independence_weight=config.unknown_independence_weight,
         )
         observed = estimated_independent_actors(member_wallet_ids, weights)

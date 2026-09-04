@@ -20,9 +20,11 @@ link dominating can undercount rather than converge to ~1.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Final
 
+from argus.copyability.identity import known_by_cutoff
 from argus.wallets.clustering import ClusterLinkEvidence, assess_wallet_cluster_risk
 
 ALGORITHM_VERSION: Final[str] = "convergence_independence_v1"
@@ -43,6 +45,7 @@ def compute_independence_weights(
     group_wallet_ids: list[uuid.UUID],
     links_by_wallet: dict[uuid.UUID, list[ClusterLinkEvidence]],
     *,
+    cutoff: datetime,
     unknown_independence_weight: Decimal = DEFAULT_UNKNOWN_INDEPENDENCE_WEIGHT,
 ) -> dict[uuid.UUID, Decimal]:
     """For each wallet in ``group_wallet_ids``, its contribution (0, 1]
@@ -53,7 +56,15 @@ def compute_independence_weights(
     evidence to links whose OTHER endpoint is also a member of
     ``group_wallet_ids``, since a link to a wallet that did not converge
     on this token carries no information about THIS group's own
-    independence."""
+    independence.
+
+    FSR-04: ``cutoff`` is this specific group's OWN decision time (e.g. a
+    convergence episode's ``window_end``, never a single run-wide
+    cutoff) -- a cluster-link estimate not yet known by ``cutoff`` (per
+    M1's ``known_by_cutoff``, using the link's own ``as_of``/
+    ``created_at``) is excluded exactly like any other not-yet-known
+    evidence, never used just because it was loaded into the same
+    run-wide ``links_by_wallet`` map."""
     group_ids_as_text = {str(w) for w in group_wallet_ids}
     weights: dict[uuid.UUID, Decimal] = {}
     for wallet_id in group_wallet_ids:
@@ -61,6 +72,7 @@ def compute_independence_weights(
             link
             for link in links_by_wallet.get(wallet_id, [])
             if link.other_wallet_id in group_ids_as_text
+            and known_by_cutoff(created_at=link.created_at, effective_at=link.as_of, cutoff=cutoff)
         ]
         assessment = assess_wallet_cluster_risk(restricted)
         weights[wallet_id] = (

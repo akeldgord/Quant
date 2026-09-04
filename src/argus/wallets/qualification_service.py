@@ -625,6 +625,8 @@ async def reconstruct_and_score_wallet(
                 ),
                 evidence_type=link.evidence_type,
                 probability=link.probability,
+                as_of=link.as_of,
+                created_at=link.created_at,
             )
             for link in link_rows
         ]

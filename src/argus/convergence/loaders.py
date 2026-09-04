@@ -28,7 +28,12 @@ async def load_cluster_links_within_group(
     no information about any group formed from within it. Safe to call
     once with the full universe of entrant wallets across many episodes;
     ``argus.convergence.independence.compute_independence_weights`` does
-    its own further per-group restriction."""
+    its own further per-group restriction. FSR-04: deliberately NOT
+    filtered by any single cutoff here -- each episode has its own
+    ``window_end`` decision time, so ``compute_independence_weights``
+    applies the M1 point-in-time filter per-episode using each link's own
+    ``as_of``/``created_at``, never a single run-wide cutoff that would
+    leak a later episode's cluster evidence into an earlier one."""
     if not wallet_ids:
         return {}
     rows = (
@@ -50,6 +55,8 @@ async def load_cluster_links_within_group(
                 other_wallet_id=str(row.wallet_b_id),
                 evidence_type=row.evidence_type,
                 probability=row.probability,
+                as_of=row.as_of,
+                created_at=row.created_at,
             )
         )
         links_by_wallet[row.wallet_b_id].append(
@@ -57,6 +64,8 @@ async def load_cluster_links_within_group(
                 other_wallet_id=str(row.wallet_a_id),
                 evidence_type=row.evidence_type,
                 probability=row.probability,
+                as_of=row.as_of,
+                created_at=row.created_at,
             )
         )
     return links_by_wallet
