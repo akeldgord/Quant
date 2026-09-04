@@ -1,0 +1,188 @@
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+RETROACTIVE_POST_BUILD_RECOVERY_CHECKPOINT — NOT A CONTEMPORANEOUS PHASE STOP
+
+A. Identity
+
+PROJECT: ARGUS
+SCOPE: Phase 11 (PREDICT INFORMED ORDER FLOW), MASTER_SPEC.md Phase 11's
+own region (P(elite wallet enters within 5m/15m/30m/1h), 4 baselines + 3
+model families, strict temporal validation). This document is NOT a
+contemporaneous per-phase orchestrator STOP -- Phase 11 was originally
+built, and is here corrected, under the human's explicit authorization
+for Claude to carry Phases 7-11 through to completion without the normal
+per-phase orchestrator STOP/audit cycle. This checkpoint does NOT claim
+a contemporaneous STOP, independent audit, or approval occurred for
+Phase 11 at build time. It exists solely to satisfy FSR-14
+(`argus-final-spec-recovery-001`, instruction section F).
+STATUS: RETROACTIVE_RECOVERY_RECORDED (not an orchestrator PASS/approval)
+GIT_COMMIT (this checkpoint's own HEAD at authoring time):
+50d96933b5ecde421300e96ce7694dfcc3b7ca62
+
+Recovery authority: `argus-final-spec-recovery-001`, items FSR-09
+(feature-timestamp leakage), FSR-10 (right-censored labels), FSR-11
+(purged+embargoed split), FSR-12 (re-evaluation on the corrected
+dataset) -- Phase 11's own full causal-dataset rebuild. `TARGET_COMMIT`
+audited as contaminated: `ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30`.
+
+B. What Phase 11 originally built (unchanged by this recovery)
+
+`src/argus/prediction/` -- the labeled-observation population (a real,
+non-elite tracked-wallet entry, labeled per horizon by whether ANY OTHER
+wallet, itself elite at its OWN entry time, enters the same token within
+that horizon), four named feature groups (token momentum, wallet
+history, graph+token state, plus the full combined set), the four
+baselines (random, token-momentum, wallet-history, graph+token-state)
+and three model families (logistic regression, regularized logistic
+regression, gradient-boosted trees), and `order_flow_prediction_runs`
+persistence. This structural build (the model families themselves, the
+metric computation, the CLI `argus predict report` command, "never a
+neural network at this stage") is UNCHANGED by this recovery, per this
+recovery's own explicit scope-lock rule ("keep the original four
+baselines and three model families unless a code change is strictly
+required to consume corrected inputs").
+
+C. The historical leak/omission this recovery repaired (FSR-09/10/11/12)
+
+Three independent, real look-ahead-bias sources existed in Phase 11's
+causal dataset construction:
+
+1. (FSR-09) The discovery-specialist graph feature
+   (`wallet_discovery_effect_size`) was Phase 9's own `discovery_
+   specialist_score` computed ONCE at the run's overall cutoff and
+   reused for every observation regardless of its own `entered_at` --
+   this was even explicitly disclosed as a known scope simplification in
+   the pre-recovery CLI report's own `limitations` list, rather than
+   fixed. Separately, the token-momentum entry/prior price lookups used
+   a "nearest snapshot" (before OR after target) rather than "latest
+   snapshot AT OR BEFORE target" -- a snapshot recorded strictly AFTER
+   an observation's own `entered_at`, if closer in wall-clock time than
+   the true pre-observation snapshot, could silently leak a future price
+   into that observation's own momentum feature.
+2. (FSR-10) A horizon whose full label window (`[entered_at, entered_at
+   + horizon]`) was not yet fully observed as of the run's cutoff was
+   labeled `False` -- a fabricated negative. The absence of an elite
+   follower in an INCOMPLETE future window is not evidence of a true
+   negative.
+3. (FSR-11) Train/test used a plain chronological 70/30 split with no
+   purge or embargo -- a training row whose OWN label window crossed the
+   split boundary could depend on an event that occurred during (or
+   after) the test period, a real information leak even though that
+   row's own `entered_at` was chronologically "before" the boundary.
+
+D. The corrected implementation
+
+- `src/argus/prediction/loaders.py`: `compute_raw_features` now sources
+  BOTH momentum price points via `load_token_market_snapshot_at_or_
+  before` (never `load_nearest_token_market_snapshot`), each
+  independently bounded by the existing staleness window --
+  `_snapshot_price_at_or_before` never looks past its own target time.
+  `compute_and_persist_phase11` builds a `discovery_effect_size_by_time`
+  map, re-invoking Phase 9's own idempotent cascade once per DISTINCT
+  observation decision time actually needed (the same disclosed
+  O(distinct decision times) pattern FSR-08 established for Phase 10),
+  and each observation's feature dict is built from ITS OWN slice --
+  never the final-cutoff-wide value. The now-corrected CLI limitations
+  list no longer discloses this as an accepted simplification.
+- `src/argus/prediction/labels.py`: `LabeledObservation.labels` is now
+  `dict[int, bool | None]` -- `None` means right-censored (the horizon's
+  window is not yet fully observable as of cutoff); `build_labeled_
+  observations` takes an explicit `cutoff` parameter and censors per-
+  horizon rather than computing one shared boolean grid.
+  `argus.prediction.service._run_model_family` excludes any observation
+  whose label at that horizon is `None` from that horizon's population
+  entirely, never coercing it to `False`.
+- `src/argus/prediction/validation.py`: `temporal_train_test_split`
+  replaced by `purged_embargoed_split` -- for boundary `S` (the same
+  fractional chronological quantile the old split used) and embargo
+  exactly equal to the horizon (the spec's own disclosed minimum): train
+  rows satisfy `entered_at + horizon <= S`; test rows satisfy
+  `entered_at >= S + embargo`; every other row is purged (present in
+  neither split). `purged_count`/`train_range`/`test_range` are
+  returned alongside the split.
+- New `order_flow_prediction_runs` columns (migration `0035`):
+  `split_boundary`, `embargo_seconds`, `purged_count`,
+  `train_range_start/end`, `test_range_start/end` -- FSR-11's own
+  required "split metadata must persist boundary, horizon, purged
+  count, embargo duration, train/test ranges and sample counts."
+- FSR-13 (this same recovery) subsequently bumped Phase 11's own
+  `ALGORITHM_VERSION` from `order_flow_prediction_v1` to
+  `order_flow_prediction_v2` and registered the old version in the new
+  `contaminated_run_invalidations` registry.
+
+E. Actual tests run against the corrected implementation
+
+- `tests/unit/test_phase11_labels.py` (13 nodes, including 5 new FSR-10
+  right-censoring tests: positive-within-horizon, true-negative-fully-
+  observed, event-just-after-horizon, horizon-crosses-cutoff-is-censored
+  -never-False, censoring-independent-per-horizon): 13/13 passed.
+- `tests/unit/test_phase11_validation.py` (17 nodes, including FSR-11's
+  required categories: boundary-crossing-label-is-purged, row-inside-
+  embargo-absent-from-test, earliest-test-row-satisfies-embargo,
+  mutating-a-test-period-timestamp-cannot-alter-training-split,
+  no-row-in-both-splits): 17/17 passed.
+- `tests/integration/test_phase11_prediction_persistence_and_report.py`
+  (7 nodes, including 3 new FSR-09 tests --
+  `test_momentum_ignores_a_closer_future_snapshot`,
+  `test_momentum_missing_when_no_eligible_pre_observation_snapshot`,
+  `test_discovery_effect_size_is_scoped_to_its_own_as_of_cutoff` -- and
+  the pre-existing class-balanced-fixture/idempotency/elite-exclusion/
+  CLI tests, all updated for the corrected purged+embargoed split's own
+  sample-composition effects): each run individually against a fresh,
+  migrated-to-head throwaway PostgreSQL 16 database -- all 7 passed.
+- Full repository unit suite (`uv run pytest tests/unit -q`): 1124
+  passed, 0 failed, at this recovery's final commit.
+- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy src`:
+  clean across the full repository at this recovery's final commit.
+- Migration round-trip (`alembic upgrade head` / `downgrade -1` /
+  `upgrade head`) verified against a fresh throwaway PostgreSQL 16
+  database through migration `0036`.
+
+F. Environmental limitations (disclosed, not a builder failure)
+
+Same disclosed class as every other phase in this recovery (see the
+companion `phase_7_final_recovery.md` section F): real local PostgreSQL
+16 reachable, PostgreSQL 17 not available (tracked separately under
+FSR-03); the shared long-lived `argus` development database accumulated
+cross-test pollution over this long session, so every DB-backed
+integration test above was independently re-validated against a fresh,
+isolated, migrated-to-head throwaway database.
+
+G. Changed/new files (Phase 11 portion of this recovery, FSR-09/10/11/12
+   + FSR-13's version bump)
+
+Modified: `src/argus/prediction/loaders.py`, `labels.py`,
+`validation.py`, `service.py`, `persistence.py`,
+`src/argus/domain/order_flow_prediction_runs.py`, `src/argus/cli.py`
+(predict report section), `tests/unit/test_phase11_labels.py`,
+`tests/unit/test_phase11_validation.py`,
+`tests/integration/test_phase11_prediction_persistence_and_report.py`.
+New: `migrations/versions/0035_fsr09_12_prediction_causal_dataset.py`.
+
+Untouched (preserved byte-for-byte): all Phase 0-6 checkpoint/bundle
+files; `MASTER_SPEC.md`; `orchestration/AUDITOR_POLICY.md`;
+`orchestration/PROTOCOL.md`; migrations `0001` through `0034` (never
+rewritten); Phase 11's own three model-family fit/predict implementations
+(`src/argus/prediction/models.py`) and metric computation
+(`evaluation.py`) -- untouched, per the scope-lock rule quoted in section
+B.
+
+H. Acceptance statement
+
+This document records that Phase 11's feature-timestamp leakage
+(FSR-09), fabricated-negative right-censoring gap (FSR-10), and
+unpurged/unembargoed split (FSR-11), together with the corresponding
+re-evaluation on the corrected causal dataset (FSR-12), were identified
+and repaired, with real tests passing against the corrected
+implementation, as part of the `argus-final-spec-recovery-001`
+authorized recovery. It does NOT assert a contemporaneous orchestrator
+STOP/independent audit occurred for original Phase 11 or for this
+recovery. Final acceptance of the full recovery contract is recorded
+separately, per FSR-15/16.
+
+I. Next action
+
+No STOP is issued by this document. Historical-record-keeping only, per
+FSR-14. Recovery work on the remaining FSR-01..16 items continues.
+
+================ END ARGUS CHECKPOINT =========================
