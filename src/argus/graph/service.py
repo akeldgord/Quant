@@ -23,7 +23,11 @@ from argus.graph.lead_follow import (
     build_lead_follow_observations,
     compute_directional_edge,
 )
-from argus.graph.loaders import compute_follower_base_rates, load_wallet_token_entries
+from argus.graph.loaders import (
+    compute_follower_base_rates,
+    load_forward_information_after_leader,
+    load_wallet_token_entries,
+)
 from argus.graph.persistence import (
     get_or_create_directional_edge,
     get_or_create_lead_follow_observation,
@@ -88,12 +92,13 @@ async def compute_and_persist_directional_edges(
     correction across every edge computed in this SAME run, and persists
     the edges idempotently under this run's own ``config_hash``.
 
-    ``forward_information_after_leader_pct`` is always persisted as
-    ``None`` in this build -- computing it honestly requires reusing
-    Phase 5's own cohort-matched executable-return evidence for the
-    follower's specific entry, which is deferred as a disclosed scope
-    limitation rather than approximated or fabricated (see
-    ``docs/DECISION_LOG.md``'s Phase 7 entry)."""
+    FSR-05: ``forward_information_after_leader_pct`` reuses Phase 5's own
+    cohort-matched executable-return evidence for each follower's
+    specific entries (:func:`argus.graph.loaders.
+    load_forward_information_after_leader`) -- never approximated or
+    fabricated. When no such evidence exists for a pair's observations,
+    the mean stays ``None`` and ``forward_information_missing_reason``
+    records why (see ``docs/DECISION_LOG.md``'s FSR-05 entry)."""
     entries = await load_wallet_token_entries(session, cutoff=cutoff)
     base_rates = compute_follower_base_rates(entries)
 
@@ -131,12 +136,21 @@ async def compute_and_persist_directional_edges(
 
     edges_with_significance = apply_multiple_comparison_correction(edges)
 
+    forward_info_by_pair = await load_forward_information_after_leader(
+        session, observations_by_pair=observations_by_pair, cutoff=cutoff
+    )
+
     config_hash = config.config_hash()
     for result in edges_with_significance:
+        pair_key = (result.edge.leader_wallet_id, result.edge.follower_wallet_id)
+        forward_info = forward_info_by_pair[pair_key]
         await get_or_create_directional_edge(
             session,
             result=result,
-            forward_information_after_leader_pct=None,
+            forward_information_after_leader_pct=forward_info.mean_pct,
+            forward_information_sample_count=forward_info.sample_count,
+            forward_information_eligible_count=forward_info.eligible_count,
+            forward_information_missing_reason=forward_info.missing_reason,
             as_of=cutoff,
             algorithm_version=ALGORITHM_VERSION,
             config_hash=config_hash,

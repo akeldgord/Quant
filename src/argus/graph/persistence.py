@@ -83,6 +83,9 @@ async def get_or_create_directional_edge(
     *,
     result: DirectionalEdgeWithSignificance,
     forward_information_after_leader_pct: Decimal | None,
+    forward_information_sample_count: int | None = None,
+    forward_information_eligible_count: int | None = None,
+    forward_information_missing_reason: str | None = None,
     as_of: datetime,
     algorithm_version: str,
     config_hash: str,
@@ -119,6 +122,9 @@ async def get_or_create_directional_edge(
         p_value=edge.p_value,
         q_value=result.q_value,
         forward_information_after_leader_pct=forward_information_after_leader_pct,
+        forward_information_sample_count=forward_information_sample_count,
+        forward_information_eligible_count=forward_information_eligible_count,
+        forward_information_missing_reason=forward_information_missing_reason,
         created_at=now,
     )
     stmt = (

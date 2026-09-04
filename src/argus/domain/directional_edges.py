@@ -55,6 +55,20 @@ class DirectionalEdge(Base):
         CheckConstraint(
             "length(config_hash) > 0", name="ck_directional_edges_config_hash_nonempty"
         ),
+        CheckConstraint(
+            "forward_information_sample_count IS NULL OR forward_information_sample_count >= 0",
+            name="ck_directional_edges_forward_info_sample_nonneg",
+        ),
+        CheckConstraint(
+            "forward_information_eligible_count IS NULL OR forward_information_eligible_count >= 0",
+            name="ck_directional_edges_forward_info_eligible_nonneg",
+        ),
+        CheckConstraint(
+            "forward_information_sample_count IS NULL "
+            "OR forward_information_eligible_count IS NULL "
+            "OR forward_information_sample_count <= forward_information_eligible_count",
+            name="ck_directional_edges_forward_info_sample_le_eligible",
+        ),
     )
 
     edge_id: Mapped[uuid.UUID] = mapped_column(
@@ -82,9 +96,18 @@ class DirectionalEdge(Base):
     # Reuses the follower's own already-computed Phase 5 executable-return
     # evidence (never a fabricated/re-derived price series) at the
     # follower's real entry delay after this leader -- None when no such
-    # evidence exists yet for this specific observation set.
+    # evidence exists yet for this specific observation set. FSR-05: the
+    # mean of every SUCCESS 5m executable return matched to this pair's
+    # observations by (token_id, follower_entered_at); the two count
+    # columns and the missing-reason column make the evidence population
+    # behind that mean (or its absence) visible rather than a bare NULL.
     forward_information_after_leader_pct: Mapped[Decimal | None] = mapped_column(
         Numeric(20, 15), nullable=True
+    )
+    forward_information_sample_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    forward_information_eligible_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    forward_information_missing_reason: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
