@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
@@ -52,6 +53,12 @@ from argus.graph.service import ALGORITHM_VERSION as GRAPH_ALGORITHM_VERSION
 from argus.graph.service import GraphRunConfig
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
+pytestmark = pytest.mark.usefixtures("isolated_database")
+# R2-04 (``argus-final-spec-recovery-002``): see
+# ``tests/integration/conftest.py``'s ``isolated_database`` fixture --
+# this module's own production queries scan ALL matching rows, so each
+# TEST FUNCTION here gets its own real, independent database.
+
 _NOW = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 runner = CliRunner()

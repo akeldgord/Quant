@@ -64,7 +64,7 @@ from argus.wallets.history_reconstruction import (
 )
 from argus.wallets.qualification_service import reconstruct_and_score_wallet
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _TEST_GIT_COMMIT = "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB"
 SOL = "SOL"

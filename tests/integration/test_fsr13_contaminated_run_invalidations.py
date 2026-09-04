@@ -16,6 +16,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
@@ -39,6 +40,8 @@ from argus.domain.order_flow_prediction_runs import (
     OrderFlowPredictionRun,
 )
 from argus.prediction.service import ALGORITHM_VERSION as CURRENT_ALGORITHM_VERSION
+
+pytestmark = pytest.mark.usefixtures("isolated_database")
 
 _NOW = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 _OLD_ALGORITHM_VERSION = "order_flow_prediction_v1"
@@ -89,19 +92,37 @@ async def test_registry_names_all_four_contaminated_phases_with_reason(admin_eng
     try:
         async with sessionmaker() as session:
             rows = (await session.execute(select(ContaminatedRunInvalidation))).scalars().all()
-        by_phase = {r.phase_name: r for r in rows}
-        assert set(by_phase) == {
+        phases_present = {r.phase_name for r in rows}
+        assert phases_present == {
             PHASE_8_CONVERGENCE,
             PHASE_9_COUNTERFACTUAL,
             PHASE_10_SYNTHETIC,
             PHASE_11_PREDICTION,
         }
-        row = by_phase[PHASE_11_PREDICTION]
-        assert row.invalidated_algorithm_version == _OLD_ALGORITHM_VERSION
-        assert row.superseded_by_algorithm_version == CURRENT_ALGORITHM_VERSION
-        assert row.status == STATUS_SUPERSEDED
-        assert len(row.reason) > 0
-        assert len(row.target_commit) == 40
+        # R2-02 (argus-final-spec-recovery-002) chained a SECOND
+        # PHASE_11_PREDICTION invalidation (v2 -> v3, migration 0040) after
+        # FSR-13's own original v1 -> v2 row (migration 0036) -- both
+        # remain queryable by their own distinct invalidated_algorithm_
+        # version, never collapsed into "one row per phase".
+        by_invalidated_version = {
+            r.invalidated_algorithm_version: r for r in rows if r.phase_name == PHASE_11_PREDICTION
+        }
+        assert set(by_invalidated_version) == {_OLD_ALGORITHM_VERSION, "order_flow_prediction_v2"}
+        original_row = by_invalidated_version[_OLD_ALGORITHM_VERSION]
+        assert original_row.superseded_by_algorithm_version == "order_flow_prediction_v2"
+        assert original_row.status == STATUS_SUPERSEDED
+        assert len(original_row.reason) > 0
+        assert len(original_row.target_commit) == 40
+
+        r2_02_row = by_invalidated_version["order_flow_prediction_v2"]
+        assert r2_02_row.superseded_by_algorithm_version == CURRENT_ALGORITHM_VERSION
+        # R2-02's own new rows use INVALID_FOR_EVALUATION (also a valid
+        # STATUSES member) rather than SUPERSEDED -- both mean "excluded
+        # from a default current report"; only the exact status string
+        # differs from FSR-13's own original seed rows.
+        assert r2_02_row.status == "INVALID_FOR_EVALUATION"
+        assert len(r2_02_row.reason) > 0
+        assert len(r2_02_row.target_commit) == 40
     finally:
         await engine.dispose()
 
@@ -183,7 +204,12 @@ async def test_old_contaminated_row_stays_in_db_but_excluded_from_current_report
                     )
                 )
             ).scalar_one()
-            assert invalidation.superseded_by_algorithm_version == CURRENT_ALGORITHM_VERSION
+            # R2-02 chained a second invalidation after this original
+            # FSR-13 row (see test_registry_names_all_four_contaminated_
+            # phases_with_reason) -- this row's own supersession target is
+            # still exactly what FSR-13 itself recorded ("order_flow_
+            # prediction_v2"), never the current version directly.
+            assert invalidation.superseded_by_algorithm_version == "order_flow_prediction_v2"
             assert len(invalidation.reason) > 0
     finally:
         await engine.dispose()

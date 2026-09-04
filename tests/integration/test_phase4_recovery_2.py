@@ -61,7 +61,7 @@ from argus.providers.retry import RetryPolicy
 from argus.shadow.monitor import run_prospective_monitoring_pass
 from argus.shadow.quote_jobs import run_due_entry_probes, run_due_reverse_probes
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2026, 6, 1, tzinfo=UTC)
 _TEST_GIT_COMMIT = "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB"

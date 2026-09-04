@@ -30,6 +30,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
@@ -60,6 +61,12 @@ from argus.domain.wallet_specialist_scores import WalletSpecialistScore
 from argus.domain.wallets import Wallet
 from argus.graph.service import GraphRunConfig
 from argus.synthetic.service import STRATEGY_CODES, Phase10RunConfig, compute_and_persist_phase10
+
+pytestmark = pytest.mark.usefixtures("isolated_database")
+# R2-04 (``argus-final-spec-recovery-002``): see
+# ``tests/integration/conftest.py``'s ``isolated_database`` fixture --
+# this module's own production queries scan ALL matching rows, so each
+# TEST FUNCTION here gets its own real, independent database.
 
 _PRIMARY_HORIZON = "5m"
 
@@ -399,7 +406,12 @@ async def test_strategy_a_uses_real_executable_return_not_mark_price(admin_engin
     fixture ($100 -> $110 snapshots) would show a +10% gain. The
     persisted primary ``gross_return``/``net_return`` must reflect the
     real quote, never the mark price -- proving the executable result,
-    not a mark-price proxy, is used."""
+    not a mark-price proxy, is used. Exit fires 5 minutes after entry --
+    contemporaneous with the ONE reverse-quote probe this fixture seeds
+    (R2-03: exit pricing is only ever matched to a REAL, contemporaneous
+    probe, never a fixed horizon regardless of the trade's own actual
+    hold duration -- see ``test_r203_phase10_executable_matching.py`` for
+    the dedicated one-hour-exit-trap coverage of that fix)."""
     config, engine, sessionmaker = _sessionmaker()
     try:
         wallet_address = _unique_wallet()
@@ -407,7 +419,7 @@ async def test_strategy_a_uses_real_executable_return_not_mark_price(admin_engin
             wallet_id = await _seed_wallet(session, address=wallet_address, at=_NOW)
             mint = _unique_mint()
             token_id = await _seed_token(session, mint=mint, at=_NOW)
-            exit_at = _NOW + timedelta(hours=1)
+            exit_at = _NOW + timedelta(minutes=5)
             prospective_event_id = await _seed_trade_fixture(
                 session,
                 wallet_address=wallet_address,
@@ -495,7 +507,9 @@ async def test_unsellable_reverse_quote_is_a_failed_executable_outcome(admin_eng
     """FSR-08: an explicit no-route/insufficient-liquidity/excessive-
     impact/quote-failure observation is recorded as a genuine failure
     outcome (``FAILURE_EXECUTABLE_QUOTE_FAILED``), never dropped and
-    never folded into ``RESOLVED`` with a fabricated return."""
+    never folded into ``RESOLVED`` with a fabricated return. Exit fires 5
+    minutes after entry -- contemporaneous with the ONE reverse-quote
+    probe this fixture seeds (R2-03)."""
     config, engine, sessionmaker = _sessionmaker()
     try:
         wallet_address = _unique_wallet()
@@ -503,7 +517,7 @@ async def test_unsellable_reverse_quote_is_a_failed_executable_outcome(admin_eng
             wallet_id = await _seed_wallet(session, address=wallet_address, at=_NOW)
             mint = _unique_mint()
             token_id = await _seed_token(session, mint=mint, at=_NOW)
-            exit_at = _NOW + timedelta(hours=1)
+            exit_at = _NOW + timedelta(minutes=5)
             prospective_event_id = await _seed_trade_fixture(
                 session,
                 wallet_address=wallet_address,

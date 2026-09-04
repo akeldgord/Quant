@@ -61,6 +61,7 @@ from argus.domain.prospective_events import ProspectiveEvent
 from argus.domain.shadow_intents import STATUS_CREATED, STATUS_FILLED, ShadowIntent
 from argus.domain.shadow_positions import ShadowPosition
 from argus.domain.shadow_quote_probes import (
+    PROBE_KIND_ENTRY_DELAY,
     PROBE_KIND_REVERSE_EXECUTABLE,
     ShadowQuoteProbe,
 )
@@ -235,12 +236,40 @@ async def load_prior_buy_sizes(
 @dataclass(frozen=True)
 class OpportunityReverseOutcome:
     """One known-by-cutoff ``REVERSE_EXECUTABLE`` probe's real result for
-    one opportunity, at one horizon label."""
+    one opportunity, at one horizon label.
+
+    ``reverse_quote`` (R2-03) is the SAME raw quote ``result`` was
+    computed from, preserved so a caller needing a different entry basis
+    (Strategy C/D's confirmation-time entry, never the leader's own
+    fill -- see ``OpportunityEntryProbe``) can recompute
+    ``compute_executable_return`` against it. Recomputing against a
+    substituted entry naturally -- via ``compute_executable_return``'s own
+    mint/quantity validation, never a new ad hoc check -- rejects any
+    combination where the reverse probe's sold quantity does not match
+    the substituted entry's acquired quantity, since Phase 4 only ever
+    sized a REVERSE_EXECUTABLE probe against the ONE real fill it
+    followed."""
 
     probe_id: uuid.UUID
     target_label: str
     raw_outcome: str
     result: ExecutableReturnResult
+    actual_elapsed_seconds_from_first_seen: Decimal | None
+    reverse_quote: ReverseQuote | None = None
+
+
+@dataclass(frozen=True)
+class OpportunityEntryProbe:
+    """One known-by-cutoff ``ENTRY_DELAY`` probe for one opportunity's
+    shadow intent, at one delay label -- R2-03: Strategy C/D's
+    confirmation-entry must be matched against these (never against the
+    leader's own realized ``entry_fill``, which is always exactly ONE
+    fixed delay Phase 4's own runtime happened to use)."""
+
+    probe_id: uuid.UUID
+    target_label: str
+    outcome: str
+    entry_fill: EntryFill | None
     actual_elapsed_seconds_from_first_seen: Decimal | None
 
 
@@ -262,6 +291,12 @@ class WalletOpportunity:
     entry_fill: EntryFill | None
     entry_price_impact_pct: Decimal | None
     reverse_outcomes: dict[str, OpportunityReverseOutcome] = field(default_factory=dict)
+    # R2-03: every known-by-cutoff ENTRY_DELAY probe for this SAME shadow
+    # intent, keyed by target_label -- additive; existing M1-M6 consumers
+    # never read this and are unaffected. Populated regardless of
+    # ``entry_status``/``entry_fill`` (an ENTRY_DELAY probe is scheduled
+    # against the shadow intent itself, before any position exists).
+    entry_delay_probes: dict[str, OpportunityEntryProbe] = field(default_factory=dict)
     evidence_class: str = EVIDENCE_CLASS_AUTHENTIC_PROSPECTIVE
 
 
@@ -396,9 +431,58 @@ async def load_wallet_opportunities(
                     raw_outcome=probe.outcome,
                     result=result,
                     actual_elapsed_seconds_from_first_seen=elapsed,
+                    reverse_quote=reverse,
                 )
                 contributing.append(probe_ref)
             contributing.append(SourceRef("shadow_position", str(position.shadow_position_id)))
+
+        # R2-03: every known-by-cutoff ENTRY_DELAY probe for this shadow
+        # intent -- independent of ``entry_status``/``position`` above,
+        # since these probes are scheduled directly against the intent
+        # itself. Strategy C/D's confirmation-entry matching needs the
+        # FULL family (Phase 4 schedules one per configured delay), never
+        # only whichever single delay happened to become the real fill.
+        entry_delay_probes: dict[str, OpportunityEntryProbe] = {}
+        entry_probes = (
+            (
+                await session.execute(
+                    select(ShadowQuoteProbe).where(
+                        ShadowQuoteProbe.shadow_intent_id == intent.shadow_intent_id,
+                        ShadowQuoteProbe.probe_kind == PROBE_KIND_ENTRY_DELAY,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for entry_probe in entry_probes:
+            entry_probe_ref = SourceRef("shadow_quote_probe", str(entry_probe.probe_id))
+            if not _probe_known_by_cutoff(entry_probe, cutoff):
+                excluded.append(
+                    ExcludedSourceRef(entry_probe_ref, "ENTRY_DELAY_NOT_YET_TERMINAL_BY_CUTOFF")
+                )
+                continue
+            probe_entry_fill = (
+                EntryFill(
+                    input_mint=entry_probe.input_mint,
+                    output_mint=entry_probe.output_mint,
+                    input_amount_raw=entry_probe.notional_input_amount_raw,
+                    output_amount_raw=entry_probe.expected_output_amount_raw,
+                )
+                if entry_probe.outcome == "SUCCESS" and entry_probe.expected_output_amount_raw
+                else None
+            )
+            probe_elapsed = None
+            if entry_probe.terminal_at is not None:
+                probe_elapsed = Decimal((entry_probe.terminal_at - first_seen_at).total_seconds())
+            entry_delay_probes[entry_probe.target_label] = OpportunityEntryProbe(
+                probe_id=entry_probe.probe_id,
+                target_label=entry_probe.target_label,
+                outcome=entry_probe.outcome,
+                entry_fill=probe_entry_fill,
+                actual_elapsed_seconds_from_first_seen=probe_elapsed,
+            )
+            contributing.append(entry_probe_ref)
 
         contributing.append(intent_ref)
         opportunities.append(
@@ -413,6 +497,7 @@ async def load_wallet_opportunities(
                 entry_fill=entry_fill,
                 entry_price_impact_pct=entry_price_impact_pct,
                 reverse_outcomes=reverse_outcomes,
+                entry_delay_probes=entry_delay_probes,
             )
         )
 

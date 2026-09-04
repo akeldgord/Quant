@@ -15,7 +15,7 @@ from argus.domain.chain_events import ChainEvent
 from argus.domain.swaps import Swap
 from argus.domain.wallet_stream_state import WalletStreamState
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 
 async def _engine_for(role: DbRole):

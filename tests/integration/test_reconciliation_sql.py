@@ -41,7 +41,11 @@ from argus.ingestion.unit_of_work import SqlReconciliationUnitOfWork
 from argus.parsing.generic_parser import ParsedTransaction
 from argus.providers import SignatureInfo, StreamNotification
 
-pytestmark = pytest.mark.asyncio
+# R2-04 (``argus-final-spec-recovery-002``): ``isolated_database`` --
+# see ``tests/integration/conftest.py`` -- since this module's own
+# production queries scan ALL matching rows, so each TEST FUNCTION here
+# gets its own real, independent database.
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 # Phase 1 remediation round 3, finding #5: ReconciliationEngine now
 # requires an explicit ParseAttemptIdentity -- a real, non-empty

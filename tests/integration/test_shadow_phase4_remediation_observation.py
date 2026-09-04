@@ -67,7 +67,11 @@ from argus.shadow.monitor import run_prospective_monitoring_pass
 from argus.shadow.prospective import revisit_pending_confirmations, scan_for_new_prospective_events
 from argus.shadow.quote_jobs import run_due_entry_probes
 
-pytestmark = pytest.mark.asyncio
+# R2-04 (``argus-final-spec-recovery-002``): ``isolated_database`` --
+# see ``tests/integration/conftest.py`` -- since this module's own
+# production queries scan ALL matching rows, so each TEST FUNCTION here
+# gets its own real, independent database.
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2026, 6, 1, tzinfo=UTC)
 _TEST_GIT_COMMIT = "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFCD"

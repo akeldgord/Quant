@@ -76,14 +76,24 @@ from argus.graph.loaders import load_wallet_token_entries
 from argus.graph.service import ALGORITHM_VERSION as GRAPH_ALGORITHM_VERSION
 from argus.graph.service import GraphRunConfig
 
-ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v2"
+ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v3"
 """FSR-07/FSR-13 (final spec recovery): renamed from
 ``counterfactual_alpha_specialists_v1`` -- besides versioning the
 predation-score algorithm change below, the original name (36 chars)
 never actually fit the real ``algorithm_version`` columns (``VARCHAR(32)``
 on every Phase 9 table), so every Phase 9 persistence write failed
 under a real role-enforced Postgres. ``_v2`` both fixes that and gives
-the changed algorithm its own honest identity per FSR-13."""
+the changed algorithm its own honest identity per FSR-13.
+
+``_v3`` (R2-02, ``argus-final-spec-recovery-002``): the discovery- and
+validation-specialist queries in ``_compute_and_persist_specialist_scores``
+below previously filtered contributing ``DirectionalEdge``/
+``ExpectedConfirmationEvent`` rows by ``as_of == cutoff`` alone --
+``known_by_cutoff`` (M1) also requires ``created_at <= cutoff``, which was
+missing, letting a specialist score labeled ``as_of=T`` be silently built
+from source evidence only recorded (i.e. only knowable) AFTER T. Every
+``counterfactual_alpha_v2`` row is invalidated by
+``contaminated_run_invalidations`` (migration ``0038``) for this reason."""
 
 _PHASE9_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "buckets.py",
@@ -342,6 +352,15 @@ async def _compute_and_persist_specialist_scores(
                         DirectionalEdge.algorithm_version == GRAPH_ALGORITHM_VERSION,
                         DirectionalEdge.config_hash == graph_config.config_hash(),
                         DirectionalEdge.as_of == cutoff,
+                        # R2-02: as_of == cutoff alone only bounds the edge's own
+                        # EFFECTIVE time -- known_by_cutoff (M1) requires BOTH
+                        # effective_at <= cutoff AND created_at <= cutoff. Without
+                        # this second bound, an edge computed/persisted AFTER
+                        # cutoff (using source evidence only knowable later) could
+                        # still be selected here just because its as_of label says
+                        # cutoff -- a causal information leak dressed up as a valid
+                        # historical reconstruction.
+                        DirectionalEdge.created_at <= cutoff,
                         DirectionalEdge.q_value <= config.discovery_q_value_threshold,
                         DirectionalEdge.observation_count >= config.discovery_min_observations,
                     )
@@ -363,6 +382,9 @@ async def _compute_and_persist_specialist_scores(
                     select(ExpectedConfirmationEvent).where(
                         ExpectedConfirmationEvent.follower_wallet_id == wallet_id,
                         ExpectedConfirmationEvent.as_of == cutoff,
+                        # R2-02: same known_by_cutoff discipline as the discovery
+                        # query above -- as_of alone is not knowledge-time safe.
+                        ExpectedConfirmationEvent.created_at <= cutoff,
                     )
                 )
             )

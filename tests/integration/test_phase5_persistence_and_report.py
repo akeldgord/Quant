@@ -26,6 +26,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
@@ -59,6 +60,13 @@ from argus.domain.wallet_discovery_events import (
 from argus.domain.wallets import Wallet
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
+pytestmark = pytest.mark.usefixtures("isolated_database")
+# R2-04 (``argus-final-spec-recovery-002``): this module's own production
+# queries scan ALL matching rows in a table (never narrowed to just this
+# test's own seeded rows), so it previously polluted / was polluted by
+# every other test run sharing the long-lived dev database -- see
+# ``tests/integration/conftest.py``'s ``isolated_database`` fixture.
+
 _TEST_GIT_COMMIT = "PHASE5TEST_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
 _NOW = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -622,7 +630,12 @@ def test_p5_10_cli_copyability_report_seeded_event_entry_reverse_wires_readiness
     assert report2["readiness"]["snapshot_reused"] is True
     assert report2["readiness"]["prospective_event_id"] == first_prospective_event_id
     assert report2["sample_n"] == report["sample_n"]
-    assert report2["copyability_score"] == report["copyability_score"]
+    # Numeric equality, not string equality: the reused snapshot's score is
+    # reloaded from a NUMERIC(20,15) column (padded with trailing zeros),
+    # while the first run's value came straight from an in-memory
+    # computation -- same value, different (both legitimate) str(Decimal)
+    # representations.
+    assert Decimal(report2["copyability_score"]) == Decimal(report["copyability_score"])
     assert report2["contributing_source_ids"] == report["contributing_source_ids"]
 
 

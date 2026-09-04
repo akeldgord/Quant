@@ -84,7 +84,7 @@ from argus.shadow.monitor import run_prospective_monitoring_pass
 from argus.shadow.quote_jobs import run_due_entry_probes
 from argus.telegram.notifier import FakeTelegramTransport, TelegramNotifier
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2026, 6, 15, tzinfo=UTC)
 _TEST_GIT_COMMIT = "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB"

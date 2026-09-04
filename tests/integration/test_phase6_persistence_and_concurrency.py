@@ -61,7 +61,7 @@ from argus.executor.singleton import (
     acquire_or_refuse,
 )
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 _TEST_IDENTITY = {

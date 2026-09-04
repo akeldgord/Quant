@@ -60,6 +60,8 @@ from argus.wallets.archaeology import (
 from argus.wallets.early_buyer_extraction import RawTransactionEvidence
 from argus.wallets.watcher_service import evaluate_token
 
+pytestmark = pytest.mark.usefixtures("isolated_database")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PUMPFUN_MINT = "5dNYcCZXEGfGgbdUdq7MMR7KLsNJLLLgL83wLH8Fpump"
 PUMPFUN_CREATOR = "6xo262KbDXepWbF3vPTrFXysr5vJwk3mozBXmXk3hmMx"

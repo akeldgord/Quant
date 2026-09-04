@@ -77,7 +77,22 @@ from argus.prediction.validation import has_adequate_sample, purged_embargoed_sp
 # row persisted under the old version is contaminated and must never be
 # silently presented as a current result (see
 # ``contaminated_run_invalidations``).
-ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v2"
+#
+# R2-02 (``argus-final-spec-recovery-002``): bumped from
+# "order_flow_prediction_v2" -- this phase's own ``wallet_discovery_
+# effect_size`` feature is read straight from Phase 9's
+# ``WalletSpecialistScore.discovery_specialist_score`` via
+# ``load_discovery_effect_size_by_wallet`` (imported as
+# ``PHASE9_ALGORITHM_VERSION`` from ``argus.counterfactual.service``,
+# which is itself now "counterfactual_alpha_v3"); every historical
+# feature value computed under the OLD Phase 9 version could have been
+# silently built from source evidence recorded after its own decision
+# time (the fix described there). No code in THIS module changed, but
+# its own output is different and must never be conflated with a
+# "order_flow_prediction_v2" row computed against the leaky Phase 9
+# input; every such row is invalidated by
+# ``contaminated_run_invalidations``.
+ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v3"
 
 _PHASE11_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "elite.py",

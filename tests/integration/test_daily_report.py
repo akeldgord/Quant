@@ -31,7 +31,7 @@ from argus.domain.wallets import Wallet
 from argus.reports.daily import build_daily_report
 from argus.shadow.monitor import run_prospective_monitoring_pass
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2026, 6, 1, tzinfo=UTC)
 _TEST_GIT_COMMIT = "TEST_GIT_COMMIT_DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFAB"

@@ -57,7 +57,7 @@ from argus.wallets.history_reconstruction import (
     manifest_from_dict,
 )
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2026, 6, 1, tzinfo=UTC)
 

@@ -13,7 +13,7 @@ from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
 from argus.domain.provider_usage import ProviderUsage
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 
 async def _engine_for(role: DbRole):

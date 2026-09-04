@@ -53,7 +53,7 @@ from argus.executor.idempotency import compute_idempotency_fingerprint
 from argus.executor.persistence import apply_transition, get_or_create_execution_intent
 from argus.providers import SignatureStatusInfo
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_database")]
 
 _NOW = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 _TEST_IDENTITY = {

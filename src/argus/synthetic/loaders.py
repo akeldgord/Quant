@@ -20,9 +20,18 @@ from argus.domain.convergence_events import ConvergenceEvent
 from argus.domain.directional_edges import DirectionalEdge
 from argus.domain.exit_convergence_events import ExitConvergenceEvent
 from argus.domain.expected_confirmation_events import ExpectedConfirmationEvent
+from argus.domain.prospective_events import ProspectiveEvent
 from argus.domain.wallet_specialist_scores import WalletSpecialistScore
 from argus.graph.loaders import load_wallet_token_entries
 from argus.synthetic.matching import TriggerEvent
+
+LEADER_ENTRY_AT_REFERENCE_KEY = "leader_entry_at"
+"""R2-03: the key a confirmed-entry ``TriggerEvent.reference`` carries the
+LEADER's own real entry time under -- distinct from ``TriggerEvent.at``
+(the follower's confirmation time, correct for trade SEQUENCING) because
+the leader's own Phase 5 executable-return evidence
+(``WalletOpportunity.first_seen_at``) is keyed to when the LEADER's own
+buy was first seen, never to when a follower later confirmed it."""
 
 
 async def load_source_entries(session: AsyncSession, *, cutoff: datetime) -> list[TriggerEvent]:
@@ -121,10 +130,19 @@ async def load_confirmed_entries(
     never pre-filtered here by a single run-wide specialist set."""
     rows = (
         await session.execute(
-            select(ExpectedConfirmationEvent, DirectionalEdge.leader_wallet_id)
+            select(
+                ExpectedConfirmationEvent,
+                DirectionalEdge.leader_wallet_id,
+                ProspectiveEvent.first_seen_at,
+            )
             .join(
                 DirectionalEdge,
                 ExpectedConfirmationEvent.directional_edge_id == DirectionalEdge.edge_id,
+            )
+            .join(
+                ProspectiveEvent,
+                ExpectedConfirmationEvent.leader_prospective_event_id
+                == ProspectiveEvent.prospective_event_id,
             )
             .where(
                 ExpectedConfirmationEvent.as_of == cutoff,
@@ -134,17 +152,29 @@ async def load_confirmed_entries(
         )
     ).all()
     entries: list[TriggerEvent] = []
-    for confirmation, leader_wallet_id in rows:
+    for confirmation, leader_wallet_id, leader_first_seen_at in rows:
         if confirmation.follower_entered_at is None:
             continue
         entries.append(
             TriggerEvent(
                 token_id=confirmation.token_id,
                 wallet_id=leader_wallet_id,
+                # Trade SEQUENCING uses the follower's own confirmation
+                # time -- Strategy C/D's trade is not "entered" until a
+                # follower independently confirms it.
                 at=confirmation.follower_entered_at,
                 reference={
                     "type": "confirmation_event",
                     "id": str(confirmation.expected_confirmation_event_id),
+                    # R2-03: the LEADER's own real entry time, for
+                    # executable-return opportunity lookup -- see
+                    # LEADER_ENTRY_AT_REFERENCE_KEY's own docstring. Using
+                    # ``at`` (the follower's confirmation time) for that
+                    # lookup instead is the "confirmation-entry trap":
+                    # it almost never matches any real WalletOpportunity,
+                    # silently forcing Strategy C/D to FAILURE_NO_
+                    # EXECUTABLE_EVIDENCE regardless of real evidence.
+                    LEADER_ENTRY_AT_REFERENCE_KEY: leader_first_seen_at.isoformat(),
                 },
             )
         )

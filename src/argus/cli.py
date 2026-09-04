@@ -195,7 +195,7 @@ def checkpoint_invalidations() -> None:
                 for row in rows
             ]
         }
-        console.print(json.dumps(report, indent=2, default=str))
+        console.print(json.dumps(report, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
@@ -2040,7 +2040,7 @@ def copyability_report(
         if not reports:
             console.print("no tracked wallets found -- nothing to report")
             return 0
-        console.print(json.dumps(reports, indent=2, default=str))
+        console.print(json.dumps(reports, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
@@ -2067,7 +2067,7 @@ def executor_readiness() -> None:
     payload["config_hash"] = config.config_hash
     payload["master_spec_hash"] = config.spec_hash
     payload["git_commit"] = git_commit
-    console.print(json.dumps(payload, indent=2, default=str))
+    console.print(json.dumps(payload, indent=2, default=str), soft_wrap=True)
 
 
 @graph_app.command("report")
@@ -2218,7 +2218,7 @@ def graph_report(
         finally:
             await engine.dispose()
 
-        console.print(json.dumps(report, indent=2, default=str))
+        console.print(json.dumps(report, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
@@ -2364,7 +2364,7 @@ def convergence_report(
         finally:
             await engine.dispose()
 
-        console.print(json.dumps(report, indent=2, default=str))
+        console.print(json.dumps(report, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
@@ -2632,7 +2632,7 @@ def counterfactual_report(
         finally:
             await engine.dispose()
 
-        console.print(json.dumps(report, indent=2, default=str))
+        console.print(json.dumps(report, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
@@ -2809,7 +2809,7 @@ def synthetic_report(
         finally:
             await engine.dispose()
 
-        console.print(json.dumps(report, indent=2, default=str))
+        console.print(json.dumps(report, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
@@ -3040,7 +3040,7 @@ def predict_report(
         finally:
             await engine.dispose()
 
-        console.print(json.dumps(report, indent=2, default=str))
+        console.print(json.dumps(report, indent=2, default=str), soft_wrap=True)
         return 0
 
     raise typer.Exit(code=asyncio.run(_run()))
