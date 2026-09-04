@@ -39,6 +39,7 @@ Strategy definitions (MASTER_SPEC.md PHASE 10's own A-E list, section
 from __future__ import annotations
 
 import hashlib
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -50,28 +51,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.convergence.service import ALGORITHM_VERSION as PHASE8_ALGORITHM_VERSION
 from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
+from argus.copyability.loaders import (
+    PRIMARY_EXECUTABLE_HORIZON,
+    WalletOpportunity,
+    load_contamination_firewall,
+    load_wallet_opportunities,
+)
 from argus.counterfactual.loaders import load_nearest_token_market_snapshot
 from argus.counterfactual.matching import compute_forward_return
 from argus.counterfactual.service import ALGORITHM_VERSION as PHASE9_ALGORITHM_VERSION
 from argus.counterfactual.service import Phase9RunConfig, compute_and_persist_phase9
 from argus.domain.synthetic_strategy_trades import (
-    OUTCOME_FAILURE_NO_ENTRY_PRICE,
-    OUTCOME_FAILURE_NO_EXIT_PRICE,
+    OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED,
+    OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE,
     OUTCOME_FAILURE_NO_EXIT_TRIGGER,
     OUTCOME_RESOLVED,
 )
 from argus.graph.service import GraphRunConfig
 from argus.synthetic.costs import apply_entry_cost, apply_exit_cost
 from argus.synthetic.loaders import (
-    filter_entries_by_wallet,
-    filter_exits_by_wallet,
-    load_confirmed_discovery_entries,
-    load_discovery_specialist_wallet_ids,
+    filter_entries_by_decision_time_discovery_specialist,
+    filter_exits_by_decision_time_exit_specialist,
+    load_confirmed_entries,
     load_exit_convergence_exits,
-    load_exit_specialist_wallet_ids,
     load_high_convergence_entries,
     load_source_entries,
     load_source_exits,
+    load_specialist_scores_as_of,
 )
 from argus.synthetic.matching import MatchedTrade, MatchResult, TriggerEvent, match_strategy_trades
 from argus.synthetic.persistence import (
@@ -150,6 +156,11 @@ class Phase10RunConfig:
 class Phase10ComputationResult:
     as_of: datetime
     summaries: dict[str, StrategySummary] = field(default_factory=dict)
+    # FSR-08: per-strategy "no genuine executable-return evidence at all"
+    # flag -- kept alongside (not inside) ``StrategySummary`` since it is
+    # Phase 10's own data-provenance disclosure, not a backtest statistic
+    # (``argus.synthetic.stats`` stays generic and untouched by FSR-08).
+    insufficient_executable_sample: dict[str, bool] = field(default_factory=dict)
 
 
 def _same_wallet_exit(entry: TriggerEvent, exit_event: TriggerEvent) -> bool:
@@ -158,6 +169,49 @@ def _same_wallet_exit(entry: TriggerEvent, exit_event: TriggerEvent) -> bool:
 
 def _any_exit(_entry: TriggerEvent, _exit_event: TriggerEvent) -> bool:
     return True
+
+
+async def _mark_prices_and_return(
+    session: AsyncSession,
+    *,
+    matched: MatchedTrade,
+    config: Phase10RunConfig,
+    max_staleness_seconds: float,
+) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
+    """FSR-08: the OLD fixed-cost-haircut mark-price computation,
+    preserved unchanged but now purely descriptive -- returns
+    (mark_entry_price, mark_exit_price, mark_gross_return,
+    mark_net_return), NEVER consulted for the primary executable
+    ``outcome``/``gross_return``/``net_return`` fields."""
+    entry_snapshot = await load_nearest_token_market_snapshot(
+        session,
+        token_id=matched.entry.token_id,
+        target=matched.entry.at,
+        max_staleness_seconds=max_staleness_seconds,
+    )
+    if entry_snapshot is None or entry_snapshot.price_usd is None or matched.exit is None:
+        return (
+            entry_snapshot.price_usd if entry_snapshot is not None else None,
+            None,
+            None,
+            None,
+        )
+    exit_snapshot = await load_nearest_token_market_snapshot(
+        session,
+        token_id=matched.entry.token_id,
+        target=matched.exit.at,
+        max_staleness_seconds=max_staleness_seconds,
+    )
+    if exit_snapshot is None or exit_snapshot.price_usd is None:
+        return entry_snapshot.price_usd, None, None, None
+
+    raw_entry_price = entry_snapshot.price_usd
+    raw_exit_price = exit_snapshot.price_usd
+    effective_entry_price = apply_entry_cost(raw_entry_price, cost_bps=config.cost_bps)
+    effective_exit_price = apply_exit_cost(raw_exit_price, cost_bps=config.cost_bps)
+    mark_gross_return = compute_forward_return(raw_entry_price, raw_exit_price)
+    mark_net_return = compute_forward_return(effective_entry_price, effective_exit_price)
+    return raw_entry_price, raw_exit_price, mark_gross_return, mark_net_return
 
 
 async def _price_and_persist_trades(
@@ -170,155 +224,114 @@ async def _price_and_persist_trades(
     algorithm_version: str,
     config_hash: str,
     computed_at: datetime,
+    opportunities_by_wallet: dict[uuid.UUID, list[WalletOpportunity]],
 ) -> list[TradeOutcome]:
+    """FSR-08: the PRIMARY executable-return result is the entry
+    wallet's own real Phase 5 reverse-executable quote at the primary 5m
+    horizon (the same evidence FSR-05/06/07 reuse), matched by
+    (token_id, first_seen_at == entry.at) -- never a mark-price proxy.
+    An explicit no-route/insufficient-liquidity/excessive-impact/quote-
+    failure observation is recorded as ``FAILURE_EXECUTABLE_QUOTE_FAILED``
+    (never dropped, never folded into RESOLVED); no matching opportunity/
+    probe at all (or one still PENDING/UNAVAILABLE) is
+    ``FAILURE_NO_EXECUTABLE_EVIDENCE``. Strategy E's entries have no
+    single entry wallet (anchored at a convergence episode instead), so
+    they are honestly always ``FAILURE_NO_EXECUTABLE_EVIDENCE`` -- there
+    is no per-wallet Phase 5 shadow position for a swarm-anchored entry
+    to reuse (a disclosed Phase 10 scope limitation, not a fabricated
+    value)."""
     outcomes: list[TradeOutcome] = []
     max_staleness_seconds = config.entry_exit_price_max_staleness.total_seconds()
 
     for ordinal, matched in enumerate(sorted(match_result.trades, key=lambda t: t.entry.at)):
-        entry_snapshot = await load_nearest_token_market_snapshot(
-            session,
-            token_id=matched.entry.token_id,
-            target=matched.entry.at,
-            max_staleness_seconds=max_staleness_seconds,
+        (
+            mark_entry_price,
+            mark_exit_price,
+            mark_gross_return,
+            mark_net_return,
+        ) = await _mark_prices_and_return(
+            session, matched=matched, config=config, max_staleness_seconds=max_staleness_seconds
         )
-        if entry_snapshot is None or entry_snapshot.price_usd is None:
-            await _persist(
-                session,
-                strategy_code=strategy_code,
-                matched=matched,
-                entry_price=None,
-                exit_price=None,
-                gross_return=None,
-                net_return=None,
-                outcome=OUTCOME_FAILURE_NO_ENTRY_PRICE,
-                config=config,
-                cutoff=cutoff,
-                algorithm_version=algorithm_version,
-                config_hash=config_hash,
-                computed_at=computed_at,
-            )
-            outcomes.append(
-                TradeOutcome(
-                    outcome=OUTCOME_FAILURE_NO_ENTRY_PRICE, net_return=None, exit_at_ordinal=ordinal
-                )
-            )
-            continue
-
-        raw_entry_price = entry_snapshot.price_usd
 
         if matched.exit is None:
-            await _persist(
-                session,
-                strategy_code=strategy_code,
-                matched=matched,
-                entry_price=raw_entry_price,
-                exit_price=None,
-                gross_return=None,
-                net_return=None,
-                outcome=OUTCOME_FAILURE_NO_EXIT_TRIGGER,
-                config=config,
-                cutoff=cutoff,
-                algorithm_version=algorithm_version,
-                config_hash=config_hash,
-                computed_at=computed_at,
-            )
-            outcomes.append(
-                TradeOutcome(
-                    outcome=OUTCOME_FAILURE_NO_EXIT_TRIGGER,
-                    net_return=None,
-                    exit_at_ordinal=ordinal,
+            outcome = OUTCOME_FAILURE_NO_EXIT_TRIGGER
+            executable_status = None
+            executable_failure_class = None
+            gross_return: Decimal | None = None
+            net_return: Decimal | None = None
+        else:
+            opportunity = (
+                next(
+                    (
+                        opp
+                        for opp in opportunities_by_wallet.get(matched.entry.wallet_id, [])
+                        if opp.token_id == matched.entry.token_id
+                        and opp.first_seen_at == matched.entry.at
+                    ),
+                    None,
                 )
+                if matched.entry.wallet_id is not None
+                else None
             )
-            continue
-
-        exit_snapshot = await load_nearest_token_market_snapshot(
-            session,
-            token_id=matched.entry.token_id,
-            target=matched.exit.at,
-            max_staleness_seconds=max_staleness_seconds,
-        )
-        if exit_snapshot is None or exit_snapshot.price_usd is None:
-            await _persist(
-                session,
-                strategy_code=strategy_code,
-                matched=matched,
-                entry_price=raw_entry_price,
-                exit_price=None,
-                gross_return=None,
-                net_return=None,
-                outcome=OUTCOME_FAILURE_NO_EXIT_PRICE,
-                config=config,
-                cutoff=cutoff,
-                algorithm_version=algorithm_version,
-                config_hash=config_hash,
-                computed_at=computed_at,
+            reverse_outcome = (
+                opportunity.reverse_outcomes.get(PRIMARY_EXECUTABLE_HORIZON)
+                if opportunity is not None
+                else None
             )
-            outcomes.append(
-                TradeOutcome(
-                    outcome=OUTCOME_FAILURE_NO_EXIT_PRICE, net_return=None, exit_at_ordinal=ordinal
-                )
-            )
-            continue
+            if reverse_outcome is None:
+                outcome = OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE
+                executable_status = None
+                executable_failure_class = None
+                gross_return = None
+                net_return = None
+            else:
+                result = reverse_outcome.result
+                executable_status = result.status
+                executable_failure_class = result.failure_class
+                if result.status == "SUCCESS" and result.gross_return_fraction is not None:
+                    outcome = OUTCOME_RESOLVED
+                    gross_return = result.gross_return_fraction
+                    net_return = (
+                        result.net_return_fraction
+                        if result.net_return_fraction is not None
+                        else result.gross_return_fraction
+                    )
+                elif result.status == "FAILED":
+                    outcome = OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED
+                    gross_return = None
+                    net_return = None
+                else:
+                    outcome = OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE
+                    gross_return = None
+                    net_return = None
 
-        raw_exit_price = exit_snapshot.price_usd
-        effective_entry_price = apply_entry_cost(raw_entry_price, cost_bps=config.cost_bps)
-        effective_exit_price = apply_exit_cost(raw_exit_price, cost_bps=config.cost_bps)
-        gross_return = compute_forward_return(raw_entry_price, raw_exit_price)
-        net_return = compute_forward_return(effective_entry_price, effective_exit_price)
-
-        await _persist(
+        await get_or_create_synthetic_strategy_trade(
             session,
             strategy_code=strategy_code,
             matched=matched,
-            entry_price=raw_entry_price,
-            exit_price=raw_exit_price,
+            entry_price_usd=mark_entry_price,
+            exit_price_usd=mark_exit_price,
+            cost_bps_applied=config.cost_bps,
             gross_return=gross_return,
             net_return=net_return,
-            outcome=OUTCOME_RESOLVED,
-            config=config,
-            cutoff=cutoff,
+            executable_horizon_label=PRIMARY_EXECUTABLE_HORIZON
+            if matched.exit is not None
+            else None,
+            executable_status=executable_status,
+            executable_failure_class=executable_failure_class,
+            mark_gross_return=mark_gross_return,
+            mark_net_return=mark_net_return,
+            outcome=outcome,
+            as_of=cutoff,
             algorithm_version=algorithm_version,
             config_hash=config_hash,
-            computed_at=computed_at,
+            now=computed_at,
         )
         outcomes.append(
-            TradeOutcome(outcome=OUTCOME_RESOLVED, net_return=net_return, exit_at_ordinal=ordinal)
+            TradeOutcome(outcome=outcome, net_return=net_return, exit_at_ordinal=ordinal)
         )
 
     return outcomes
-
-
-async def _persist(
-    session: AsyncSession,
-    *,
-    strategy_code: str,
-    matched: MatchedTrade,
-    entry_price: Decimal | None,
-    exit_price: Decimal | None,
-    gross_return: Decimal | None,
-    net_return: Decimal | None,
-    outcome: str,
-    config: Phase10RunConfig,
-    cutoff: datetime,
-    algorithm_version: str,
-    config_hash: str,
-    computed_at: datetime,
-) -> None:
-    await get_or_create_synthetic_strategy_trade(
-        session,
-        strategy_code=strategy_code,
-        matched=matched,
-        entry_price_usd=entry_price,
-        exit_price_usd=exit_price,
-        cost_bps_applied=config.cost_bps,
-        gross_return=gross_return,
-        net_return=net_return,
-        outcome=outcome,
-        as_of=cutoff,
-        algorithm_version=algorithm_version,
-        config_hash=config_hash,
-        now=computed_at,
-    )
 
 
 async def _run_and_persist_strategy(
@@ -331,7 +344,8 @@ async def _run_and_persist_strategy(
     cutoff: datetime,
     config: Phase10RunConfig,
     computed_at: datetime,
-) -> StrategySummary:
+    opportunities_by_wallet: dict[uuid.UUID, list[WalletOpportunity]],
+) -> tuple[StrategySummary, bool]:
     algorithm_version = ALGORITHM_VERSION
     config_hash = config.config_hash()
 
@@ -352,11 +366,19 @@ async def _run_and_persist_strategy(
         algorithm_version=algorithm_version,
         config_hash=config_hash,
         computed_at=computed_at,
+        opportunities_by_wallet=opportunities_by_wallet,
     )
     summary = compute_strategy_summary(
         outcomes,
         concurrency_samples=match_result.concurrency_samples,
         max_concurrent_positions=config.max_concurrent_positions,
+    )
+    # FSR-08: true only when NOT ONE trade ever got real executable
+    # evidence (success or failure) -- "do not silently fall back to
+    # mark prices" when there simply isn't enough executable evidence to
+    # report a meaningful result.
+    insufficient_executable_sample = not any(
+        o.outcome in (OUTCOME_RESOLVED, OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED) for o in outcomes
     )
     await get_or_create_synthetic_strategy_summary(
         session,
@@ -371,12 +393,13 @@ async def _run_and_persist_strategy(
         capital_utilization=summary.capital_utilization,
         mean_net_return=summary.mean_net_return,
         median_net_return=summary.median_net_return,
+        insufficient_executable_sample=insufficient_executable_sample,
         as_of=cutoff,
         algorithm_version=algorithm_version,
         config_hash=config_hash,
         now=computed_at,
     )
-    return summary
+    return summary, insufficient_executable_sample
 
 
 async def compute_and_persist_phase10(
@@ -400,31 +423,9 @@ async def compute_and_persist_phase10(
 
     source_entries = await load_source_entries(session, cutoff=cutoff)
     source_exits = await load_source_exits(session, cutoff=cutoff)
-
-    discovery_wallet_ids = await load_discovery_specialist_wallet_ids(
-        session,
-        cutoff=cutoff,
-        algorithm_version=PHASE9_ALGORITHM_VERSION,
-        config_hash=phase9_config.config_hash(),
+    confirmed_entries = await load_confirmed_entries(
+        session, cutoff=cutoff, confirmation_algorithm_version=PHASE8_ALGORITHM_VERSION
     )
-    discovery_entries = filter_entries_by_wallet(source_entries, discovery_wallet_ids)
-
-    confirmed_discovery_entries = await load_confirmed_discovery_entries(
-        session,
-        cutoff=cutoff,
-        discovery_wallet_ids=discovery_wallet_ids,
-        confirmation_algorithm_version=PHASE8_ALGORITHM_VERSION,
-    )
-
-    exit_specialist_wallet_ids = await load_exit_specialist_wallet_ids(
-        session,
-        cutoff=cutoff,
-        algorithm_version=PHASE9_ALGORITHM_VERSION,
-        config_hash=phase9_config.config_hash(),
-        min_exit_specialist_score=config.min_exit_specialist_score,
-    )
-    exit_oracle_exits = filter_exits_by_wallet(source_exits, exit_specialist_wallet_ids)
-
     high_convergence_entries = await load_high_convergence_entries(
         session,
         cutoff=cutoff,
@@ -439,8 +440,78 @@ async def compute_and_persist_phase10(
         config_hash=phase9_config.config_hash(),
     )
 
+    # FSR-08: Strategy B's discovery-specialist filter and Strategy D's
+    # exit-specialist filter must each use the Phase 9 classification
+    # exactly AS OF that individual entry/exit's own ``at`` -- never a
+    # single set computed once at the final run cutoff (look-ahead bias).
+    # Phase 9 only ever persists one snapshot per cutoff it is invoked
+    # with, so every DISTINCT decision time actually needed here is
+    # recomputed through Phase 9's own idempotent cascade (a disclosed
+    # O(distinct decision times) cost) and then queried back.
+    phase9_config_hash = phase9_config.config_hash()
+    decision_times = (
+        {e.at for e in source_entries}
+        | {e.at for e in confirmed_entries}
+        | {e.at for e in source_exits}
+    )
+    discovery_wallet_ids_by_time: dict[datetime, set[uuid.UUID]] = {}
+    exit_specialist_scores_by_time: dict[datetime, dict[uuid.UUID, Decimal | None]] = {}
+    for decision_time in decision_times:
+        if decision_time != cutoff:
+            await compute_and_persist_phase9(
+                session,
+                cutoff=decision_time,
+                graph_config=graph_config,
+                phase8_config=phase8_config,
+                config=phase9_config,
+                computed_at=computed_at,
+            )
+        scores = await load_specialist_scores_as_of(
+            session,
+            decision_time=decision_time,
+            algorithm_version=PHASE9_ALGORITHM_VERSION,
+            config_hash=phase9_config_hash,
+        )
+        discovery_wallet_ids_by_time[decision_time] = {
+            s.wallet_id for s in scores if s.dominant_specialty == "DISCOVERY"
+        }
+        exit_specialist_scores_by_time[decision_time] = {
+            s.wallet_id: s.exit_specialist_score for s in scores
+        }
+
+    discovery_entries = filter_entries_by_decision_time_discovery_specialist(
+        source_entries, discovery_wallet_ids_by_time
+    )
+    confirmed_discovery_entries = filter_entries_by_decision_time_discovery_specialist(
+        confirmed_entries, discovery_wallet_ids_by_time
+    )
+    exit_oracle_exits = filter_exits_by_decision_time_exit_specialist(
+        source_exits,
+        exit_specialist_scores_by_time,
+        min_exit_specialist_score=config.min_exit_specialist_score,
+    )
+
+    # FSR-08: opportunities_by_wallet batched once per distinct entry
+    # wallet across the whole run (established FSR-05/06/07 efficiency
+    # pattern) -- every strategy's executable-return pricing draws from
+    # this same map.
+    all_entry_wallet_ids = {
+        e.wallet_id for e in (*source_entries, *confirmed_entries) if e.wallet_id is not None
+    }
+    opportunities_by_wallet: dict[uuid.UUID, list[WalletOpportunity]] = {}
+    for wallet_id in all_entry_wallet_ids:
+        firewall = await load_contamination_firewall(session, wallet_id=wallet_id)
+        result = await load_wallet_opportunities(
+            session, wallet_id=wallet_id, cutoff=cutoff, firewall=firewall
+        )
+        opportunities_by_wallet[wallet_id] = result.opportunities
+
     summaries: dict[str, StrategySummary] = {}
-    summaries[STRATEGY_A] = await _run_and_persist_strategy(
+    insufficient_executable_sample: dict[str, bool] = {}
+    (
+        summaries[STRATEGY_A],
+        insufficient_executable_sample[STRATEGY_A],
+    ) = await _run_and_persist_strategy(
         session,
         strategy_code=STRATEGY_A,
         entries=source_entries,
@@ -449,8 +520,12 @@ async def compute_and_persist_phase10(
         cutoff=cutoff,
         config=config,
         computed_at=computed_at,
+        opportunities_by_wallet=opportunities_by_wallet,
     )
-    summaries[STRATEGY_B] = await _run_and_persist_strategy(
+    (
+        summaries[STRATEGY_B],
+        insufficient_executable_sample[STRATEGY_B],
+    ) = await _run_and_persist_strategy(
         session,
         strategy_code=STRATEGY_B,
         entries=discovery_entries,
@@ -459,8 +534,12 @@ async def compute_and_persist_phase10(
         cutoff=cutoff,
         config=config,
         computed_at=computed_at,
+        opportunities_by_wallet=opportunities_by_wallet,
     )
-    summaries[STRATEGY_C] = await _run_and_persist_strategy(
+    (
+        summaries[STRATEGY_C],
+        insufficient_executable_sample[STRATEGY_C],
+    ) = await _run_and_persist_strategy(
         session,
         strategy_code=STRATEGY_C,
         entries=confirmed_discovery_entries,
@@ -469,8 +548,12 @@ async def compute_and_persist_phase10(
         cutoff=cutoff,
         config=config,
         computed_at=computed_at,
+        opportunities_by_wallet=opportunities_by_wallet,
     )
-    summaries[STRATEGY_D] = await _run_and_persist_strategy(
+    (
+        summaries[STRATEGY_D],
+        insufficient_executable_sample[STRATEGY_D],
+    ) = await _run_and_persist_strategy(
         session,
         strategy_code=STRATEGY_D,
         entries=confirmed_discovery_entries,
@@ -479,8 +562,12 @@ async def compute_and_persist_phase10(
         cutoff=cutoff,
         config=config,
         computed_at=computed_at,
+        opportunities_by_wallet=opportunities_by_wallet,
     )
-    summaries[STRATEGY_E] = await _run_and_persist_strategy(
+    (
+        summaries[STRATEGY_E],
+        insufficient_executable_sample[STRATEGY_E],
+    ) = await _run_and_persist_strategy(
         session,
         strategy_code=STRATEGY_E,
         entries=high_convergence_entries,
@@ -489,6 +576,11 @@ async def compute_and_persist_phase10(
         cutoff=cutoff,
         config=config,
         computed_at=computed_at,
+        opportunities_by_wallet=opportunities_by_wallet,
     )
 
-    return Phase10ComputationResult(as_of=cutoff, summaries=summaries)
+    return Phase10ComputationResult(
+        as_of=cutoff,
+        summaries=summaries,
+        insufficient_executable_sample=insufficient_executable_sample,
+    )

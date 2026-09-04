@@ -2722,6 +2722,9 @@ def synthetic_report(
                                 if result.summaries[code].median_net_return is not None
                                 else None
                             ),
+                            "insufficient_executable_sample": result.insufficient_executable_sample[
+                                code
+                            ],
                         }
                         for code in STRATEGY_CODES
                     },
@@ -2738,9 +2741,18 @@ def synthetic_report(
                         "capital_utilization is the mean concurrent-position count sampled at "
                         "each entry, divided by this run's own concurrency cap -- a disclosed "
                         "proxy, not an exact continuous-time integral",
-                        "entry/exit prices use a nearest-snapshot-within-tolerance lookup over "
-                        "token_market_snapshots -- a trade with no sufficiently fresh snapshot "
-                        "is recorded as a failure, never fabricated",
+                        "FSR-08: gross_return/net_return (feeding mean/median_net_return) are "
+                        "the entry wallet's own real Phase 5 reverse-executable quote at the "
+                        "primary 5m horizon -- never a mark-price proxy; a trade with no "
+                        "matching Phase 5 evidence, or an explicit quote failure, is recorded "
+                        "honestly as a failure, never fabricated",
+                        "Strategy E's entries are anchored to a swarm convergence episode with "
+                        "no single entry wallet, so they have no per-wallet Phase 5 shadow "
+                        "position to draw executable evidence from -- always "
+                        "FAILURE_NO_EXECUTABLE_EVIDENCE, a disclosed scope limitation",
+                        "insufficient_executable_sample is true only when a strategy never got "
+                        "real executable evidence (success or failure) for a single trade -- "
+                        "its other fields are not silently backed by mark prices in that case",
                     ],
                 }
         finally:

@@ -35,12 +35,22 @@ OUTCOME_RESOLVED = "RESOLVED"
 OUTCOME_FAILURE_NO_ENTRY_PRICE = "FAILURE_NO_ENTRY_PRICE"
 OUTCOME_FAILURE_NO_EXIT_TRIGGER = "FAILURE_NO_EXIT_TRIGGER"
 OUTCOME_FAILURE_NO_EXIT_PRICE = "FAILURE_NO_EXIT_PRICE"
+# FSR-08: the two primary executable-evidence failure modes -- an
+# explicit no-route/insufficient-liquidity/excessive-impact/quote-
+# failure observation (QUOTE_FAILED, with ``executable_failure_class``
+# populated) is never dropped or folded into RESOLVED; NO_EXECUTABLE_
+# EVIDENCE covers no matching Phase 5 opportunity/probe at all, or one
+# still PENDING/UNAVAILABLE.
+OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE = "FAILURE_NO_EXECUTABLE_EVIDENCE"
+OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED = "FAILURE_EXECUTABLE_QUOTE_FAILED"
 
 TRADE_OUTCOMES: tuple[str, ...] = (
     OUTCOME_RESOLVED,
     OUTCOME_FAILURE_NO_ENTRY_PRICE,
     OUTCOME_FAILURE_NO_EXIT_TRIGGER,
     OUTCOME_FAILURE_NO_EXIT_PRICE,
+    OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE,
+    OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED,
 )
 
 STRATEGY_CODES: tuple[str, ...] = ("A", "B", "C", "D", "E")
@@ -63,18 +73,19 @@ class SyntheticStrategyTrade(Base):
         ),
         CheckConstraint(
             "outcome IN ('RESOLVED', 'FAILURE_NO_ENTRY_PRICE', 'FAILURE_NO_EXIT_TRIGGER', "
-            "'FAILURE_NO_EXIT_PRICE')",
+            "'FAILURE_NO_EXIT_PRICE', 'FAILURE_NO_EXECUTABLE_EVIDENCE', "
+            "'FAILURE_EXECUTABLE_QUOTE_FAILED')",
             name="ck_synthetic_strategy_trades_outcome",
         ),
         CheckConstraint(
-            "(outcome = 'RESOLVED' AND exit_at IS NOT NULL AND exit_price_usd IS NOT NULL "
-            "AND net_return IS NOT NULL) OR (outcome != 'RESOLVED')",
+            "(outcome = 'RESOLVED' AND exit_at IS NOT NULL AND net_return IS NOT NULL) "
+            "OR (outcome != 'RESOLVED')",
             name="ck_synthetic_strategy_trades_resolved_consistency",
         ),
         CheckConstraint(
-            "(outcome = 'FAILURE_NO_ENTRY_PRICE' AND entry_price_usd IS NULL) "
-            "OR (outcome != 'FAILURE_NO_ENTRY_PRICE')",
-            name="ck_synthetic_strategy_trades_no_entry_price_consistency",
+            "executable_status IS NULL "
+            "OR executable_status IN ('SUCCESS', 'FAILED', 'UNAVAILABLE', 'PENDING')",
+            name="ck_synthetic_strategy_trades_executable_status",
         ),
         CheckConstraint("cost_bps_applied >= 0", name="ck_synthetic_strategy_trades_cost_nonneg"),
         CheckConstraint(
@@ -102,6 +113,8 @@ class SyntheticStrategyTrade(Base):
     # triggered this simulated entry (CORE-004).
     entry_trigger_reference: Mapped[dict] = mapped_column(JSONB, nullable=False)
     entry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Descriptive-only mark price (section 47/48) -- never the source of
+    # the primary executable-return fields below (FSR-08).
     entry_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
 
     exit_wallet_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -112,8 +125,19 @@ class SyntheticStrategyTrade(Base):
     exit_price_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
 
     cost_bps_applied: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    # FSR-08: gross_return/net_return are now the PRIMARY executable-
+    # return result, sourced from the entry wallet's own real Phase 5
+    # reverse-executable quote at ``executable_horizon_label`` -- never a
+    # mark-price-derived proxy. mark_gross_return/mark_net_return
+    # preserve the OLD fixed-cost-haircut mark computation as an
+    # explicitly separate, descriptive-only sensitivity metric.
     gross_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     net_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
+    executable_horizon_label: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    executable_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    executable_failure_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    mark_gross_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
+    mark_net_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     outcome: Mapped[str] = mapped_column(String(32), nullable=False)
 
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

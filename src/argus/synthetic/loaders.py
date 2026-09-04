@@ -53,83 +53,72 @@ async def load_source_exits(session: AsyncSession, *, cutoff: datetime) -> list[
     ]
 
 
-async def load_discovery_specialist_wallet_ids(
-    session: AsyncSession, *, cutoff: datetime, algorithm_version: str, config_hash: str
-) -> set[uuid.UUID]:
-    rows = (
-        (
-            await session.execute(
-                select(WalletSpecialistScore.wallet_id).where(
-                    WalletSpecialistScore.as_of == cutoff,
-                    WalletSpecialistScore.algorithm_version == algorithm_version,
-                    WalletSpecialistScore.config_hash == config_hash,
-                    WalletSpecialistScore.dominant_specialty == "DISCOVERY",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return set(rows)
-
-
-async def load_exit_specialist_wallet_ids(
-    session: AsyncSession,
-    *,
-    cutoff: datetime,
-    algorithm_version: str,
-    config_hash: str,
-    min_exit_specialist_score: Decimal,
-) -> set[uuid.UUID]:
-    rows = (
-        (
-            await session.execute(
-                select(WalletSpecialistScore.wallet_id).where(
-                    WalletSpecialistScore.as_of == cutoff,
-                    WalletSpecialistScore.algorithm_version == algorithm_version,
-                    WalletSpecialistScore.config_hash == config_hash,
-                    WalletSpecialistScore.exit_specialist_score.is_not(None),
-                    WalletSpecialistScore.exit_specialist_score >= min_exit_specialist_score,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return set(rows)
-
-
-def filter_entries_by_wallet(
-    entries: list[TriggerEvent], wallet_ids: set[uuid.UUID]
+def filter_entries_by_decision_time_discovery_specialist(
+    entries: list[TriggerEvent], discovery_wallet_ids_by_time: dict[datetime, set[uuid.UUID]]
 ) -> list[TriggerEvent]:
     """Strategy B's own entries: Strategy A's population, restricted to
-    discovery-specialist wallets."""
-    return [e for e in entries if e.wallet_id is not None and e.wallet_id in wallet_ids]
+    wallets that were discovery specialists AS OF that entry's own
+    ``at`` (FSR-08) -- never a single set computed once at the final
+    run cutoff."""
+    return [
+        e
+        for e in entries
+        if e.wallet_id is not None and e.wallet_id in discovery_wallet_ids_by_time.get(e.at, set())
+    ]
 
 
-def filter_exits_by_wallet(
-    exits: list[TriggerEvent], wallet_ids: set[uuid.UUID]
+def filter_exits_by_decision_time_exit_specialist(
+    exits: list[TriggerEvent],
+    exit_specialist_scores_by_time: dict[datetime, dict[uuid.UUID, Decimal | None]],
+    *,
+    min_exit_specialist_score: Decimal,
 ) -> list[TriggerEvent]:
     """Strategy D's own exits: any qualifying exit-specialist's own sell,
-    not tied to the original leader."""
-    return [e for e in exits if e.wallet_id is not None and e.wallet_id in wallet_ids]
+    not tied to the original leader, qualified using that EXIT's own
+    ``at`` (FSR-08) -- never the final run cutoff."""
+    result: list[TriggerEvent] = []
+    for e in exits:
+        if e.wallet_id is None:
+            continue
+        score = exit_specialist_scores_by_time.get(e.at, {}).get(e.wallet_id)
+        if score is not None and score >= min_exit_specialist_score:
+            result.append(e)
+    return result
 
 
-async def load_confirmed_discovery_entries(
-    session: AsyncSession,
-    *,
-    cutoff: datetime,
-    discovery_wallet_ids: set[uuid.UUID],
-    confirmation_algorithm_version: str,
+async def load_specialist_scores_as_of(
+    session: AsyncSession, *, decision_time: datetime, algorithm_version: str, config_hash: str
+) -> list[WalletSpecialistScore]:
+    """FSR-08: every wallet's Phase 9 specialist classification exactly
+    AS OF ``decision_time`` -- callers use this per DISTINCT decision
+    time actually needed (never the final run cutoff applied uniformly),
+    after ensuring Phase 9 has itself been computed at that same cutoff
+    (see ``argus.synthetic.service``'s own per-decision-time cascade)."""
+    rows = (
+        (
+            await session.execute(
+                select(WalletSpecialistScore).where(
+                    WalletSpecialistScore.as_of == decision_time,
+                    WalletSpecialistScore.algorithm_version == algorithm_version,
+                    WalletSpecialistScore.config_hash == config_hash,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
+async def load_confirmed_entries(
+    session: AsyncSession, *, cutoff: datetime, confirmation_algorithm_version: str
 ) -> list[TriggerEvent]:
-    """Strategies C/D's own entries: a discovery specialist's buy, but the
-    ENTRY fires at the moment a follower CONFIRMED it (Phase 8's own
-    ``follower_entered_at``), not at the original leader's own entry
-    time -- entering only once independent confirmation exists is the
-    entire point of these two strategies (section 64's own R -> A ->
-    "increase exposure if validated" pipeline)."""
-    if not discovery_wallet_ids:
-        return []
+    """Strategies C/D's own RAW candidate entries (every leader's buy that
+    was independently CONFIRMED by a follower, Phase 8's own
+    ``follower_entered_at``), before discovery-specialist filtering --
+    FSR-08 requires that filtering use each entry's own decision-time
+    state, so it is applied by the caller (``argus.synthetic.service``),
+    never pre-filtered here by a single run-wide specialist set."""
     rows = (
         await session.execute(
             select(ExpectedConfirmationEvent, DirectionalEdge.leader_wallet_id)
@@ -141,7 +130,6 @@ async def load_confirmed_discovery_entries(
                 ExpectedConfirmationEvent.as_of == cutoff,
                 ExpectedConfirmationEvent.algorithm_version == confirmation_algorithm_version,
                 ExpectedConfirmationEvent.outcome != "ABSENT",
-                DirectionalEdge.leader_wallet_id.in_(discovery_wallet_ids),
             )
         )
     ).all()

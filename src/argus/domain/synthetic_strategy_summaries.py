@@ -18,6 +18,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Integer,
@@ -100,6 +101,13 @@ class SyntheticStrategySummary(Base):
     capital_utilization: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     mean_net_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     median_net_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
+    # FSR-08: true when this strategy has no genuine executable-return
+    # evidence to report a meaningful result on -- "do not silently fall
+    # back to mark prices" (never inferred solely from resolved_count
+    # being zero at the persistence layer; the service computes it).
+    insufficient_executable_sample: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
 
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
