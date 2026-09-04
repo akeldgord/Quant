@@ -43,9 +43,28 @@ from argus.domain.live_positions import STATUS_CLOSED, STATUS_OPEN, LivePosition
 from argus.domain.risk_exit_events import RiskExitEvent
 from argus.domain.token_safety_assessments import TokenSafetyAssessment
 from argus.executor.attestation import AttestationResult
-from argus.executor.fill_accounting import FillEvidence
+from argus.executor.fill_accounting import ALL_CONFIRMATION_STATES, FillEvidence
 from argus.executor.risk_exits import RiskExitTrigger
 from argus.executor.state_machine import transition as validate_transition
+
+# Ordinal rank of confirmation_state -- FSR-02's "confirmed chain evidence
+# always wins" applies over time too: a later, weaker observation (e.g. a
+# transient RPC hiccup re-reporting UNKNOWN) must never overwrite evidence
+# already recorded at a stronger level. FAILED ranks with FINALIZED/
+# CONFIRMED -- it is just as definitive a terminal chain outcome, only a
+# negative one.
+_CONFIRMATION_STATE_RANK: dict[str, int] = {
+    "UNKNOWN": 0,
+    "PROCESSED": 1,
+    "CONFIRMED": 2,
+    "FINALIZED": 3,
+    "FAILED": 3,
+}
+
+
+class StaleFillEvidenceError(RuntimeError):
+    """Raised instead of silently overwriting stronger, already-recorded
+    fill evidence with a weaker/older observation."""
 
 
 def _row_values(row: object, table) -> dict:
@@ -121,7 +140,12 @@ async def get_or_create_execution_intent(
             created_at=now,
         )
     )
-    return row, True
+    # The raw INSERT above bypassed the ORM unit of work, so `row` itself
+    # is a transient object the session has never tracked -- mutating it
+    # later (e.g. apply_transition) would silently be lost at flush time.
+    # Re-selecting attaches a session-tracked instance instead, matching
+    # the "existing"/"lost the race" branches above.
+    return (await session.execute(select(ExecutionIntent).where(*identity))).scalar_one(), True
 
 
 async def apply_transition(
@@ -188,7 +212,12 @@ async def get_or_create_execution_fill(
 ) -> tuple[ExecutionFill, bool]:
     """One fill row per intent (``execution_fills.intent_id`` is UNIQUE) --
     idempotent under the same ``INSERT ... ON CONFLICT DO NOTHING`` +
-    re-select pattern as :func:`get_or_create_execution_intent`."""
+    re-select pattern as :func:`get_or_create_execution_intent`. A rerun
+    against an already-existing row never overwrites it -- evidence that
+    arrives after creation (FSR-02: chain confirmation resolving an
+    ambiguous submission) goes through
+    :func:`update_execution_fill_chain_evidence` instead, which enforces
+    that confirmation never regresses."""
     identity = (ExecutionFill.intent_id == intent_id,)
     existing = (await session.execute(select(ExecutionFill).where(*identity))).scalar_one_or_none()
     if existing is not None:
@@ -207,7 +236,11 @@ async def get_or_create_execution_fill(
         priority_fee_raw=evidence.priority_fee_raw,
         tip_raw=evidence.tip_raw,
         rent_raw=evidence.rent_raw,
+        transaction_signature=evidence.transaction_signature,
+        slot=evidence.slot,
+        confirmation_state=evidence.confirmation_state,
         created_at=now,
+        updated_at=None,
     )
     stmt = (
         pg_insert(ExecutionFill)
@@ -218,7 +251,66 @@ async def get_or_create_execution_fill(
     inserted_id = (await session.execute(stmt)).scalar_one_or_none()
     if inserted_id is None:
         return (await session.execute(select(ExecutionFill).where(*identity))).scalar_one(), False
-    return row, True
+    # As in get_or_create_execution_intent: re-select so the returned
+    # object is session-tracked, not a transient instance whose later
+    # mutations (update_execution_fill_chain_evidence) would be lost.
+    return (await session.execute(select(ExecutionFill).where(*identity))).scalar_one(), True
+
+
+async def load_execution_fill_for_intent(
+    session: AsyncSession, *, intent_id: uuid.UUID
+) -> ExecutionFill | None:
+    """FSR-02's read path for reconciliation: is there already a fill row
+    for this intent, and at what confirmation level?"""
+    return (
+        await session.execute(select(ExecutionFill).where(ExecutionFill.intent_id == intent_id))
+    ).scalar_one_or_none()
+
+
+async def update_execution_fill_chain_evidence(
+    session: AsyncSession,
+    *,
+    fill: ExecutionFill,
+    evidence: FillEvidence,
+    now: datetime,
+) -> ExecutionFill:
+    """Updates a fill row's chain-confirmation evidence in place -- the
+    ONE update path this otherwise append-only table has (FSR-02). Only
+    ``actual_input_raw``/``actual_output_raw``/``network_fee_raw``/
+    ``transaction_signature``/``slot``/``confirmation_state`` are ever
+    touched here; ``quoted_*``/``simulated_*``/``priority_fee_raw``/
+    ``tip_raw``/``rent_raw`` are set once at creation and never revised by
+    this function.
+
+    Fails closed (:class:`StaleFillEvidenceError`) rather than silently
+    discard evidence: a caller must never pass a ``confirmation_state``
+    that ranks weaker than the row's current one (e.g. re-applying a
+    transient ``UNKNOWN`` observation over an already-recorded
+    ``CONFIRMED``/``FAILED`` outcome)."""
+    if evidence.confirmation_state is None or evidence.confirmation_state not in (
+        ALL_CONFIRMATION_STATES
+    ):
+        raise StaleFillEvidenceError(
+            f"update_execution_fill_chain_evidence requires a valid confirmation_state, "
+            f"got {evidence.confirmation_state!r}"
+        )
+    existing_rank = _CONFIRMATION_STATE_RANK.get(fill.confirmation_state or "UNKNOWN", 0)
+    new_rank = _CONFIRMATION_STATE_RANK[evidence.confirmation_state]
+    if new_rank < existing_rank:
+        raise StaleFillEvidenceError(
+            f"refusing to downgrade execution_fills.confirmation_state from "
+            f"{fill.confirmation_state!r} to {evidence.confirmation_state!r} "
+            f"(intent_id={fill.intent_id})"
+        )
+
+    fill.actual_input_raw = evidence.actual_input_raw
+    fill.actual_output_raw = evidence.actual_output_raw
+    fill.network_fee_raw = evidence.network_fee_raw
+    fill.transaction_signature = evidence.transaction_signature
+    fill.slot = evidence.slot
+    fill.confirmation_state = evidence.confirmation_state
+    fill.updated_at = now
+    return fill
 
 
 async def open_live_position(

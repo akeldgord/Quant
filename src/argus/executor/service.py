@@ -139,16 +139,23 @@ def build_phase6_disposition() -> Phase6Disposition:
         "host_reconciliation_dimension_count_is_7": _reconciliation_dimension_count_is_7(),
     }
     limitations = (
-        "no real on-disk-keypair signer implementation exists in this codebase by design "
-        "-- only the Signer protocol plus FakeSigner/RaisingSigner test doubles -- since this "
-        "coding session is absolutely prohibited from ever handling real key material (MASTER_SPEC "
-        "section 70)",
-        "no live quote-provider dispatch or order-submission subsystem exists -- risk/safety/"
-        "sellability gates take typed evidence as parameters rather than calling a live provider",
+        "a real on-disk-keypair signer (argus.executor.live_signing.FileKeypairSigner, FSR-01) "
+        "and a real transaction broadcast adapter (argus.executor.live_submission."
+        "SolanaSubmissionClient) exist as of the final-spec-recovery, but are loadable/importable "
+        "ONLY from the isolated argus.executor.main process entry point, from an external "
+        "operator-controlled key path this coding session never reads, prints, or logs -- proven "
+        "by tests/unit/test_fsr01_live_signer_isolation_boundary.py's own AST-based import-graph "
+        "check, the same mechanism P6-02's signer isolation test uses",
+        "no automated copy-signal/live-trading loop exists that would ever call the real signer/"
+        "submission adapter on its own initiative -- risk/safety/sellability gates take typed "
+        "evidence as parameters rather than calling a live provider, and argus.executor.main's own "
+        "startup sequence never dispatches a transaction regardless of arm-file validity",
         "PostgresLeaseStore and the DB-backed persistence paths are structurally implemented but "
         "unexercised in this sandbox (no reachable Postgres); the executor-singleton concurrency "
         "guarantee is proven instead via InMemoryLeaseStore with two independent simulated callers",
         "LIVE_CANARY_PASSED and LIVE_ARMED are unconditionally false in every report this module "
-        "can produce -- no mainnet canary has run and no human-authorized external arm file exists",
+        "can produce -- no mainnet canary has run (Phase 6.5 is explicitly human-only, never "
+        "self-executed) and this module's own code path has no parameter that could ever flip "
+        "either to true",
     )
     return build_disposition(software_criteria=software_criteria, limitations=limitations)

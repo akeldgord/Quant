@@ -37,5 +37,35 @@ services:
       postgres:
         condition: service_healthy
 
+  # FSR-01 (argus-final-spec-recovery-001): the distinct, least-privilege
+  # executor process -- structurally separate from `api` above. Connects
+  # as `argus_executor` (never `argus_admin`/`argus_ingest`/`argus_research`),
+  # exposes NO inbound port (nothing calls into it), and is the only
+  # service with the operator secrets mount below (read-only; the host
+  # directory it points at, and everything under it -- including the
+  # signing key and arm file -- must be provisioned OUTSIDE this repo by
+  # the operator; neither is ever created, generated, or committed by
+  # this codebase, MASTER_SPEC.md section 70/73). Gated behind the
+  # `executor` Compose profile so a plain `docker compose up`/`make up`
+  # never starts it -- only `docker compose --profile executor up` does,
+  # an explicit operator decision this codebase never makes automatically.
+  executor:
+    profiles: ["executor"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: argus_executor
+    restart: unless-stopped
+    command: ["uv", "run", "python", "-m", "argus.executor.main"]
+    env_file:
+      - .env
+    environment:
+      ARGUS_DB_HOST: postgres
+    volumes:
+      - ${ARGUS_EXECUTOR_HOST_SECRETS_DIR:?set to an operator-provisioned host directory before using the executor profile}:/var/lib/argus/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   argus_postgres_data:
