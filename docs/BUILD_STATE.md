@@ -219,6 +219,40 @@ known_blockers:
     stash` to genuinely launch Claude against the pre-fix watcher. This
     is operational tooling, not ARGUS phase work — `current_phase` above
     is unaffected.
+  - **2026-09-04 — Final-spec-recovery contract (`argus-final-spec-recovery-001`,
+    FSR-01 through FSR-16) completed**, per an independent audit that
+    found the original Phase 6-11 build contaminated/incomplete against
+    MASTER_SPEC.md v2.0 at commit `ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30`.
+    FSR-04 through FSR-14 (point-in-time invariant; real Phase 7-11
+    evidence/features; contaminated-run versioning/invalidation registry;
+    retroactive Phase 7-11 recovery checkpoints) all PASS -- see this
+    session's own prior `docs/DECISION_LOG.md` entries and
+    `orchestration/checkpoints/phase_{7,8,9,10,11}_final_recovery.md`.
+    FSR-01/02 (production-capable executor boundary: `argus.executor.
+    live_signing.FileKeypairSigner` via `solders`, `argus.executor.
+    live_submission.SolanaSubmissionClient`, the distinct
+    `argus.executor.main` process/Compose service; real chain-based fill
+    reconciliation via `argus.executor.confirmation`, migration 0037) PASS.
+    FSR-03 (PostgreSQL 17 environment validation) is
+    `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` -- Docker daemon cannot start in
+    this sandbox and the outbound proxy blocks the PGDG package hosts by
+    policy; PostgreSQL 16 was explicitly NOT claimed as a substitute PASS.
+    FSR-15 (full regression, 0 failed) is PARTIAL: `tests/unit`+
+    `tests/golden`+`tests/replay` (1288 tests) are 0 failed;
+    `tests/integration` on PostgreSQL 16 is 384 passed, 21 failed, all 21
+    traced to one disclosed, pre-existing (not FSR-01/02/03-caused) shared
+    dev-database test-isolation gap across several Phase 5/7/8/9/10/11 +
+    shadow/reconciliation test files, left as open work rather than
+    rushed or hidden. Two OTHER pre-existing test-file defects (a stale
+    hardcoded Alembic revision literal, a test-file DB-role
+    misconfiguration) were found and fixed during this validation pass.
+    `LIVE_READY_SOFTWARE=true` and final recovery PASS are NOT claimed.
+    Full detail: `orchestration/checkpoints/
+    fsr15_16_final_recovery_acceptance_matrix.md`. `current_phase`/
+    `last_completed_phase` are unchanged (still 11) -- this recovery
+    corrected/hardened Phases 6-11's own prior work rather than advancing
+    MASTER_SPEC phase numbering; Phase 6.5 remains the only phase not
+    started, permanently human-only.
 
 ## Rules
 

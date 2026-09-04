@@ -3682,3 +3682,96 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
 - next: none remaining under the coding agent's own authorization;
   Phase 6.5 stays human-only. Awaiting the user's own audit.
 - git_commit: (recorded with this phase's own work)
+
+### 2026-09-04 — Final-spec-recovery contract (argus-final-spec-recovery-001) closed out, FSR-15/16
+- requirement_id: `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`'s
+  `argus-final-spec-recovery-001` instruction, FSR-01 through FSR-16,
+  responding to an independent audit that found the original Phase 6-11
+  build contaminated/incomplete against MASTER_SPEC.md v2.0 at
+  `TARGET_COMMIT` `ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30`.
+- decision: All 16 items are now either PASS, environment-blocked with
+  full disclosure, or partially met with the exact remaining gap
+  disclosed -- never silently claimed complete. Full acceptance matrix:
+  `orchestration/checkpoints/fsr15_16_final_recovery_acceptance_matrix.md`.
+  Summary: FSR-04..14 (point-in-time invariant reused throughout; real
+  Phase 7-11 evidence/forward-return/outcome-comparison/causal-dataset
+  features; a `contaminated_run_invalidations` registry versioning and
+  explaining the Phase 8/9/10/11 algorithm-version bumps; retroactive
+  Phase 7-11 recovery checkpoints) PASS. FSR-01/02 (a production-capable
+  executor process boundary -- `argus.executor.live_signing.
+  FileKeypairSigner` via the `solders` Solana SDK, loading a real keypair
+  only at runtime from an external operator-controlled path named by
+  `ARGUS_EXECUTOR_SIGNER_KEY_PATH`, never touched by this coding session;
+  `argus.executor.live_submission.SolanaSubmissionClient`, a real
+  `sendTransaction` broadcast adapter kept physically isolated inside
+  `argus.executor`; the distinct `argus.executor.main` process entry
+  point and a new `executor` Compose service gated behind a
+  `profiles: ["executor"]` opt-in; an AST-based isolation test proving no
+  other module can ever import either live-capable module; and real
+  chain-based fill reconstruction, migration 0037 adding
+  `transaction_signature`/`slot`/`confirmation_state` to
+  `execution_fills`, reusing Phase 1's own balance-delta parser rather
+  than a second implementation) PASS, validated against real Postgres
+  including `argus.executor.main` run for real end-to-end (a genuine
+  `PostgresLeaseStore` singleton lease acquired). FSR-03 (PostgreSQL 17
+  environment validation) is `FINAL_RECOVERY_ENVIRONMENT_BLOCKED`: this
+  sandbox's Docker daemon cannot start (`containerd` startup times out
+  under its own container-isolation restrictions) and its outbound proxy
+  denies CONNECT to the PGDG package hosts by policy (confirmed via the
+  proxy's own status endpoint); the one PyPI-distributed embedded-Postgres
+  package found bundles PostgreSQL 16.2, not 17, and was rejected rather
+  than substituted. PostgreSQL 16 was used only as supplementary
+  evidence, explicitly never claimed as a substitute PASS for the
+  PostgreSQL 17 requirement. FSR-15 (full regression suite, 0 failed) is
+  PARTIAL: `tests/unit`+`tests/golden`+`tests/replay` (1288 tests) are 0
+  failed, and `tests/integration` on PostgreSQL 16 improved from 38
+  failed/367 passed to 21 failed/384 passed after fixing two unrelated
+  pre-existing test-file defects found during this validation pass (a
+  stale hardcoded Alembic revision literal in
+  `tests/integration/test_migrations.py`, left over from when Phase 5 was
+  head; a DB-role misconfiguration in
+  `tests/integration/test_phase6_persistence_and_concurrency.py` that
+  connected as `argus_ingest` to write tables only `argus_executor` may
+  write per migration 0024's own least-privilege grants). The remaining
+  21 failures all trace to one single disclosed, pre-existing root cause
+  -- the shared, long-lived dev Postgres database has accumulated rows
+  from this entire multi-day session's own test runs, and several
+  Phase 5/7/8/9/10/11 + shadow/reconciliation production queries scan ALL
+  matching rows rather than only a given test's own seeded rows (every
+  affected test module passes individually against a fresh database,
+  confirming this). Fixing it correctly requires a repository-wide
+  test-infrastructure change (isolated per-module databases) across
+  roughly a dozen pre-existing test files spanning Phases 5-11 -- out of
+  this recovery's own FSR-01/02/03 scope and deliberately left as
+  disclosed open work rather than rushed through unsafely or hidden.
+  `LIVE_READY_SOFTWARE=true` and unconditional final recovery PASS are
+  NOT claimed anywhere in this recovery. FSR-16's own required
+  confirmations (Phase 6.5 never run; no mainnet transaction signed or
+  broadcast; no real operator key/seed accessed; no funded wallet
+  created; no arm file created/modified; no capital default changed from
+  zero; no paid provider enabled; no secret requested or paid
+  infrastructure enabled to work around the PostgreSQL 17 block) are all
+  satisfied -- see the acceptance-matrix checkpoint's own section D for
+  the itemized evidence.
+- reason: An audit-driven recovery of this shape (contaminated builds
+  found, remediation items assigned, each closed with real evidence or
+  honestly disclosed as blocked/partial) requires a single, complete,
+  honest final record -- exactly what MASTER_SPEC.md section 104's
+  checkpoint discipline and this session's own established pattern (never
+  claim PASS without real evidence; disclose every limitation) both
+  require, carried through to the contract's own closing item.
+- requested_by: human operator (via the audit-driven
+  `argus-final-spec-recovery-001` instruction; ChatGPT-orchestrator
+  remains unavailable per the 2026-09-03 governance-change entry above,
+  so the human operator remains the audit authority for this recovery
+  too, exercised at their own discretion, as with every phase since).
+- impact: `current_phase`/`last_completed_phase` in `docs/BUILD_STATE.md`
+  are UNCHANGED (still 11) -- this recovery corrected and hardened
+  Phases 6-11's own prior work rather than advancing MASTER_SPEC phase
+  numbering. Phase 6.5 (MAINNET CANARY) remains the only phase not
+  started, permanently human-only, never self-executed. FSR-03's
+  environment block and FSR-15's disclosed test-isolation gap are both
+  recorded as open items for a future session (with real PostgreSQL 17
+  access, and/or a dedicated pass giving each affected integration test
+  module its own isolated database) to close, not silently forgotten.
+- git_commit: (recorded with this recovery's own final commit)

@@ -1,0 +1,149 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE — FSR-15/16 (FINAL RECOVERY ACCEPTANCE MATRIX + HANDOFF)
+Generated: 2026-09-04T21:20:00Z
+
+=== CHECKPOINT ===
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: FSR-15 (final full regression + acceptance matrix) and FSR-16
+  (final security state, build state, and single handoff), per
+  `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`'s
+  `argus-final-spec-recovery-001` instruction -- the closing item of the
+  16-part final-spec recovery contract covering FSR-01 through FSR-14.
+STATUS: RECOVERY WORK COMPLETE FOR EVERY ITEM UNDER THIS SESSION'S OWN
+  AUTHORIZATION, WITH TWO HONEST, EXPLICITLY DISCLOSED GAPS. This
+  checkpoint does NOT claim `LIVE_READY_SOFTWARE=true` and does NOT claim
+  unconditional final recovery PASS -- see section D. It reports the true
+  state for independent (orchestrator/human) review, per this recovery's
+  own established checkpoint protocol.
+UTC_TIMESTAMP: 2026-09-04T21:20:00Z
+GIT_COMMIT: 32d1c0f (HEAD at time of writing; this checkpoint is committed
+  immediately after)
+TARGET_COMMIT: ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30
+AUTHORIZED_PHASE: FSR-01..16 recovery (argus-final-spec-recovery-001)
+APPROVES_PHASE: NONE -- this session cannot self-approve final recovery;
+  only the orchestrator/human operator can.
+
+B. FSR-01..16 acceptance matrix
+
+| Item | Scope | Status | Evidence |
+|---|---|---|---|
+| FSR-01 | Production-capable executor boundary (real signer/submission adapters, isolated process, least-privilege deployment) | **PASS** | commit `293ac1c`; 45 isolation-boundary tests + 14 live-signing/submission unit tests pass; `argus.executor.main` run for real end-to-end against Postgres (real singleton lease acquired) |
+| FSR-02 | Real chain-based fill reconciliation | **PASS** | commit `293ac1c`; migration 0037; 5 integration tests pass against real Postgres (quoted!=simulated!=actual, fee/tip/rent, ambiguous->UNKNOWN, crash-restart, idempotent-restart-on-durable) |
+| FSR-03 | PostgreSQL 17 environment validation | **ENVIRONMENT_BLOCKED** (not PASS, not FAIL) | commit `bdcb878`; Docker daemon cannot start in this sandbox, PGDG apt hosts blocked by proxy policy, no PyPI PostgreSQL-17 distribution exists -- see its own checkpoint for exact commands/errors. Supplementary PostgreSQL 16 validation completed instead (explicitly not claimed as a substitute PASS). |
+| FSR-04 | Canonical knowledge-cutoff invariant | **PASS** (prior session work, this recovery) | `argus.copyability.identity.known_by_cutoff`, reused throughout FSR-05..12 |
+| FSR-05 | Phase 7 forward-information-after-leader | **PASS** (prior session work) | real executable-return evidence, no longer an always-`None` placeholder |
+| FSR-06 | Phase 8 point-in-time convergence + outcome comparisons | **PASS** (prior session work) | |
+| FSR-07 | Phase 9 predation inputs complete | **PASS** (prior session work) | price-impact-incorporated column, migration 0033 |
+| FSR-08 | Phase 10 executable-return backtest | **PASS** (prior session work) | migration 0034 |
+| FSR-09/10/11/12 | Phase 11 causal dataset rebuild (staleness-bounded snapshots, per-horizon censoring, purged/embargoed split) | **PASS** (prior session work) | migration 0035 |
+| FSR-13 | Version/invalidate contaminated Phase 8-11 derived runs | **PASS** (prior session work) | migration 0036, `contaminated_run_invalidations` registry |
+| FSR-14 | Retroactive Phase 7-11 recovery checkpoints | **PASS** (prior session work) | `orchestration/checkpoints/phase_{7,8,9,10,11}_final_recovery.md` |
+| FSR-15 | Full regression suite, 0 failed, no PG17-required test counted as PASS without PG17 | **PARTIAL -- NOT FULLY MET** | See section C. `tests/unit`+`tests/golden`+`tests/replay` (1288 tests): 0 failed. `tests/integration` on PostgreSQL 16 (NOT PostgreSQL 17, per FSR-03): 384 passed, 21 failed -- all 21 traced to one single pre-existing, disclosed root cause (D1 below), none touching any FSR-01..14 code. `ruff check`/`ruff format --check`/`mypy` clean. Zero-to-head Alembic migration + single-head check: PASS on PostgreSQL 16. No test relevant to FSR-01..14 was silently skipped. |
+| FSR-16 | Final security state, build state, single handoff | **PASS** (this checkpoint + updated `docs/BUILD_STATE.md`/`docs/DECISION_LOG.md` + replaced `orchestration/AGENT_HANDOFF.md`) | See section D and E |
+
+C. FSR-15's own remaining gap (D1), fully disclosed, not fixed by this
+   checkpoint
+
+The 21 remaining `tests/integration` failures on PostgreSQL 16 all trace
+to ONE root cause, already identified in FSR-03's own checkpoint and
+confirmed again here after fixing the two OTHER pre-existing defects
+(FSR-03's D2/D3, fixed in commit `32d1c0f`, which reduced the failure
+count from 38 to 21): the shared, long-lived dev Postgres database
+(`argus`) has accumulated rows from every test run across this entire
+multi-day session (most fixtures share the fixed anchor timestamp
+`2025-06-01T12:00:00Z`), and several Phase 5/7/8/9/10/11 + shadow_phase4 +
+reconciliation_sql production queries scan ALL matching rows in the
+database rather than only the rows a given test itself seeded. Every one
+of these same test modules PASSES when run individually against a fresh
+throwaway database (the exact methodology this recovery's own FSR-08
+through FSR-13 work established and used for its own new tests).
+
+This is a genuine, real gap against FSR-15's literal "0 failed" bar. It is
+NOT fixed by this checkpoint because doing so correctly requires a
+repository-wide test-infrastructure change (giving each affected
+integration test module its own isolated database, matching
+`tests/integration/test_migrations.py`'s own `scratch_database` pattern,
+or an equivalent per-module reset) across roughly a dozen pre-existing
+test files spanning Phases 5 through 11 -- work that predates and is
+independent of this recovery's own FSR-01/02/03 scope, and that carries
+real risk of introducing new defects if rushed through the remainder of
+an already very large session. It is recorded here as explicit, disclosed
+open work rather than silently left for a future reader to rediscover, or
+worked around by weakening the affected assertions.
+
+No test failure traces to any file this recovery's own FSR-01/02 (or the
+FSR-03 D2/D3 fixes) touched -- confirmed by (a) inspecting every failing
+test file's own imports, none of which import
+`argus.executor.persistence`/`fill_accounting`/`confirmation`/
+`live_signing`/`live_submission`/`main`/`service` or
+`argus.domain.execution_fills`, and (b) `tests/integration/
+test_fsr02_confirmation.py`'s own 5 tests, exercising the identical
+execution-table write path, passing individually and within this same
+full-suite run.
+
+D. Explicit non-claims and security-state confirmation (per FSR-16's own
+   required disclosures)
+
+- `LIVE_READY_SOFTWARE=true` is NOT claimed by this checkpoint (FSR-15's
+  own bar is not fully met -- section C).
+- Final recovery PASS is NOT claimed by this checkpoint; only the
+  orchestrator/human operator may apply that approval.
+- Phase 6.5 (MAINNET CANARY) has NOT run, was not attempted, and remains
+  permanently human-only per MASTER_SPEC.md's own text -- confirmed by
+  `argus.executor.main`'s own unconditional `live_armed=False` (no code
+  path in this recovery's FSR-01 work can ever set it true) and by
+  `argus.executor.report.build_disposition`'s own unconditional
+  `live_canary_passed=False`.
+- No mainnet transaction was signed or broadcast: `argus.executor.
+  live_submission.SolanaSubmissionClient.send_transaction` is never
+  called anywhere in this codebase outside its own unit tests (which use
+  `httpx.MockTransport`, never a real network call).
+- No real operator key/seed was accessed, read, printed, logged, or
+  exposed at any point in this recovery: every `FileKeypairSigner` test
+  uses a keypair generated fresh in-process by `solders.keypair.Keypair()`
+  and written only to a `tmp_path` fixture, never committed;
+  `ARGUS_EXECUTOR_SIGNER_KEY_PATH` is unset in this sandbox's real `.env`
+  and was never set to a real path during this recovery.
+- No funded wallet was created.
+- No arm file was created or modified: `argus.executor.arm.
+  validate_arm_file` remains strictly read-only (unchanged by this
+  recovery), and `ARGUS_LIVE_ARM_FILE_PATH` was never pointed at a real,
+  human-authored arm file during this recovery -- `argus.executor.main`'s
+  own real run this session reported `armed=False, reason="arm file
+  missing"`.
+- No capital default was changed from zero: `argus.executor.capital`'s
+  `LIVE_MAX_SINGLE_TRADE_SOL`/`LIVE_MAX_TOTAL_EXPOSURE_SOL`/
+  `LIVE_MAX_DAILY_LOSS_SOL` remain `Decimal(0)`, unmodified by this
+  recovery, confirmed by `argus.executor.service.build_phase6_disposition`'s
+  own live assertion (`capital_defaults_are_zero`) in this session's own
+  real run.
+- No paid provider was enabled: `HELIUS_API_KEY` remains unset in this
+  sandbox's real `.env`; no provider credential was requested from or
+  supplied by the user during this recovery.
+- No secret was requested and no paid infrastructure was enabled to work
+  around FSR-03's PostgreSQL 17 block (its own checkpoint, section E).
+
+E. `docs/BUILD_STATE.md` / `docs/DECISION_LOG.md` / `orchestration/
+   AGENT_HANDOFF.md`
+
+Updated in the same commit as this checkpoint:
+- `docs/BUILD_STATE.md`: new dated entry recording the final-spec-recovery
+  completion state (FSR-01..14 PASS, FSR-03 ENVIRONMENT_BLOCKED, FSR-15's
+  D1 gap disclosed) -- `current_phase`/`last_completed_phase` unchanged
+  (still 11; this recovery corrected/hardened Phases 6-11's own prior
+  work rather than advancing MASTER_SPEC phase numbering, and Phase 6.5
+  remains the only phase not started, by design).
+- `docs/DECISION_LOG.md`: new entry summarizing the full recovery
+  (FSR-01..16), its evidence, and the D1 gap, so the decision record
+  reflects the true final state rather than only individual FSR items.
+- `orchestration/AGENT_HANDOFF.md`: replaced in full with this recovery's
+  own final handoff (single handoff per FSR-16's own text), requesting
+  orchestrator/human audit of the complete `argus-final-spec-recovery-001`
+  contract against `TARGET_COMMIT` and this checkpoint.
+
+No STOP is issued by this document; it reports final-recovery status,
+with two honestly disclosed open gaps (FSR-03 environment block, FSR-15's
+D1 test-isolation gap), for independent review.
