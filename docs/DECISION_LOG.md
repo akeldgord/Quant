@@ -3775,3 +3775,115 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   access, and/or a dedicated pass giving each affected integration test
   module its own isolated database) to close, not silently forgotten.
 - git_commit: (recorded with this recovery's own final commit)
+
+### 2026-09-04 — Bounded final recovery remediation round 2 (argus-final-spec-recovery-002): R2-01..R2-04
+- requirement_id: `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`'s
+  `argus-final-spec-recovery-002` instruction, responding to an
+  independent audit of the round-1 recovery (`TARGET_COMMIT`
+  `7cca4094d7672759b1023733a810f552f1109040`) that confirmed four root
+  causes: (R2-01) no integrated, canary-capable executor path existed
+  end-to-end; (R2-02) Phase 9's specialist-score computation leaked
+  knowledge-time by bounding contributing evidence only by
+  `effective_at`/`as_of`, never also `created_at`, propagated into
+  Phase 10/11; (R2-03) Phase 10 evaluated every strategy's exit against a
+  forbidden universal fixed 5-minute executable horizon regardless of a
+  trade's own actual hold duration, and separately reused the leader's
+  own realized entry fill for Strategy C/D's confirmation-anchored
+  entries instead of matching real evidence to the follower's own
+  confirmation delay; (R2-04) `tests/integration` shared one long-lived
+  developer Postgres database, leaving 21 tests failing from cross-test
+  pollution (FSR-15's own disclosed gap).
+- decision: All four root causes are fixed with real evidence, not
+  asserted. (R2-01) `argus.executor.pipeline.execute_intent_pipeline`
+  chains singleton fencing -> risk/safety gates -> the legal state
+  machine -> a Jupiter unsigned order -> a REAL
+  `UnsignedTransactionShape` deserialized from actual transaction bytes
+  via genuine chain simulation (`argus.executor.simulation`,
+  `argus.executor.tx_deserialize`, `argus.executor.token_account_codec`;
+  never trusting the provider's own quote) -> mandatory attestation
+  before signing -> an injected signer -> exactly-once submission ->
+  durable signature persistence BEFORE confirmation polling -> restart-
+  safe, terminal-idempotent reconciliation; 19 focused tests (7 required
+  named scenarios plus AST/import-boundary and deployment/permission
+  coverage), all against caller-scripted fakes, never a real key or RPC
+  call. (R2-02) added `DirectionalEdge.created_at <= cutoff` and
+  `ExpectedConfirmationEvent.created_at <= cutoff` filters to
+  `_compute_and_persist_specialist_scores`
+  (`argus.counterfactual.service`), bumping `ALGORITHM_VERSION` to
+  `counterfactual_alpha_v3` and propagating to
+  `order_flow_prediction_v3` (migrations 0038/0040, additive
+  `contaminated_run_invalidations` rows chained after FSR-13's own v1->v2
+  rows, never replacing them); 2 dedicated mechanism-level tests plus one
+  pre-existing Strategy-B decision-level regression test satisfy the
+  instruction's own named test scenarios, though the full literal
+  section-4.3 combined mutation-test recipe was not built as one test
+  (disclosed gap, not hidden). (R2-03)
+  `_select_contemporaneous_reverse_outcome` (exit side) and the new
+  `_select_contemporaneous_entry_probe` (entry side, Strategy C/D only)
+  replace the fixed horizon and the leader-fill reuse with real,
+  band-bounded contemporaneous matching against actual observed probe
+  timings (`argus.synthetic.service`, `synthetic_super_wallet_v3`,
+  migration 0039); `argus.copyability.loaders.WalletOpportunity`/
+  `OpportunityReverseOutcome` gained two additive fields
+  (`entry_delay_probes`, `reverse_quote`) with no existing Phase 5 M1-M6
+  consumer behavior change; `compute_executable_return`'s own
+  mint/quantity validation is reused, unmodified, as the safety net
+  against a substituted entry that acquired a different quantity than
+  the reverse probe was sized for; 18 focused tests cover all 8 named
+  scenarios (one-hour-exit trap, no-exit-time-evidence,
+  confirmation-entry opportunity trap, confirmation-entry PRICE trap,
+  confirmation-entry-no-evidence x2, unsellable-matching-exit-still-
+  failure, fixed-haircut-cannot-enter-primary, backfilled-specialist-
+  cannot-alter-historical-decision, insufficient-executable-samples-
+  allowed-as-valid-result). (R2-04)
+  `tests/integration/conftest.py`'s `isolated_database` fixture
+  redesigned as a session-scoped migrated template plus a per-TEST-
+  FUNCTION `CREATE DATABASE ... TEMPLATE` clone (confirmed via direct
+  experiment that per-module isolation alone was insufficient: several
+  production queries intentionally scan every row in a table); every
+  integration test file that persists real domain data now opts in,
+  including `test_r201_executor_pipeline.py` (whose own fixtures rely on
+  `solders.pubkey.Pubkey.new_unique()`, a deterministic per-process
+  counter, so re-running that file in a fresh process regenerated
+  identical "unique" values and collided with a prior run's leftover
+  row). A second, genuinely independent pre-existing bug was found and
+  fixed: `rich.console.Console.print()`'s default word-wrapping corrupted
+  long CLI `--as-of`/report JSON output (`src/argus/cli.py`,
+  `soft_wrap=True` on all 8 call sites) -- invisible in every prior round
+  because Postgres was never reachable for a real CLI-report integration
+  test until this round. Full validation:
+  `tests/unit`+`tests/golden`+`tests/replay` (1316 tests) 0 failed;
+  `tests/integration` run twice from a fresh isolated-database template
+  with no manual cleanup between runs, 414 passed/0 failed both times,
+  and a direct post-run query confirmed no test data was written to the
+  ordinary developer `argus` database; `ruff check`/`ruff format --check`/
+  `mypy` clean; secret scan clean across all 42 changed/new files; single
+  Alembic head (`0040`); real-chain fixtures 12/12 ok; `uv lock --check`
+  confirms lockfile consistency. PostgreSQL 17 remains
+  `FINAL_RECOVERY_ENVIRONMENT_BLOCKED`: a fresh bounded attempt this round
+  confirmed the Docker daemon itself now starts in this sandbox (unlike
+  the round-1 finding), but both the Docker registry pull and the PGDG
+  apt host are independently policy-blocked (genuine `403 Forbidden`
+  denials, confirmed non-retryable) -- so `LIVE_READY_SOFTWARE=false`.
+  Full detail: `orchestration/checkpoints/final_spec_recovery.md`.
+- reason: The bounded remediation instruction named four specific,
+  confirmed root causes with required tests and a required final
+  evidence contract; closing each with real, verified evidence (never an
+  asserted fix) and disclosing the one remaining gap (the R2-02 mutation
+  recipe's full combined form) rather than silently claiming full
+  compliance is this project's own established discipline, carried
+  through to this second remediation round.
+- requested_by: human operator (via the audit-driven
+  `argus-final-spec-recovery-002` instruction; ChatGPT-orchestrator
+  remains unavailable per the 2026-09-03 governance-change entry, so the
+  human operator remains the audit authority for this recovery too,
+  exercised at their own discretion).
+- impact: `current_phase`/`last_completed_phase` in `docs/BUILD_STATE.md`
+  are UNCHANGED (still 11) -- this round corrected/hardened prior phases'
+  own work rather than advancing MASTER_SPEC phase numbering. Phase 6.5
+  (MAINNET CANARY) remains the only phase not started, permanently
+  human-only, never self-executed. PostgreSQL 17 access and the R2-02
+  mutation-recipe's full combined form are both recorded as open items
+  for a future session to close, not silently forgotten.
+- git_commit: `b791a4011d36c0519a8c5542918c6274eaee5c71` (implementation);
+  evidence commit recorded immediately after this entry.

@@ -1,0 +1,190 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE — argus-final-spec-recovery-002 (BOUNDED FINAL RECOVERY, ROUND 2: R2-01..R2-04)
+Generated: 2026-09-04T23:45:00Z
+
+=== CHECKPOINT ===
+(see orchestration/checkpoints/final_spec_recovery.md for the full checkpoint;
+embedded identity/summary below, full document is the source of truth)
+
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: 2.0
+MASTER_SPEC_HASH: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
+PHASE: 11 (bounded final spec recovery remediation round 2, argus-final-spec-recovery-002)
+STATUS: PARTIAL (all R2-01..R2-04 software requirements PASS; sole remaining
+  blocker is PostgreSQL 17 environment access, an external sandbox
+  restriction, not a software defect)
+ORIGINAL_CONTAMINATED_BASE_COMMIT: ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30
+REMEDIATION_001_AUDITED_HEAD: 7cca4094d7672759b1023733a810f552f1109040
+FINAL_REMEDIATION_002_IMPLEMENTATION_COMMIT: b791a4011d36c0519a8c5542918c6274eaee5c71
+GIT_COMMIT (at bundle write time): b791a40
+
+=== GIT STATUS ===
+$ git status --porcelain
+?? orchestration/checkpoints/final_spec_recovery.md
+(this bundle and orchestration/bundles/final_spec_recovery.txt, docs/BUILD_STATE.md,
+docs/DECISION_LOG.md, and orchestration/AGENT_HANDOFF.md are committed together as
+the evidence commit immediately after this bundle is written)
+
+=== GIT LOG -5 --ONELINE ===
+b791a40 R2-01..R2-04: bounded final spec recovery remediation (argus-final-spec-recovery-002)
+053f11d orchestration: authorize bounded final recovery remediation 002
+7cca409 FSR-16: replace AGENT_HANDOFF.md with final recovery handoff
+ffb4313 FSR-15/16: final recovery acceptance matrix + BUILD_STATE/DECISION_LOG evidence
+32d1c0f Fix two pre-existing integration-test defects found during FSR-03's environment validation
+
+=== DIFF STAT (7cca409..b791a40, excluding orchestration/ORCHESTRATOR_INSTRUCTIONS.md) ===
+42 files changed, 3326 insertions(+), 51 deletions(-)
+
+=== DIFF NAME-STATUS (7cca409..b791a40, excluding orchestration/ORCHESTRATOR_INSTRUCTIONS.md) ===
+A	migrations/versions/0038_r2_02_phase9_specialist_knowledge_time.py
+A	migrations/versions/0039_r2_03_phase10_executable_matching.py
+A	migrations/versions/0040_r2_02_phase11_specialist_propagation.py
+M	src/argus/cli.py
+M	src/argus/copyability/loaders.py
+M	src/argus/counterfactual/service.py
+A	src/argus/executor/pipeline.py
+A	src/argus/executor/simulation.py
+A	src/argus/executor/token_account_codec.py
+A	src/argus/executor/tx_deserialize.py
+M	src/argus/prediction/service.py
+M	src/argus/synthetic/loaders.py
+M	src/argus/synthetic/service.py
+M	tests/integration/conftest.py
+M	tests/integration/test_daily_report.py
+M	tests/integration/test_daily_report_remediation.py
+M	tests/integration/test_fsr02_confirmation.py
+M	tests/integration/test_fsr13_contaminated_run_invalidations.py
+M	tests/integration/test_phase10_synthetic_persistence_and_report.py
+M	tests/integration/test_phase11_prediction_persistence_and_report.py
+M	tests/integration/test_phase1_schema.py
+M	tests/integration/test_phase2_discovery.py
+M	tests/integration/test_phase3_wallet_qualification.py
+M	tests/integration/test_phase4_recovery_2.py
+M	tests/integration/test_phase5_persistence_and_report.py
+M	tests/integration/test_phase6_persistence_and_concurrency.py
+M	tests/integration/test_phase7_graph_persistence_and_report.py
+M	tests/integration/test_phase8_convergence_persistence_and_report.py
+M	tests/integration/test_phase9_counterfactual_persistence_and_report.py
+M	tests/integration/test_provider_usage_model.py
+A	tests/integration/test_r201_executor_pipeline.py
+A	tests/integration/test_r202_specialist_knowledge_time.py
+M	tests/integration/test_reconciliation_sql.py
+M	tests/integration/test_shadow_phase4.py
+M	tests/integration/test_shadow_phase4_concurrency_remediation.py
+M	tests/integration/test_shadow_phase4_remediation_observation.py
+M	tests/integration/test_shadow_quote_jobs_provider_remediation.py
+M	tests/integration/test_wallet_acquisition.py
+A	tests/unit/test_r201_compose_secret_isolation.py
+A	tests/unit/test_r201_token_account_codec.py
+A	tests/unit/test_r201_tx_deserialize.py
+A	tests/unit/test_r203_phase10_executable_matching.py
+
+=== REPOSITORY TREE (top-level) ===
+.claude/ .env .env.example Dockerfile MASTER_SPEC.md Makefile README.md
+alembic.ini compose.yaml config/ data/ docs/ migrations/ orchestration/
+pyproject.toml runtime/ scripts/ src/ tests/ uv.lock
+
+=== DEPENDENCY SUMMARY ===
+$ uv lock --check
+Resolved 64 packages in 3ms
+(lockfile unchanged and consistent with pyproject.toml; no new dependency
+added by R2-01..R2-04)
+
+=== COMPOSE SERVICE SUMMARY ===
+$ grep -E "^  [a-z_]+:" compose.yaml
+  postgres:
+  api:
+  executor:        (profiles: ["executor"] -- opt-in only, unaffected this round)
+  argus_postgres_data:  (volume)
+
+=== ALEMBIC HEAD ===
+$ uv run alembic heads
+0040 (head)
+(single head; migrations 0038/0039/0040 added this round, additive-only,
+each seeding a contaminated_run_invalidations row and bumping one
+ALGORITHM_VERSION constant -- no destructive DDL)
+
+=== DB COUNTS (ordinary `argus` database, post-validation) ===
+alembic_version: 1
+contaminated_run_invalidations: 7
+(every other table: 0 rows -- no test data written to the ordinary
+developer database; see checkpoint section G/D for the full per-table
+query and both fresh full-suite runs it was captured after)
+
+=== PROVIDER USAGE ===
+No provider calls made this round. R2-01's executor pipeline tests use
+exclusively caller-scripted fakes (FakeSigner, RaisingSigner,
+_FakeQuoteProvider, _FakeSimulationProvider, _ScriptedConfirmationProvider,
+_RecordingSubmit) -- never a real Jupiter/Helius/RPC call. No paid
+provider was enabled or touched.
+
+=== TEST SUMMARY ===
+R2-01 focused: 19 passed, 0 failed
+  $ uv run pytest tests/integration/test_r201_executor_pipeline.py \
+      tests/unit/test_r201_token_account_codec.py \
+      tests/unit/test_r201_tx_deserialize.py \
+      tests/unit/test_r201_compose_secret_isolation.py -q
+R2-02 focused: 2 passed, 0 failed
+  $ uv run pytest tests/integration/test_r202_specialist_knowledge_time.py -q
+R2-03 focused: 18 passed, 0 failed
+  $ uv run pytest tests/unit/test_r203_phase10_executable_matching.py \
+      tests/integration/test_phase10_synthetic_persistence_and_report.py -q
+Full unit+golden+replay: 1316 passed, 0 failed
+  $ uv run pytest tests/unit tests/golden tests/replay -q
+Full integration (run 1 of 2, fresh isolated-database template): 414 passed, 0 failed
+  $ uv run pytest tests/integration -q
+Full integration (run 2 of 2, no manual cleanup between runs): 414 passed, 0 failed
+  $ uv run pytest tests/integration -q
+Real-chain fixtures: 12/12 ok
+  $ uv run argus fixtures validate-real-chain
+
+=== COVERAGE ===
+Not separately instrumented this round (no coverage-percentage tooling
+exists in this repository; unchanged from every prior round).
+
+=== RUFF / MYPY ===
+$ uv run ruff check .
+All checks passed!
+$ uv run ruff format --check .
+458 files already formatted
+$ uv run mypy src/
+Success: no issues found in 228 source files
+
+=== SECRET SCAN ===
+$ grep -InE "AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(api[_-]?key|secret|password|token)[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+_=-]{12,}[\"']" <42 changed/new files>
+(no output -- clean)
+
+=== MASTER_SPEC HASH ===
+$ sha256sum MASTER_SPEC.md
+41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011  MASTER_SPEC.md
+
+=== BUILD_STATE ===
+docs/BUILD_STATE.md updated (append-only): current_phase/last_completed_phase
+remain 11 (unchanged); new history entry recording R2-01..R2-04 completion,
+FSR-15 gap closure, and PG17's continuing FINAL_RECOVERY_ENVIRONMENT_BLOCKED
+disposition. No historical claim rewritten.
+
+=== DECISION_LOG CHANGES ===
+docs/DECISION_LOG.md: one new entry recording the argus-final-spec-recovery-002
+root-cause remediation (R2-01..R2-04), its exact final status, and the
+disclosed R2-02 mutation-recipe gap.
+
+=== PG17 DISPOSITION (this round's fresh bounded attempt) ===
+$ timeout 25 docker pull postgres:17-alpine
+... failed to copy: ... Forbidden (403, production.cloudfront.docker.com)
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://apt.postgresql.org/pub/repos/apt/
+CONNECT tunnel failed, response 403
+Disposition: FINAL_RECOVERY_ENVIRONMENT_BLOCKED (genuine egress-policy
+denial on two independent paths, confirmed non-retryable per
+/root/.ccr/README.md; Docker daemon itself now starts in this sandbox,
+unlike the prior round's finding -- the registry/package-host egress
+policy is the blocker this round, not the daemon). PostgreSQL 16 (native
+apt package) continues to serve every real Postgres-backed test in this
+bundle, never claimed as a PG17 substitute. LIVE_READY_SOFTWARE=false.
+
+=== SECURITY STATE ===
+Phase 6.5 not run. No mainnet signature/broadcast. No real key accessed.
+No arm file modified. Capital defaults zero. No paid provider. No funded
+wallet. LIVE_CANARY_PASSED=false. LIVE_ARMED=false.
+LIVE_READY_SOFTWARE=false (PG17 environment-blocked).
+
+STOP FOR INDEPENDENT FINAL AUDIT

@@ -253,6 +253,61 @@ known_blockers:
     corrected/hardened Phases 6-11's own prior work rather than advancing
     MASTER_SPEC phase numbering; Phase 6.5 remains the only phase not
     started, permanently human-only.
+  - **2026-09-04 — Bounded final recovery remediation round 2
+    (`argus-final-spec-recovery-002`, R2-01 through R2-04) completed**,
+    fixing the four confirmed root causes an independent audit named
+    against the round-1 recovery: (R2-01) one integrated executor
+    pipeline seam (`argus.executor.pipeline.execute_intent_pipeline`)
+    chaining an authorized execution intent through singleton fencing,
+    risk/safety gates, the legal state machine, a Jupiter unsigned order,
+    a REAL `UnsignedTransactionShape` deserialized from actual
+    transaction bytes via genuine chain simulation (never the provider's
+    own quote), mandatory attestation before signing, an injected signer,
+    exactly-once submission, durable signature persistence before
+    confirmation polling, and restart-safe/terminal-idempotent
+    reconciliation -- capital zero, `LIVE_ARMED=false` throughout; (R2-02)
+    Phase 9's specialist-score computation now also bounds contributing
+    evidence by `created_at <= cutoff` (not only `effective_at`/`as_of`),
+    closing a knowledge-time leak propagated to Phase 11
+    (`counterfactual_alpha_v3`/`order_flow_prediction_v3`, migrations
+    0038/0040); (R2-03) Phase 10 replaced its forbidden fixed 5-minute
+    executable horizon with real contemporaneous matching on BOTH the
+    exit side (a genuine reverse-quote probe whose actual elapsed time is
+    closest to the trade's own hold duration) and, for Strategy C/D's
+    confirmation-anchored entries, the entry side (a genuine
+    `ENTRY_DELAY` probe closest to the follower's own confirmation delay,
+    never the leader's own realized fill) -- `synthetic_super_wallet_v3`,
+    migration 0039; (R2-04) `tests/integration/conftest.py`'s
+    `isolated_database` fixture redesigned to give every TEST FUNCTION
+    (not merely every module) its own real, independent Postgres
+    database via a session-scoped migrated template + per-test
+    `CREATE DATABASE ... TEMPLATE` clone, closing FSR-15's prior
+    21-failure cross-test-pollution gap; every integration test file
+    that persists real domain data now opts in. Two genuinely independent
+    pre-existing bugs were found and fixed along the way: (1)
+    `rich.console.Console.print()`'s default word-wrapping corrupted long
+    CLI `--as-of`/report JSON output (`src/argus/cli.py`, `soft_wrap=True`
+    on all 8 call sites); (2) `test_r201_executor_pipeline.py`'s own
+    fixtures relied on `solders.pubkey.Pubkey.new_unique()`, a
+    deterministic per-process counter (not random), so it needed the same
+    per-test database isolation as every other affected file. Full
+    validation: `tests/unit`+`tests/golden`+`tests/replay` (1316 tests) 0
+    failed; `tests/integration` run twice from a fresh isolated-database
+    template with no manual cleanup between runs, 414 passed/0 failed
+    both times, and no test data written to the ordinary developer
+    `argus` database; `ruff check`/`ruff format --check`/`mypy` clean;
+    secret scan clean; single Alembic head (`0040`). PostgreSQL 17
+    remains `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` (a fresh bounded attempt
+    this round confirmed the Docker daemon itself now starts in this
+    sandbox, but registry/PGDG package-host egress remains policy-blocked
+    on two independent paths) -- `LIVE_READY_SOFTWARE` is therefore
+    `false`. One disclosed, bounded gap: the R2-02 mutation-test recipe's
+    full literal end-to-end Phase 10/11-decision-level form was not built
+    as one combined test, only at the Phase-9-mechanism level plus one
+    pre-existing Strategy-B decision-level regression test. Full detail:
+    `orchestration/checkpoints/final_spec_recovery.md`. `current_phase`/
+    `last_completed_phase` are unchanged (still 11); Phase 6.5 remains
+    the only phase not started, permanently human-only.
 
 ## Rules
 
