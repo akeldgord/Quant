@@ -150,6 +150,57 @@ def checkpoint_bundle(
     console.print(f"wrote {out_path}")
 
 
+@checkpoint_app.command("invalidations")
+def checkpoint_invalidations() -> None:
+    """FSR-13: print the ``contaminated_run_invalidations`` audit trail --
+    every Phase 8-11 algorithm_version this recovery superseded, why, and
+    what corrected version replaced it. CORE-002: this never deletes or
+    rewrites the old rows themselves, which stay fully queryable under
+    their own (unaltered) algorithm_version -- this is the explicit,
+    persisted reason a default report excludes them."""
+    import json
+
+    from sqlalchemy import select
+
+    from argus.domain.contaminated_run_invalidations import ContaminatedRunInvalidation
+
+    async def _run() -> int:
+        _config, engine, sessionmaker = _phase2_engine_and_sessionmaker()
+        try:
+            async with sessionmaker() as session:
+                rows = (
+                    (
+                        await session.execute(
+                            select(ContaminatedRunInvalidation).order_by(
+                                ContaminatedRunInvalidation.phase_name
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+        finally:
+            await engine.dispose()
+
+        report = {
+            "invalidations": [
+                {
+                    "phase_name": row.phase_name,
+                    "invalidated_algorithm_version": row.invalidated_algorithm_version,
+                    "superseded_by_algorithm_version": row.superseded_by_algorithm_version,
+                    "status": row.status,
+                    "reason": row.reason,
+                    "target_commit": row.target_commit,
+                }
+                for row in rows
+            ]
+        }
+        console.print(json.dumps(report, indent=2, default=str))
+        return 0
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
 @providers_app.command("probe")
 def providers_probe() -> None:
     """Report reachability/supported functions/throttle/latency/health for
@@ -2216,6 +2267,7 @@ def convergence_report(
 
     from argus.config import resolve_production_git_commit
     from argus.convergence.service import (
+        ALGORITHM_VERSION,
         BUILD_HASH,
         ConvergenceRunConfig,
         compute_and_persist_phase8,
@@ -2266,7 +2318,7 @@ def convergence_report(
 
                 report = {
                     "as_of": result.as_of.isoformat(),
-                    "algorithm_version": "convergence_negative_evidence_v1",
+                    "algorithm_version": ALGORITHM_VERSION,
                     "config_hash": config.config_hash(),
                     "graph_config_hash": graph_config.config_hash(),
                     "build_hash": BUILD_HASH,
@@ -2349,6 +2401,7 @@ def counterfactual_report(
     from argus.config import resolve_production_git_commit
     from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
     from argus.counterfactual.service import (
+        ALGORITHM_VERSION,
         BUILD_HASH,
         Phase9RunConfig,
         compute_and_persist_phase9,
@@ -2412,8 +2465,7 @@ def counterfactual_report(
                             select(CounterfactualAlphaEstimate)
                             .where(
                                 CounterfactualAlphaEstimate.as_of == as_of_dt,
-                                CounterfactualAlphaEstimate.algorithm_version
-                                == "counterfactual_alpha_specialists_v1",
+                                CounterfactualAlphaEstimate.algorithm_version == ALGORITHM_VERSION,
                                 CounterfactualAlphaEstimate.config_hash == config.config_hash(),
                                 CounterfactualAlphaEstimate.residual_selection_alpha.is_not(None),
                             )
@@ -2430,8 +2482,7 @@ def counterfactual_report(
                         await session.execute(
                             select(WalletSpecialistScore).where(
                                 WalletSpecialistScore.as_of == as_of_dt,
-                                WalletSpecialistScore.algorithm_version
-                                == "counterfactual_alpha_specialists_v1",
+                                WalletSpecialistScore.algorithm_version == ALGORITHM_VERSION,
                                 WalletSpecialistScore.config_hash == config.config_hash(),
                             )
                         )
@@ -2444,8 +2495,7 @@ def counterfactual_report(
                         await session.execute(
                             select(WalletPredationScore).where(
                                 WalletPredationScore.as_of == as_of_dt,
-                                WalletPredationScore.algorithm_version
-                                == "counterfactual_alpha_specialists_v1",
+                                WalletPredationScore.algorithm_version == ALGORITHM_VERSION,
                                 WalletPredationScore.config_hash == config.config_hash(),
                                 WalletPredationScore.predation_score.is_not(None),
                             )
@@ -2484,7 +2534,7 @@ def counterfactual_report(
 
                 report = {
                     "as_of": result.as_of.isoformat(),
-                    "algorithm_version": "counterfactual_alpha_specialists_v1",
+                    "algorithm_version": ALGORITHM_VERSION,
                     "config_hash": config.config_hash(),
                     "build_hash": BUILD_HASH,
                     "git_commit": git_commit,
@@ -2616,6 +2666,7 @@ def synthetic_report(
     from argus.counterfactual.service import Phase9RunConfig
     from argus.graph.service import GraphRunConfig
     from argus.synthetic.service import (
+        ALGORITHM_VERSION,
         BUILD_HASH,
         STRATEGY_CODES,
         STRATEGY_DESCRIPTIONS,
@@ -2676,7 +2727,7 @@ def synthetic_report(
 
                 report = {
                     "as_of": result.as_of.isoformat(),
-                    "algorithm_version": "synthetic_super_wallet_v1",
+                    "algorithm_version": ALGORITHM_VERSION,
                     "config_hash": config.config_hash(),
                     "build_hash": BUILD_HASH,
                     "git_commit": git_commit,

@@ -86,7 +86,12 @@ from argus.synthetic.persistence import (
 )
 from argus.synthetic.stats import StrategySummary, TradeOutcome, compute_strategy_summary
 
-ALGORITHM_VERSION: Final[str] = "synthetic_super_wallet_v1"
+# FSR-13: bumped from "synthetic_super_wallet_v1" -- FSR-08 replaced the
+# mark-price-primary backtest with the real Phase 5 executable-return
+# result, so any row persisted under the old version is contaminated and
+# must never be silently presented as a current result (see
+# ``contaminated_run_invalidations``).
+ALGORITHM_VERSION: Final[str] = "synthetic_super_wallet_v2"
 
 _PHASE10_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "costs.py",

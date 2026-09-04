@@ -72,7 +72,12 @@ from argus.prediction.models import (
 from argus.prediction.persistence import get_or_create_order_flow_prediction_run
 from argus.prediction.validation import has_adequate_sample, purged_embargoed_split
 
-ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v1"
+# FSR-13: bumped from "order_flow_prediction_v1" -- FSR-09/10/11 fixed
+# real feature/label leakage and validation-split contamination, so any
+# row persisted under the old version is contaminated and must never be
+# silently presented as a current result (see
+# ``contaminated_run_invalidations``).
+ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v2"
 
 _PHASE11_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "elite.py",

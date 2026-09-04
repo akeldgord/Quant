@@ -69,7 +69,12 @@ from argus.graph.service import (
     compute_and_persist_directional_edges,
 )
 
-ALGORITHM_VERSION: Final[str] = "convergence_negative_evidence_v1"
+# FSR-13: bumped from "convergence_negative_evidence_v1" -- FSR-06 fixed
+# real point-in-time leakage in this phase's own convergence/confirmation
+# computation, so any row persisted under the old version is contaminated
+# and must never be silently presented as a current result (see
+# ``contaminated_run_invalidations``).
+ALGORITHM_VERSION: Final[str] = "convergence_negative_evidence_v2"
 
 _PHASE8_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "episodes.py",

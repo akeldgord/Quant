@@ -611,4 +611,4 @@ def test_cli_predict_report_runs(admin_engine) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "horizons" in result.output
-    assert '"algorithm_version": "order_flow_prediction_v1"' in result.output
+    assert f'"algorithm_version": "{ALGORITHM_VERSION}"' in result.output
