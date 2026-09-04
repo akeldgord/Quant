@@ -2,14 +2,21 @@
 ALPHA + SPECIALISTS), section 61 (PREDATION DETECTION).
 
 A profitable wallet may profit partly from its followers: leader buy ->
-follower influx -> leader distribution. Estimates follower influx
-(reusing Phase 7 lead/follow observations) and the rate at which the
-leader sells the same token shortly after a follower influx occurs
-(a new raw-swap-derived exit signal); composes them into a disclosed V1
-``predation_score`` heuristic (never a calibrated probability -- section
-38's own "V1 priors to be evaluated prospectively" precedent).
-``price_impact_mean`` is always ``NULL`` in this build -- a disclosed
-scope limitation, not a fabricated value.
+follower influx -> follower-driven price impact -> leader distribution.
+Estimates all four of section 61's required evidence families --
+follower influx and leader-exit timing (reusing Phase 7 lead/follow
+observations and a raw-swap-derived exit signal), repetition frequency
+(``exit_after_influx_count`` itself, incorporated into the score as a
+confidence factor -- FSR-07), and real contemporaneous price-impact
+evidence (the followers' own Phase 5 executable-entry price impact --
+FSR-07, replacing the always-``NULL`` pre-recovery placeholder).
+Composes them into a disclosed V1 ``predation_score`` heuristic (never a
+calibrated probability -- section 38's own "V1 priors to be evaluated
+prospectively" precedent). ``price_impact_incorporated`` records
+honestly whether ``price_impact_mean`` was actually available and used
+for this row -- FSR-07's own explicit rule that missing price impact
+must make the result explicitly partial, never silently behave as
+complete.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -80,6 +88,9 @@ class WalletPredationScore(Base):
     exit_after_influx_count: Mapped[int] = mapped_column(Integer, nullable=False)
     exit_after_influx_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     price_impact_mean: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
+    price_impact_incorporated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     predation_score: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
 
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)

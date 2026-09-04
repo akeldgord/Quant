@@ -37,6 +37,11 @@ from argus.convergence.loaders import load_cluster_links_within_group
 from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
 from argus.convergence.service import compute_and_persist_phase8
 from argus.convergence.stats import compute_overlap_surprise
+from argus.copyability.loaders import (
+    WalletOpportunity,
+    load_contamination_firewall,
+    load_wallet_opportunities,
+)
 from argus.counterfactual.buckets import liquidity_bucket, market_cap_bucket, token_age_bucket
 from argus.counterfactual.loaders import (
     load_candidate_tokens,
@@ -71,7 +76,14 @@ from argus.graph.loaders import load_wallet_token_entries
 from argus.graph.service import ALGORITHM_VERSION as GRAPH_ALGORITHM_VERSION
 from argus.graph.service import GraphRunConfig
 
-ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_specialists_v1"
+ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v2"
+"""FSR-07/FSR-13 (final spec recovery): renamed from
+``counterfactual_alpha_specialists_v1`` -- besides versioning the
+predation-score algorithm change below, the original name (36 chars)
+never actually fit the real ``algorithm_version`` columns (``VARCHAR(32)``
+on every Phase 9 table), so every Phase 9 persistence write failed
+under a real role-enforced Postgres. ``_v2`` both fixes that and gives
+the changed algorithm its own honest identity per FSR-13."""
 
 _PHASE9_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "buckets.py",
@@ -427,6 +439,14 @@ async def _compute_and_persist_specialist_scores(
     return count
 
 
+@dataclass(frozen=True)
+class _LeaderPredationCounts:
+    total_entries_count: int
+    entries_with_influx_count: int
+    exit_after_influx_count: int
+    influx_values: list[int]
+
+
 async def _compute_and_persist_predation_scores(
     session: AsyncSession,
     *,
@@ -437,18 +457,35 @@ async def _compute_and_persist_predation_scores(
     config: Phase9RunConfig,
     computed_at: datetime,
 ) -> int:
+    """FSR-07: incorporates all four of section 61's required evidence
+    families -- follower influx, leader-exit timing, repetition
+    frequency (how many times the influx-then-exit pattern has actually
+    repeated for this leader), and real contemporaneous price-impact
+    evidence (the FOLLOWERS' own Phase 5 executable-entry price impact
+    on the same token shortly after the leader, since "follower-driven
+    price impact" is section 61's own causal term for what followers
+    experience piling in behind a leader -- never inferred from a later
+    chart). Missing price impact never silently behaves as zero/safe:
+    ``compute_predation_score`` leaves the core score unchanged and
+    reports ``price_impact_incorporated=False`` instead."""
     config_hash = config.config_hash()
     exits_by_wallet_token: dict[tuple[uuid.UUID, uuid.UUID], list[datetime]] = {}
     for e in exits:
         exits_by_wallet_token.setdefault((e.wallet_id, e.token_id), []).append(e.entered_at)
 
-    leader_wallet_ids = {e.wallet_id for e in entries}
-    count = 0
-    for wallet_id in sorted(leader_wallet_ids, key=str):
+    leader_wallet_ids = sorted({e.wallet_id for e in entries}, key=str)
+
+    # Phase A: per-leader counts, plus every follower (wallet_id, token_id,
+    # entered_at) triple seen in an influx episode -- the SAME MemberRef
+    # shape FSR-05/06 already use for reusing Phase 5 evidence.
+    per_leader: dict[uuid.UUID, _LeaderPredationCounts] = {}
+    influx_followers_by_leader: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, datetime]]] = {}
+    for wallet_id in leader_wallet_ids:
         leader_entries = [e for e in entries if e.wallet_id == wallet_id]
         influx_values: list[int] = []
         entries_with_influx = 0
         exits_after_influx = 0
+        influx_followers: list[tuple[uuid.UUID, uuid.UUID, datetime]] = []
 
         for entry in leader_entries:
             observations = (
@@ -460,6 +497,10 @@ async def _compute_and_persist_predation_scores(
                             LeadFollowObservation.algorithm_version == GRAPH_ALGORITHM_VERSION,
                             LeadFollowObservation.lag_seconds
                             <= Decimal(str(config.follower_influx_window.total_seconds())),
+                            # FSR-04: an observation not yet known by this
+                            # run's own cutoff must not leak into a
+                            # follower-influx count computed as-of cutoff.
+                            LeadFollowObservation.created_at <= cutoff,
                         )
                     )
                 )
@@ -474,6 +515,42 @@ async def _compute_and_persist_predation_scores(
                 window_end = entry.entered_at + config.exit_after_influx_window
                 if any(entry.entered_at < t <= window_end for t in exit_times):
                     exits_after_influx += 1
+                for o in observations:
+                    if o.follower_wallet_id in distinct_followers:
+                        influx_followers.append(
+                            (o.follower_wallet_id, entry.token_id, o.follower_entered_at)
+                        )
+
+        per_leader[wallet_id] = _LeaderPredationCounts(
+            total_entries_count=len(leader_entries),
+            entries_with_influx_count=entries_with_influx,
+            exit_after_influx_count=exits_after_influx,
+            influx_values=influx_values,
+        )
+        influx_followers_by_leader[wallet_id] = influx_followers
+
+    # Phase B: real follower price-impact evidence, batched -- each
+    # distinct follower wallet's Phase 5 opportunity population is loaded
+    # exactly once, shared across every leader that references it.
+    distinct_follower_wallet_ids = {
+        wallet_id
+        for followers in influx_followers_by_leader.values()
+        for wallet_id, _, _ in followers
+    }
+    opportunities_by_follower: dict[uuid.UUID, list[WalletOpportunity]] = {}
+    for wallet_id in distinct_follower_wallet_ids:
+        firewall = await load_contamination_firewall(session, wallet_id=wallet_id)
+        loaded = await load_wallet_opportunities(
+            session, wallet_id=wallet_id, cutoff=cutoff, firewall=firewall
+        )
+        opportunities_by_follower[wallet_id] = loaded.opportunities
+
+    count = 0
+    for wallet_id in leader_wallet_ids:
+        stats = per_leader[wallet_id]
+        influx_values = stats.influx_values
+        entries_with_influx = stats.entries_with_influx_count
+        exits_after_influx = stats.exit_after_influx_count
 
         follower_influx_mean = (
             Decimal(sum(influx_values)) / Decimal(len(influx_values)) if influx_values else None
@@ -483,26 +560,45 @@ async def _compute_and_persist_predation_scores(
             if entries_with_influx > 0
             else None
         )
-        score = compute_predation_score(
+
+        price_impacts: list[Decimal] = []
+        for follower_wallet_id, token_id, follower_entered_at in influx_followers_by_leader[
+            wallet_id
+        ]:
+            opportunity = next(
+                (
+                    opp
+                    for opp in opportunities_by_follower.get(follower_wallet_id, [])
+                    if opp.token_id == token_id and opp.first_seen_at == follower_entered_at
+                ),
+                None,
+            )
+            if opportunity is not None and opportunity.entry_price_impact_pct is not None:
+                price_impacts.append(opportunity.entry_price_impact_pct)
+        price_impact_mean = (
+            sum(price_impacts, Decimal(0)) / Decimal(len(price_impacts)) if price_impacts else None
+        )
+
+        result = compute_predation_score(
             follower_influx_mean=follower_influx_mean,
             exit_after_influx_rate=exit_after_influx_rate,
-            cap=config.predation_influx_normalization_cap,
+            repeated_pattern_count=exits_after_influx,
+            price_impact_mean=price_impact_mean,
+            follower_influx_cap=config.predation_influx_normalization_cap,
         )
 
         await get_or_create_wallet_predation_score(
             session,
             wallet_id=wallet_id,
             as_of=cutoff,
-            total_entries_count=len(leader_entries),
+            total_entries_count=stats.total_entries_count,
             entries_with_influx_count=entries_with_influx,
             follower_influx_mean=follower_influx_mean,
             exit_after_influx_count=exits_after_influx,
             exit_after_influx_rate=exit_after_influx_rate,
-            # Always None in this build -- a disclosed scope limitation
-            # (would require synchronized pre/post-entry price snapshots,
-            # rarely available -- see docs/DECISION_LOG.md).
-            price_impact_mean=None,
-            predation_score=score,
+            price_impact_mean=price_impact_mean,
+            price_impact_incorporated=result.price_impact_incorporated,
+            predation_score=result.score,
             algorithm_version=ALGORITHM_VERSION,
             config_hash=config_hash,
             now=computed_at,

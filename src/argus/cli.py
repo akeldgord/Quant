@@ -2546,6 +2546,12 @@ def counterfactual_report(
                                 if r.exit_after_influx_rate is not None
                                 else None
                             ),
+                            "price_impact_mean": (
+                                str(r.price_impact_mean)
+                                if r.price_impact_mean is not None
+                                else None
+                            ),
+                            "price_impact_incorporated": r.price_impact_incorporated,
                             "predation_score": str(r.predation_score),
                         }
                         for r in sorted(
@@ -2563,8 +2569,11 @@ def counterfactual_report(
                         "market regime' are not used as matching dimensions (no cheap, "
                         "non-fragile infrastructure exists yet for computing them across "
                         "a full candidate-token universe); see docs/DECISION_LOG.md",
-                        "price_impact_mean in predation scoring is always null in this "
-                        "build -- a disclosed scope limitation, not a fabricated value",
+                        "price_impact_mean in predation scoring is the followers' own "
+                        "real Phase 5 executable-entry price impact where available "
+                        "(FSR-07); when unavailable, price_impact_incorporated is False "
+                        "and predation_score reflects influx/exit-timing/repetition only "
+                        "-- never silently treated as complete",
                         "predation_score and dominant_specialty are disclosed V1 "
                         "heuristics, not calibrated probabilities (section 38's own "
                         "'V1 priors to be evaluated prospectively' precedent)",
