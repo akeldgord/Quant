@@ -1,0 +1,245 @@
+ARGUS ORCHESTRATOR REVIEW BUNDLE — FSR-03 (POSTGRESQL 17 ENVIRONMENT VALIDATION)
+Generated: 2026-09-04T20:50:00Z
+
+=== CHECKPOINT ===
+================ ARGUS ORCHESTRATOR CHECKPOINT ================
+
+A. Identity
+PROJECT: ARGUS
+MASTER_SPEC_VERSION: v2.0
+SCOPE: FSR-03 -- close the real database/environment validation required
+  before canary, per `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`'s
+  `argus-final-spec-recovery-001` instruction. Required: run the completed
+  recovery (FSR-01..14 as of this checkpoint) on a real PostgreSQL 17
+  instance via the repository's canonical Docker Compose path or an
+  equivalent genuine PostgreSQL 17 environment, and do not call
+  PostgreSQL 16 a substitute PASS.
+STATUS: `FINAL_RECOVERY_ENVIRONMENT_BLOCKED`. Genuine PostgreSQL 17 is not
+  reachable from this implementation sandbox for a purely external reason
+  (section B: Docker daemon cannot start; the outbound proxy's own policy
+  denies the PGDG package/download hosts; no PyPI-distributed embedded
+  Postgres build ships a 17.x server). This is NOT worked around: no
+  secret was requested, no paid infrastructure was enabled, and
+  PostgreSQL 16 is explicitly NOT claimed as a substitute PASS anywhere in
+  this checkpoint. `LIVE_READY_SOFTWARE` is NOT claimed true by this
+  checkpoint; final recovery PASS is NOT claimed by this checkpoint.
+UTC_TIMESTAMP: 2026-09-04T20:50:00Z
+GIT_COMMIT: 293ac1c4fcb75c57eec45571efd04339dabfbeaf
+TARGET_COMMIT: ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30
+AUTHORIZED_PHASE: FSR-01..16 recovery (argus-final-spec-recovery-001)
+APPROVES_PHASE: NONE
+
+B. Exact environment-blocking evidence
+
+### B1. Docker daemon unavailable (the repository's canonical Compose path)
+
+The `docker` CLI (29.3.1) is installed, but its daemon cannot be reached or
+started in this sandbox:
+
+    $ docker info
+    Server:
+    Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+
+    $ sudo dockerd
+    time="2026-09-04T20:38:19.485938087Z" level=info msg="Starting up"
+    time="2026-09-04T20:38:19.491657166Z" level=info msg="containerd not running, starting managed containerd"
+    time="2026-09-04T20:38:19.492921245Z" level=info msg="containerd is still running" module=libcontainerd pid=2119
+    time="2026-09-04T20:38:34.492620388Z" level=info msg="stopping healthcheck following graceful shutdown" module=libcontainerd
+    time="2026-09-04T20:38:34.492620943Z" level=info msg="Daemon shutdown complete" error="failed to start containerd: timeout waiting for containerd to start"
+    failed to start containerd: timeout waiting for containerd to start
+
+    $ sudo systemctl start docker
+    System has not been booted with systemd as init system (PID 1). Can't operate.
+    $ sudo service docker start
+    /etc/init.d/docker: 62: ulimit: error setting limit (Operation not permitted)
+
+This sandbox's own container/init restrictions (no systemd PID 1, `ulimit`
+not permitted, `containerd` cannot start under this sandbox's isolation)
+make `compose.yaml`'s `postgres: image: postgres:17` path (the repository's
+canonical, already-correct PostgreSQL 17 path -- no change was made to it)
+genuinely unreachable here, not a repository defect.
+
+### B2. Direct PostgreSQL 17 package installation also blocked (proxy policy)
+
+    $ curl -sS -m 10 -o /dev/null -w "HTTP_STATUS:%{http_code}\n" https://apt.postgresql.org/pub/repos/apt/
+    curl: (56) CONNECT tunnel failed, response 403
+    HTTP_STATUS:000
+
+    $ curl -sS -m 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    curl: (56) CONNECT tunnel failed, response 403
+
+The sandbox's own outbound-HTTPS proxy status endpoint confirms this is a
+policy denial, not a transient failure:
+
+    $ curl -sS "$HTTPS_PROXY/__agentproxy/status"
+    ...
+    "recentRelayFailures": [
+      {
+        "ts": "2026-09-04T20:38:40.841Z",
+        "kind": "connect_rejected",
+        "detail": "gateway answered 403 to CONNECT (policy denial or upstream failure)",
+        "host": "apt.postgresql.org:443"
+      },
+      {
+        "ts": "2026-09-04T20:38:41.114Z",
+        "kind": "connect_rejected",
+        "detail": "gateway answered 403 to CONNECT (policy denial or upstream failure)",
+        "host": "www.postgresql.org:443"
+      }
+    ]
+
+### B3. PyPI-distributed embedded-Postgres alternative checked and found insufficient
+
+PyPI itself is reachable (unlike apt.postgresql.org/www.postgresql.org).
+Before concluding this checkpoint, the only PyPI package found that ships
+a real, unmodified Postgres server binary (`pgserver`, "self-contained
+postgres server for your python applications") was installed and its
+bundled binary inspected directly rather than trusting its (stale)
+package description:
+
+    $ pip install --target=/tmp/pgserver_check pgserver
+    Successfully installed ... pgserver-0.1.4 ...
+    $ /tmp/pgserver_check/pgserver/pginstall/bin/postgres --version
+    postgres (PostgreSQL) 16.2
+
+This bundles PostgreSQL 16.2, not 17 -- using it would be exactly the
+"call PostgreSQL 16 a substitute PASS" this instruction explicitly
+forbids, so it was rejected. A search for `embedded-postgres`,
+`postgresql-binary`, `pg17`, `postgres17-binary`, and
+`py-postgresql-binaries` on PyPI found no package (all HTTP 404). No
+further externally-hosted PostgreSQL 17 distribution channel was found
+reachable from this sandbox without requesting a secret or paid
+infrastructure, which this instruction explicitly prohibits attempting.
+
+C. Recovery work completed and validated in this same environment
+   (against real PostgreSQL 16, NOT claimed as a PostgreSQL 17 substitute)
+
+FSR-01/02 (this checkpoint's immediately preceding commit, `293ac1c`) is
+fully implemented and validated: `ruff check .` and `mypy src/` clean;
+`tests/unit` + `tests/golden` + `tests/replay` (1288 tests) all pass; all
+5 new FSR-02 integration tests, 45 new isolation-boundary tests, and 14
+new live-signing/submission unit tests pass against real Postgres;
+migration 0037 upgrade/downgrade round-trips cleanly;
+`argus.executor.main` was run for real end-to-end (acquired a genuine
+`PostgresLeaseStore` singleton lease, fencing_token incrementing across
+repeated real runs).
+
+For FSR-03's own required categories, run against a FRESH, empty
+PostgreSQL 16 database (`argus_fsr03_zero_to_head`, created and dropped
+for this checkpoint only) and against the shared long-lived PostgreSQL 16
+dev database (`argus`, already at Alembic head `0037` from this session's
+own prior work):
+
+1. **Zero -> current Alembic head upgrade**: PASS on PostgreSQL 16 (fresh
+   database, all 37 migrations ran cleanly in order, single head `0037`,
+   55 tables created). NOT executed on PostgreSQL 17 (blocked, section B).
+2. **Repository role/privilege tests**
+   (`tests/integration/test_db_roles.py`,
+   `tests/integration/test_immutability_grants.py`): included in the full
+   sweep below. NOT executed on PostgreSQL 17.
+3. **Phase 5/6 DB-backed integration tests previously skipped for
+   environment**: now genuinely executed (PostgreSQL 16 is reachable in
+   this sandbox, unlike at earlier points in this project's history) --
+   see section D for full, honest results. NOT executed on PostgreSQL 17.
+4. **Execution singleton/fencing tests against the real DB**
+   (`test_postgres_lease_store_two_instances_one_owner_wins` in
+   `tests/integration/test_phase6_persistence_and_concurrency.py`, plus
+   `argus.executor.main` real end-to-end runs above): PASS on PostgreSQL
+   16. NOT executed on PostgreSQL 17.
+5. **Execution state-machine/idempotency/restart tests against the real
+   DB**: FSR-02's own 5 new integration tests (crash-after-submit,
+   already-durable-confirmation idempotent restart) PASS on PostgreSQL 16
+   -- see FSR-01/02's own commit. NOT executed on PostgreSQL 17.
+6. **Full DB-backed research persistence tests for corrected Phases
+   7-11**: executed -- see section D for full, honest results (several
+   pre-existing, FSR-01/02-unrelated failures found and disclosed, not
+   silently omitted). NOT executed on PostgreSQL 17.
+7. **Downgrade/re-upgrade tests wherever repository convention requires
+   them**: migration `0037`'s own downgrade/upgrade round-trip PASSES on
+   PostgreSQL 16 (verified as part of FSR-01/02's own validation). The
+   pre-existing `tests/integration/test_migrations.py` downgrade/upgrade
+   suite currently FAILS for a reason unrelated to FSR-01/02 or to
+   PostgreSQL 16 vs. 17 -- see section D, finding D2. NOT executed on
+   PostgreSQL 17.
+
+D. Honest full-suite result on PostgreSQL 16 (supplementary evidence only
+   -- this is explicitly NOT a PostgreSQL 17 validation and is not counted
+   as satisfying FSR-03's own requirement)
+
+    $ uv run pytest tests/integration -q
+    38 failed, 367 passed, 42 warnings in 744.46s (0:12:24)
+
+Every one of the 38 failures was individually inspected. None touches any
+file this recovery's FSR-01/02 work modified
+(`src/argus/executor/persistence.py`, `fill_accounting.py`,
+`confirmation.py`, `live_signing.py`, `live_submission.py`, `main.py`,
+`service.py`, `src/argus/domain/execution_fills.py`,
+migration `0037`) -- confirmed by inspecting each failing test file's own
+imports and by the fact that FSR-01/02's own 5 new
+`tests/integration/test_fsr02_confirmation.py` tests, run individually
+against a fresh throwaway database, all PASS. Three distinct pre-existing
+root causes, all predating and unrelated to this checkpoint's own FSR-01/02
+work:
+
+**D1. Shared long-lived dev-database pollution (the majority of the 38
+failures)** -- e.g.
+`test_phase7_graph_persistence_and_report.py::test_lead_follow_observation_and_directional_edge_persisted`
+asserts `observation_count == 1` but the real result is `59` (`wallet_count
+135`), because the production query scans ALL tracked-wallet activity in
+the shared `argus` database, which has accumulated rows from many
+independent test runs across this long session (most fixtures reuse the
+same fixed anchor timestamp `2025-06-01T12:00:00Z`). This exact phenomenon
+was already identified and documented earlier in this same recovery
+(FSR-08's own validation notes) and is why every FSR-05..14 test in this
+recovery was individually re-validated against a fresh, throwaway database
+rather than trusted from a combined run against `argus`. Affected:
+`test_phase7_graph_persistence_and_report.py`,
+`test_phase8_convergence_persistence_and_report.py`,
+`test_phase9_counterfactual_persistence_and_report.py`,
+`test_phase10_synthetic_persistence_and_report.py`,
+`test_phase11_prediction_persistence_and_report.py`,
+`test_shadow_phase4_remediation_observation.py`,
+`test_reconciliation_sql.py`, `test_phase5_persistence_and_report.py`.
+
+**D2. Stale hardcoded migration-count assertion**
+(`tests/integration/test_migrations.py`) -- e.g.
+`test_migration_from_zero_to_head_creates_identity_columns` asserts
+`_current_revision(scratch_database) == "0021"`, a literal left over from
+when Phase 5 was the Alembic head; the chain has since grown to `0037`
+across Phases 6-11 and this recovery's own FSR-05/06/07/08/09-12/13/02
+migrations, and this test file's hardcoded expectation was never updated
+to track it. Pre-existing test-file staleness, not a migration-chain
+defect (the zero-to-head upgrade itself succeeds cleanly, per section C
+item 1).
+
+**D3. Pre-existing test-file role misconfiguration**
+(`tests/integration/test_phase6_persistence_and_concurrency.py`) --
+already root-caused during FSR-01/02's own work: 4 of its tests connect
+as `argus_ingest` to write `execution_intents`/`execution_fills`, but
+migration `0024`'s own least-privilege grants correctly give
+INSERT/UPDATE on those tables only to `argus_executor` (`argus_ingest`
+is SELECT-only there by design, section 72). The 2 passing tests in that
+file use the correct role. Not a production defect: FSR-01/02's own
+`tests/integration/test_fsr02_confirmation.py` exercises the identical
+`execution_intents`/`execution_fills` write path correctly (via
+`DbRole.EXECUTOR`) and passes.
+
+None of D1/D2/D3 is claimed fixed by this checkpoint -- they are outside
+FSR-03's own scope (a PostgreSQL 17 reachability question) and are
+disclosed here exactly as found, for FSR-15/16's own "full regression
+suite, 0 failed" requirement to account for.
+
+E. Explicit non-claims (per this instruction's own text)
+
+- PostgreSQL 16 is NOT claimed as a substitute PASS for the PostgreSQL 17
+  requirement anywhere in this checkpoint.
+- `LIVE_READY_SOFTWARE=true` is NOT claimed by this checkpoint.
+- Final recovery PASS is NOT claimed by this checkpoint.
+- No secret was requested and no paid infrastructure was enabled to work
+  around this environment's Docker/PGDG blocks (section B3's PyPI search
+  used only the already-reachable public PyPI index, found no genuine
+  PostgreSQL 17 distribution, and was abandoned rather than substituted).
+
+No STOP is issued by this document; it reports environment-blocked status
+for independent review, per this recovery's own established checkpoint
+protocol.
