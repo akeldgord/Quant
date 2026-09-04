@@ -161,10 +161,25 @@ def _current_revision(database: str) -> str:
     return str(rows[0][0])
 
 
+def _head_revision() -> str:
+    """The real current Alembic head -- never a hardcoded literal, since
+    this repository's migration chain grows continuously and a literal
+    goes stale (and silently wrong) the moment any later migration is
+    added, exactly as happened to this file's own former ``"0021"``
+    literal (correct when Phase 5 was head, long since surpassed by
+    Phase 6-11 and multiple recovery migrations)."""
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(_alembic_config())
+    head = script.get_current_head()
+    assert head is not None, "migrations/versions has no head revision"
+    return head
+
+
 def test_migration_from_zero_to_head_creates_identity_columns(scratch_database: str) -> None:
     command.upgrade(_alembic_config(), "head")
 
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -193,7 +208,7 @@ def test_upgrade_from_0003_through_head_creates_table_and_columns_together(
     assert "parse_attempts" not in existing_tables
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
 
@@ -296,7 +311,7 @@ def test_upgrade_head_is_idempotent_and_restart_safe(scratch_database: str) -> N
 
     command.upgrade(cfg, "head")  # simulated restart
 
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     assert _column_names(scratch_database, "parse_attempts") == first_columns
 
 
@@ -310,7 +325,7 @@ def test_downgrade_then_upgrade_restores_identity_columns_cleanly(scratch_databa
     command.downgrade(cfg, "0005")
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     columns = _column_names(scratch_database, "parse_attempts")
     assert set(_IDENTITY_COLUMNS).issubset(columns)
     constraints = _check_constraint_names(scratch_database, "parse_attempts")
@@ -436,7 +451,7 @@ def test_downgrade_from_0007_fails_closed_with_multiple_build_hashes_per_event(
 
     # Refused before touching anything: still at head, build_hash column
     # and both append-only rows still present and unmodified.
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     assert "build_hash" in _column_names(scratch_database, "swaps")
     rows = _query(
         scratch_database,
@@ -592,7 +607,7 @@ def test_p2r7_downgrade_from_0009_fails_closed_when_value_exceeds_bigint_range(
         command.downgrade(cfg, "0008")
 
     # Refused before touching anything: still at head, value unchanged.
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     stored = _query(
         scratch_database,
         "SELECT supply_raw FROM token_market_snapshots WHERE token_id = :t",
@@ -647,7 +662,7 @@ def test_p2r7_downgrade_from_0009_succeeds_when_values_fit_bigint_range(
     assert stored == 1_000_000
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
 
 
 def test_p2r7_early_buyers_amount_raw_shares_the_same_u64_widening(scratch_database: str) -> None:
@@ -884,7 +899,7 @@ def test_p3r6a_populated_0010_database_preserves_all_rows_through_head(
 
     command.upgrade(cfg, "head")
 
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
 
     position_row = _query(
         scratch_database,
@@ -1011,7 +1026,7 @@ def test_p3r6a_downgrade_from_0012_fails_closed_with_legacy_null_rows(
         command.downgrade(cfg, "0011")
 
     # Refused before touching anything: still at head, legacy row intact.
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
     row = _query(
         scratch_database,
         "SELECT round_trip_index FROM wallet_positions WHERE position_id = :p",
@@ -1242,7 +1257,7 @@ def test_p4rec04_populated_0018_upgrade_through_0020_backfills_terminal_at(
     ids = _seed_p4rec04_legacy_probes(scratch_database)
 
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
 
     rows = {
         str(r[0]): r
@@ -1331,7 +1346,7 @@ def test_p4rec04_backfill_update_is_idempotent(scratch_database: str) -> None:
     # Upgrading to head a second time (a genuine repeated-startup pass)
     # is itself stable too.
     command.upgrade(cfg, "head")
-    assert _current_revision(scratch_database) == "0021"
+    assert _current_revision(scratch_database) == _head_revision()
 
 
 def _p4rec04_sessionmaker(scratch_database: str) -> tuple[Any, Any]:

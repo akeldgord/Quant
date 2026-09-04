@@ -72,7 +72,9 @@ _TEST_IDENTITY = {
 }
 
 
-def _sessionmaker(role: DbRole = DbRole.INGEST) -> tuple[ArgusConfig, Any, async_sessionmaker[Any]]:
+def _sessionmaker(
+    role: DbRole = DbRole.EXECUTOR,
+) -> tuple[ArgusConfig, Any, async_sessionmaker[Any]]:
     config = load_config()
     info = connection_for_role(config, role)
     engine = create_async_engine(info.as_asyncpg_url())
@@ -83,10 +85,15 @@ def _unique_mint() -> str:
     return f"P6TOK{uuid.uuid4().hex[:39]}"
 
 
-async def _seed_token(session, *, mint: str, at: datetime) -> uuid.UUID:
+async def _seed_token_via_admin(admin_engine: AsyncEngine, *, mint: str, at: datetime) -> uuid.UUID:
+    """``tokens`` (Phase 2) is INSERT-able only by ``argus_ingest``, never
+    ``argus_executor`` (least privilege, migration ``0008``) -- seeded via
+    the admin connection since these tests exercise Phase 6's own
+    execution-table write path, not Phase 2's role boundary."""
     token_id = uuid.uuid4()
-    session.add(Token(token_id=token_id, mint=mint, first_observed_at=at, created_at=at))
-    await session.flush()
+    admin_sessionmaker = async_sessionmaker(admin_engine, expire_on_commit=False)
+    async with admin_sessionmaker() as session, session.begin():
+        session.add(Token(token_id=token_id, mint=mint, first_observed_at=at, created_at=at))
     return token_id
 
 
@@ -161,10 +168,10 @@ async def test_postgres_lease_store_two_instances_one_owner_wins(admin_engine: A
 async def test_execution_intent_state_reloads_correctly_after_restart(
     admin_engine: AsyncEngine,
 ) -> None:
+    token_id = await _seed_token_via_admin(admin_engine, mint=_unique_mint(), at=_NOW)
     config, engine, sessionmaker = _sessionmaker()
     try:
         async with sessionmaker() as session, session.begin():
-            token_id = await _seed_token(session, mint=_unique_mint(), at=_NOW)
             fingerprint = compute_idempotency_fingerprint(
                 prospective_event_id=None,
                 strategy_version="p6-test-v1",
@@ -229,10 +236,9 @@ async def test_execution_intent_state_reloads_correctly_after_restart(
 async def test_duplicate_idempotency_fingerprint_never_creates_two_rows(
     admin_engine: AsyncEngine,
 ) -> None:
+    token_id = await _seed_token_via_admin(admin_engine, mint=_unique_mint(), at=_NOW)
     config, engine, sessionmaker = _sessionmaker()
     try:
-        async with sessionmaker() as session, session.begin():
-            token_id = await _seed_token(session, mint=_unique_mint(), at=_NOW)
         fingerprint = compute_idempotency_fingerprint(
             prospective_event_id=None,
             strategy_version="p6-test-v1",
@@ -287,10 +293,10 @@ async def test_second_concurrent_open_position_for_same_token_is_rejected(
     """The real DB-level backstop for P6-11: the partial unique index
     rejects a second OPEN position for the same token even if application
     logic somehow attempted it."""
+    token_id = await _seed_token_via_admin(admin_engine, mint=_unique_mint(), at=_NOW)
     config, engine, sessionmaker = _sessionmaker()
     try:
         async with sessionmaker() as session, session.begin():
-            token_id = await _seed_token(session, mint=_unique_mint(), at=_NOW)
             fingerprint_a = compute_idempotency_fingerprint(
                 prospective_event_id=None,
                 strategy_version="p6-test-v1",
@@ -373,10 +379,10 @@ async def test_intent_left_submitted_across_restart_never_silently_retries(
     SUBMITTED across a simulated crash reloads with its exact state
     intact; the only legal next moves are CONFIRMED/FAILED via
     reconciliation, never a blind resubmission."""
+    token_id = await _seed_token_via_admin(admin_engine, mint=_unique_mint(), at=_NOW)
     config, engine, sessionmaker = _sessionmaker()
     try:
         async with sessionmaker() as session, session.begin():
-            token_id = await _seed_token(session, mint=_unique_mint(), at=_NOW)
             fingerprint = compute_idempotency_fingerprint(
                 prospective_event_id=None,
                 strategy_version="p6-test-v1",
