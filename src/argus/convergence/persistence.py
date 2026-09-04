@@ -20,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.convergence.confirmation import ConfirmationClassification
 from argus.convergence.episodes import ConvergenceEpisode
+from argus.convergence.outcome_comparison import OutcomeComparisonResult
 from argus.convergence.stats import OverlapSurpriseResult
 from argus.domain.convergence_events import ConvergenceEvent
+from argus.domain.convergence_outcome_comparisons import ConvergenceOutcomeComparison
 from argus.domain.expected_confirmation_events import ExpectedConfirmationEvent
 
 
@@ -140,4 +142,60 @@ async def get_or_create_expected_confirmation_event(
         return row, True
     return (
         await session.execute(select(ExpectedConfirmationEvent).where(*identity))
+    ).scalar_one(), False
+
+
+async def get_or_create_convergence_outcome_comparison(
+    session: AsyncSession,
+    *,
+    class_name: str,
+    result: OutcomeComparisonResult,
+    as_of: datetime,
+    algorithm_version: str,
+    config_hash: str,
+    now: datetime,
+) -> tuple[ConvergenceOutcomeComparison, bool]:
+    identity = (
+        ConvergenceOutcomeComparison.class_name == class_name,
+        ConvergenceOutcomeComparison.as_of == as_of,
+        ConvergenceOutcomeComparison.algorithm_version == algorithm_version,
+        ConvergenceOutcomeComparison.config_hash == config_hash,
+    )
+    existing = (
+        await session.execute(select(ConvergenceOutcomeComparison).where(*identity))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+
+    executable = result.executable
+    mark = result.mark
+    row = ConvergenceOutcomeComparison(
+        comparison_id=uuid.uuid4(),
+        class_name=class_name,
+        as_of=as_of,
+        algorithm_version=algorithm_version,
+        config_hash=config_hash,
+        member_count=executable.member_count,
+        eligible_count=executable.eligible_count,
+        sample_count=executable.sample_count,
+        mean_return_pct=executable.mean_return_pct,
+        median_return_pct=executable.median_return_pct,
+        win_rate=executable.win_rate,
+        no_route_unsellable_missing_rate=executable.no_route_unsellable_missing_rate,
+        insufficient_executable_sample=executable.insufficient_executable_sample,
+        mark_sample_count=mark.sample_count,
+        mark_mean_return_pct=mark.mean_return_pct,
+        created_at=now,
+    )
+    stmt = (
+        pg_insert(ConvergenceOutcomeComparison)
+        .values(**_row_values(row, ConvergenceOutcomeComparison.__table__))
+        .on_conflict_do_nothing(constraint="uq_convergence_outcome_comparisons_identity")
+        .returning(ConvergenceOutcomeComparison.comparison_id)
+    )
+    inserted_id = (await session.execute(stmt)).scalar_one_or_none()
+    if inserted_id is not None:
+        return row, True
+    return (
+        await session.execute(select(ConvergenceOutcomeComparison).where(*identity))
     ).scalar_one(), False

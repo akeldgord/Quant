@@ -26,6 +26,8 @@ from typing import Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.convergence.confirmation import (
+    OUTCOME_ABSENT,
+    OUTCOME_EARLY,
     OUTCOME_STRONG,
     classify_confirmation,
     expected_confirmation_window,
@@ -36,16 +38,27 @@ from argus.convergence.independence import (
     estimated_independent_actors,
 )
 from argus.convergence.loaders import (
+    MemberRef,
     load_cluster_links_within_group,
     load_observations_for_edge,
+    load_outcome_comparisons,
     load_significant_directional_edges,
+)
+from argus.convergence.outcome_comparison import (
+    CLASS_FAILED_CONFIRMATION,
+    CLASS_HIGH_SURPRISAL_OVERLAP,
+    CLASS_ORDINARY_OVERLAP,
+    CLASS_RAPID_CONFIRMATION,
+    OUTCOME_COMPARISON_CLASSES,
 )
 from argus.convergence.persistence import (
     get_or_create_convergence_event,
+    get_or_create_convergence_outcome_comparison,
     get_or_create_expected_confirmation_event,
 )
 from argus.convergence.stats import compute_overlap_surprise
 from argus.domain.convergence_events import ConvergenceEvent
+from argus.domain.convergence_outcome_comparisons import ConvergenceOutcomeComparison
 from argus.graph.lead_follow import WalletTokenEntry
 from argus.graph.loaders import load_wallet_token_entries
 from argus.graph.service import (
@@ -63,6 +76,7 @@ _PHASE8_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "independence.py",
     "stats.py",
     "confirmation.py",
+    "outcome_comparison.py",
     "loaders.py",
     "persistence.py",
     "service.py",
@@ -114,6 +128,9 @@ class Phase8ComputationResult:
     convergence_events: list[ComputedConvergenceEvent] = field(default_factory=list)
     expected_confirmation_outcome_counts: dict[str, int] = field(default_factory=dict)
     expected_confirmation_total: int = 0
+    # FSR-06: the required ordinary/high-surprisal/rapid/failed outcome-
+    # comparison layer, keyed by class name -- always all four classes.
+    outcome_comparisons: dict[str, ConvergenceOutcomeComparison] = field(default_factory=dict)
 
 
 async def _compute_and_persist_convergence_events(
@@ -123,7 +140,14 @@ async def _compute_and_persist_convergence_events(
     cutoff: datetime,
     config: ConvergenceRunConfig,
     computed_at: datetime,
-) -> list[ComputedConvergenceEvent]:
+) -> tuple[list[ComputedConvergenceEvent], list[MemberRef], list[MemberRef]]:
+    """Returns the computed convergence events, plus this run's own
+    ordinary-overlap and high-surprisal-overlap outcome-comparison class
+    members (FSR-06) -- every entrant in an episode whose own surprisal
+    did/didn't clear ``config.strong_surprisal_threshold`` with adequate
+    calibration, the SAME ``is_strong`` criterion
+    ``_compute_and_persist_expected_confirmations`` already applies to a
+    convergence event as a whole."""
     episodes = build_convergence_episodes(entries, window=config.window)
     episodes.sort(key=lambda e: e.window_start)
 
@@ -131,6 +155,8 @@ async def _compute_and_persist_convergence_events(
     links_by_wallet = await load_cluster_links_within_group(session, all_wallet_ids)
 
     computed: list[ComputedConvergenceEvent] = []
+    ordinary_overlap_members: list[MemberRef] = []
+    high_surprisal_overlap_members: list[MemberRef] = []
     historical_overlaps: list[Decimal] = []
     for episode in episodes:
         member_wallet_ids = [e.wallet_id for e in episode.entries]
@@ -162,9 +188,15 @@ async def _compute_and_persist_convergence_events(
                 calibration_confidence=surprise.calibration_confidence,
             )
         )
+        is_strong = (
+            surprise.surprisal >= config.strong_surprisal_threshold
+            and surprise.calibration_confidence != "INSUFFICIENT_SAMPLE"
+        )
+        target_members = high_surprisal_overlap_members if is_strong else ordinary_overlap_members
+        target_members.extend((e.wallet_id, e.token_id, e.entered_at) for e in episode.entries)
         historical_overlaps.append(observed)
 
-    return computed
+    return computed, ordinary_overlap_members, high_surprisal_overlap_members
 
 
 async def _compute_and_persist_expected_confirmations(
@@ -176,7 +208,12 @@ async def _compute_and_persist_expected_confirmations(
     graph_config: GraphRunConfig,
     config: ConvergenceRunConfig,
     computed_at: datetime,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], list[MemberRef], list[MemberRef]]:
+    """Returns the outcome-classification counts, plus this run's own
+    rapid-confirmation and failed-confirmation outcome-comparison class
+    members (FSR-06) -- each measured on the LEADER's own real entry
+    (never the absent follower's, since FAILED_CONFIRMATION by
+    definition has no follower entry to measure)."""
     edges = await load_significant_directional_edges(
         session,
         algorithm_version=GRAPH_ALGORITHM_VERSION,
@@ -187,6 +224,8 @@ async def _compute_and_persist_expected_confirmations(
     )
 
     outcome_counts: dict[str, int] = {}
+    rapid_confirmation_members: list[MemberRef] = []
+    failed_confirmation_members: list[MemberRef] = []
     for edge in edges:
         observations = await load_observations_for_edge(
             session,
@@ -258,8 +297,13 @@ async def _compute_and_persist_expected_confirmations(
             outcome_counts[classification.outcome] = (
                 outcome_counts.get(classification.outcome, 0) + 1
             )
+            leader_member = (edge.leader_wallet_id, leader_entry.token_id, leader_entry.entered_at)
+            if classification.outcome == OUTCOME_EARLY:
+                rapid_confirmation_members.append(leader_member)
+            elif classification.outcome == OUTCOME_ABSENT:
+                failed_confirmation_members.append(leader_member)
 
-    return outcome_counts
+    return outcome_counts, rapid_confirmation_members, failed_confirmation_members
 
 
 async def compute_and_persist_phase8(
@@ -276,12 +320,20 @@ async def compute_and_persist_phase8(
 
     entries = await load_wallet_token_entries(session, cutoff=cutoff)
 
-    convergence_events = await _compute_and_persist_convergence_events(
+    (
+        convergence_events,
+        ordinary_members,
+        high_surprisal_members,
+    ) = await _compute_and_persist_convergence_events(
         session, entries=entries, cutoff=cutoff, config=config, computed_at=computed_at
     )
     convergence_by_token = {c.episode.token_id: c for c in convergence_events}
 
-    outcome_counts = await _compute_and_persist_expected_confirmations(
+    (
+        outcome_counts,
+        rapid_members,
+        failed_members,
+    ) = await _compute_and_persist_expected_confirmations(
         session,
         entries=entries,
         convergence_by_token=convergence_by_token,
@@ -291,9 +343,32 @@ async def compute_and_persist_phase8(
         computed_at=computed_at,
     )
 
+    members_by_class: dict[str, list[MemberRef]] = {
+        CLASS_ORDINARY_OVERLAP: ordinary_members,
+        CLASS_HIGH_SURPRISAL_OVERLAP: high_surprisal_members,
+        CLASS_RAPID_CONFIRMATION: rapid_members,
+        CLASS_FAILED_CONFIRMATION: failed_members,
+    }
+    comparison_results = await load_outcome_comparisons(
+        session, members_by_class=members_by_class, cutoff=cutoff
+    )
+    outcome_comparisons: dict[str, ConvergenceOutcomeComparison] = {}
+    for class_name in OUTCOME_COMPARISON_CLASSES:
+        row, _created = await get_or_create_convergence_outcome_comparison(
+            session,
+            class_name=class_name,
+            result=comparison_results[class_name],
+            as_of=cutoff,
+            algorithm_version=ALGORITHM_VERSION,
+            config_hash=config.config_hash(),
+            now=computed_at,
+        )
+        outcome_comparisons[class_name] = row
+
     return Phase8ComputationResult(
         as_of=cutoff,
         convergence_events=convergence_events,
         expected_confirmation_outcome_counts=outcome_counts,
         expected_confirmation_total=sum(outcome_counts.values()),
+        outcome_comparisons=outcome_comparisons,
     )
