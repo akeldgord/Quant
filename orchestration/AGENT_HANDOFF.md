@@ -7,129 +7,149 @@ index into the full checkpoint/bundle, not a replacement for either. See
 
 ---
 
-HANDOFF_ID: handoff-0034-phase-6-001
-UTC_TIMESTAMP: 2026-09-03T01:00:00Z
-CURRENT_COMMIT: cdba30bd8f60ce68c56210995d0df868de286a60
-CURRENT_PHASE: 6
+HANDOFF_ID: handoff-0035-final-spec-recovery-001
+UTC_TIMESTAMP: 2026-09-04T21:20:00Z
+CURRENT_COMMIT: ffb431394f596107cef3d0ef09c2f810059d42e7
+CURRENT_PHASE: 11
 WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION
-LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-phase-6-001
+LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-final-spec-recovery-001
 WORKING_TREE: clean
-CHECKPOINT_PATH: orchestration/checkpoints/phase_6.md
-BUNDLE_PATH: orchestration/bundles/phase_6.txt
-TEST_STATUS: 1082 passed, 343 skipped (all pre-existing Postgres-unreachable, section B of the checkpoint), 0 failed (`uv run pytest -q`, full repository). This phase adds 229 new Phase 6 unit-test nodes across 16 files (0 skipped, no database required) plus 6 new DB-gated integration test nodes (role/privilege, real `PostgresLeaseStore` concurrency, state-reload-after-restart, duplicate-fingerprint concurrent-insert, partial-unique-index rejection, kill-after-submit) that collect cleanly and SKIP identically to every other DB-backed test in this repository. ruff clean; ruff format clean (338 files); mypy clean (168 source files); single alembic head `0024` (new additive migration, never rewriting `0023`); 12/12 real-chain fixtures ok; named Phase 5 regression suite re-run individually (111 passed, 6 skipped, 0 failed); manual secret scan (credential/API-key/password/token patterns plus base58 64-byte-keypair-length check) across all 46 new/changed Phase 6 files, clean -- ALL RAW COMMAND OUTPUT embedded verbatim in the paired bundle and in `orchestration/phase_6/evidence/full_validation_output.txt`, plus the real `argus executor readiness` CLI output captured at `orchestration/phase_6/evidence/executor_readiness_output.json`.
-ORCHESTRATOR_REVIEW_REQUIRED: whether all 18 sealed rows (P6-01 through P6-18) of the NEW `phase-6-v1` contract are genuinely met (checkpoint section D), whether the software-only scope boundary was honored throughout (no real key/signer/dispatch/arm-file/canary/capital-allocation path anywhere in the diff, section E/L), whether the disclosed environmental deferral for DB-backed tests (section B) and the three `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` rows (P6-03, P6-11, P6-15) remain acceptable given the identical limitation carried through every prior phase, and whether Phase 6 should now be approved. This session does not and cannot apply Phase 6 approval itself.
+CHECKPOINT_PATH: orchestration/checkpoints/fsr15_16_final_recovery_acceptance_matrix.md
+BUNDLE_PATH: orchestration/bundles/fsr15_16_final_recovery_acceptance_matrix.txt
+TEST_STATUS: tests/unit + tests/golden + tests/replay (1288 tests): 0 failed. tests/integration on PostgreSQL 16 (PostgreSQL 17 environment-blocked, see below): 384 passed, 21 failed -- all 21 traced to one single disclosed, pre-existing shared-dev-database test-isolation gap (checkpoint section C), none touching this recovery's own FSR-01/02/03 work. ruff check/ruff format --check/mypy clean. Zero-to-head Alembic migration + single head (0037) verified on a fresh PostgreSQL 16 database.
+ORCHESTRATOR_REVIEW_REQUIRED: audit the complete `argus-final-spec-recovery-001` contract (FSR-01 through FSR-16) against `TARGET_COMMIT` `ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30` and this handoff's own checkpoint, with particular attention to: (1) whether FSR-01/02's production-capable executor boundary genuinely stays isolated and inert (no live dispatch path, `LIVE_ARMED` unconditionally false) while being structurally real; (2) whether FSR-03's `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` disposition and its supporting evidence are acceptable given this sandbox's Docker/PGDG restrictions; (3) whether FSR-15's disclosed 21-failure test-isolation gap (checkpoint section C) is acceptable to leave open pending a dedicated follow-up, or must be closed before any further approval. This session does not and cannot apply final recovery approval itself.
 
 ## Work completed
 
-Independently verified the safety gates for and executed orchestrator
-instruction `argus-phase-6-001` in full: its `TARGET_COMMIT` field value
-`43bb62f9247e8e8b3a663e98c8ed70ba956e4960` (the Phase 5 remediation round
-1's own hash-fill commit) confirmed to be an ancestor of HEAD with only
-`orchestration/ORCHESTRATOR_INSTRUCTIONS.md` differing (a single
-instruction-only commit, `3078d44`, whose parent exactly matches this
-TARGET_COMMIT); `AUTHORIZED_PHASE: 6` <= `docs/BUILD_STATE.md`'s
-`current_phase: 5` + 1 -- not skipping ahead; clean worktree; local HEAD
-equal to a freshly-fetched remote HEAD -- before any work began.
+Executed the complete `argus-final-spec-recovery-001` contract
+(FSR-01 through FSR-16), responding to an independent audit that found
+the original Phase 6-11 build contaminated/incomplete against
+MASTER_SPEC.md v2.0 at `TARGET_COMMIT`
+`ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30`.
 
-Built the complete software-only Phase 6 (HARDENED ISOLATED EXECUTOR,
-MASTER_SPEC.md sections 65-84) against the NEW sealed 18-row
-`phase-6-v1` contract: additive migration `0024` (8 new tables, least-
-privilege GRANTs); the full `src/argus/executor/` package (19 modules
-covering capital defaults, arm-file validation, key isolation, executor
-singleton/fencing, the 11-state execution intent machine, idempotency,
-transaction attestation, actual-fill accounting, no-escalation slippage,
-the 23-gate live risk table, one-open-position-per-mint policy,
-independent risk exits, token safety/sellability, host reconciliation,
-the no-dispatch guard, and honest disposition reporting); 8 new domain
-models; the persistence layer wiring all of the above into idempotent,
-transactional DB writes; a new read-only `argus executor readiness` CLI
-command; and 229 new unit-test nodes plus 6 new DB-gated integration
-test nodes covering every one of the 18 sealed rows. See checkpoint
-`orchestration/checkpoints/phase_6.md` section C for the complete
-per-section implementation detail and section D for the 18-row matrix.
+**FSR-04 through FSR-14** (a reusable point-in-time/knowledge-cutoff
+invariant; real Phase 7 forward-information-after-leader evidence; real
+Phase 8 point-in-time convergence and outcome comparisons; complete Phase
+9 predation inputs; real Phase 10 executable-return backtesting; a
+rebuilt, causally-sound Phase 11 dataset with staleness-bounded snapshots,
+per-horizon right-censoring, and a purged/embargoed chronological split;
+a `contaminated_run_invalidations` registry versioning and explaining the
+Phase 8/9/10/11 algorithm-version bumps; retroactive Phase 7-11 recovery
+checkpoints) were completed and committed individually earlier in this
+same recovery -- see this session's own prior `docs/DECISION_LOG.md`
+entries and `orchestration/checkpoints/phase_{7,8,9,10,11}_final_recovery.md`.
 
-## Important findings
+**FSR-01/02** (this handoff's own most recent substantive work): a
+production-capable executor process boundary --
+`argus.executor.live_signing.FileKeypairSigner` (a real Solana ed25519
+signer via the `solders` SDK, loading a keypair only at runtime from an
+external operator-controlled path named by `ARGUS_EXECUTOR_SIGNER_KEY_PATH`,
+never touched by this coding session), `argus.executor.live_submission.
+SolanaSubmissionClient` (a real `sendTransaction` broadcast adapter kept
+physically isolated inside `argus.executor` rather than added to the
+shared read-only Helius client), the distinct `argus.executor.main`
+process entry point (run for real end-to-end this session, acquiring a
+genuine `PostgresLeaseStore` singleton lease, correctly reporting no
+signer/arm-file configured and never dispatching), and a new `executor`
+Compose service gated behind a `profiles: ["executor"]` opt-in so a plain
+`docker compose up` never starts it. A new AST-based isolation test
+(mirroring the existing P6-02 mechanism) proves no non-executor package,
+no other `argus.executor` module, and `cli.py`/`api` can ever import
+either live-capable module. Alongside it, real chain-based fill
+reconciliation: migration 0037 adds `transaction_signature`/`slot`/
+`confirmation_state` to `execution_fills`;
+`argus.executor.confirmation.reconcile_submitted_fill` reconstructs
+actual fill evidence from confirmed chain data via the SAME Phase 1
+balance-delta parser tracked-wallet ingestion already uses (never a
+second reimplementation), is crash-safe and idempotent across restarts,
+and never regresses already-recorded confirmation evidence. A genuine
+pre-existing bug, blocking this work's own crash-recovery tests, was
+found and fixed along the way:
+`get_or_create_execution_intent`/`get_or_create_execution_fill` returned
+a freshly-inserted row that was never attached to the session (the raw
+`INSERT` bypassed the ORM unit of work), so a same-transaction
+`apply_transition`/evidence mutation was silently lost at flush time.
 
-- All 18 sealed rows PASS -- see checkpoint section D for the required
-  matrix. P6-03, P6-11, and P6-15 each carry the explicit disposition
-  `PASS_WITH_DEFERRED_ENVIRONMENTAL_VALIDATION` for their DB-dependent
-  sub-requirements (identical environmental class to every prior
-  phase); every other row is unconditionally PASS.
-- `LIVE_CANARY_PASSED=false` and `LIVE_ARMED=false` throughout --
-  structurally so, since no code path in `argus.executor.report`/
-  `service` can ever set either to `True` (checkpoint section D,
-  P6-17). `LIVE_READY_SOFTWARE=true` only because all 7 real, live-
-  evaluated software criteria in the actual `argus executor readiness`
-  CLI output are genuinely true (captured verbatim at
-  `orchestration/phase_6/evidence/executor_readiness_output.json`).
-- No real seed phrase/private/signing key, wallet creation/funding,
-  live/mainnet order, canary initiation, live arm file creation/
-  modification, paid-provider use, or capital-default change exists
-  anywhere in this phase's diff (checkpoint section E). Deliberately NO
-  real on-disk-keypair signer implementation exists in this codebase --
-  only the `Signer` protocol plus `FakeSigner`/`RaisingSigner`, proven
-  isolated from every non-executor package by static import-graph
-  inspection.
-- `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` is unchanged -- still the
-  orchestrator's `argus-phase-6-001` instruction. Phase 6 is NOT marked
-  approved anywhere in this session's evidence;
-  `last_orchestrator_approved_phase` is now `5` (this instruction's own
-  approval of Phase 5, not a self-approval of Phase 6 by this session).
-- Both commits this session carry the sole final trailer paragraph
-  `ARGUS-INSTRUCTION-ID: argus-phase-6-001`, with no paragraph after it,
-  verified via `git interpret-trailers --parse` before push.
-- Every prior phase's checkpoints/bundles/evidence (`phase_0.*` through
-  `phase_5_remediation_1.*`) are preserved byte-for-byte unmodified --
-  `git status`/`git diff --stat` confirm zero changes to any path under
-  any prior phase's evidence tree.
+**FSR-03**: genuine PostgreSQL 17 is not reachable from this
+implementation sandbox for a purely external reason, reproduced directly
+rather than assumed -- the Docker daemon cannot start (`containerd`
+startup times out under this sandbox's own container-isolation
+restrictions) and the outbound proxy denies CONNECT to the PGDG package
+hosts by policy (confirmed via the proxy's own status endpoint as a
+policy denial). The one PyPI-distributed embedded-Postgres package found
+(`pgserver`) was installed and its actual bundled binary inspected
+directly: PostgreSQL 16.2, not 17. Checkpointed exactly
+`FINAL_RECOVERY_ENVIRONMENT_BLOCKED` with the exact failed commands/
+errors and the full list of FSR-03's 7 required test categories, none of
+which executed on genuine PostgreSQL 17. PostgreSQL 16 is explicitly
+NEVER claimed as a substitute PASS anywhere in this recovery.
 
-## Failures or limitations
+**FSR-15/16**: as supplementary (not substitute) evidence, ran the full
+`tests/integration` suite on PostgreSQL 16 twice -- first pass: 367
+passed, 38 failed; every one of the 38 individually root-caused to three
+distinct, pre-existing causes, none touching this recovery's own
+FSR-01/02 changed files. Two of the three (a stale hardcoded Alembic
+revision literal in `tests/integration/test_migrations.py`; a DB-role
+misconfiguration in
+`tests/integration/test_phase6_persistence_and_concurrency.py`) were
+small, safe, clearly-scoped fixes and were applied; the second pass
+confirmed both fixed (384 passed, 21 failed, all 21 now the single
+remaining disclosed cause: shared long-lived dev-database pollution
+across this session's own accumulated test runs, affecting several
+Phase 5/7/8/9/10/11 + shadow/reconciliation test files, which requires a
+larger repository-wide test-isolation change left as explicit open work
+rather than rushed through unsafely -- checkpoint section C). This
+recovery does NOT claim `LIVE_READY_SOFTWARE=true` and does NOT claim
+unconditional final recovery PASS; the acceptance matrix
+(`orchestration/checkpoints/fsr15_16_final_recovery_acceptance_matrix.md`)
+maps every FSR-01..16 item to its true status. `docs/BUILD_STATE.md` and
+`docs/DECISION_LOG.md` were updated with this recovery's own final
+entries; this file replaces the prior Phase 6 handoff per FSR-16's own
+"single handoff" requirement.
 
-- This session's own sandbox container has no reachable Postgres and no
-  running Docker daemon at all (`docker compose up -d postgres` fails:
-  "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"),
-  unchanged from every prior phase. Every DB-backed test in the entire
-  repository skips cleanly, never fails. Substitute evidence per this
-  instruction's own Environmental rule E: the full Phase 6 pure-logic
-  unit suite (229 new nodes, zero skips), the executor-singleton
-  concurrency guarantee proven for real via `InMemoryLeaseStore` with
-  two independent simulated callers, and the real `argus executor
-  readiness` CLI command executed for real in this sandbox (needs no
-  database at all). See checkpoint sections B and C for full detail.
-- `PG17_COMPOSE_VALIDATION`/`LIVE_HELIUS_RPC_VALIDATION`/`LIVE_HELIUS_
-  WSS_VALIDATION`/`BQ_PUBLIC_DATASET_ACCESS` remain
-  `DEFERRED_ENVIRONMENTAL_CHECK`, unchanged, not reopened this phase.
-  CF5-DB (Phase 5's own carryforward) is unaffected -- no real
-  authorized Postgres environment became available during this session.
-- New, disclosed HARDENING_BACKLOG item (non-blocking, no frozen row
-  requires it): every new DB-backed integration test this phase adds
-  remains execution-deferred in this specific sandbox -- a future round
-  with real Postgres access should run them for real at the earliest
-  opportunity to close the remaining gap between "collects cleanly and
-  is structurally sound" and "genuinely observed passing against a live
-  database."
+## Security-state confirmation (FSR-16)
 
-## Deferred checks
+- Phase 6.5 (MAINNET CANARY) has NOT run and was not attempted.
+- No mainnet transaction was signed or broadcast.
+- No real operator key/seed was accessed, read, printed, logged, or
+  exposed -- every signer test used a fresh, ephemeral, in-test-generated
+  keypair, never committed.
+- No funded wallet was created.
+- No arm file was created or modified.
+- No capital default was changed from zero.
+- No paid provider was enabled.
+- No secret was requested and no paid infrastructure was enabled to work
+  around FSR-03's PostgreSQL 17 block.
 
-- All items under "Failures or limitations" above.
+Full itemized evidence for each of the above: checkpoint section D.
+
+## Deferred / open items (explicitly disclosed, not hidden)
+
+- FSR-03: genuine PostgreSQL 17 validation remains blocked in this
+  sandbox (Docker daemon, PGDG proxy policy) -- needs either a sandbox
+  with a working Docker daemon/unblocked PGDG access, or an operator-run
+  `make up && make test` against the repository's own `compose.yaml`.
+- FSR-15: 21 `tests/integration` failures remain, all attributable to one
+  disclosed shared-dev-database test-isolation gap (checkpoint section
+  C) -- needs a dedicated pass giving the affected Phase 5/7/8/9/10/11 +
+  shadow/reconciliation test modules their own isolated database (the
+  same pattern `tests/integration/test_migrations.py`'s own
+  `scratch_database` fixture already uses), out of this recovery's own
+  FSR-01/02/03 scope.
 
 ## Exact next action requested from orchestrator
 
-Per `orchestration/AUDITOR_POLICY.md`: audit the complete sealed 18-row
-Phase 6 acceptance contract (P6-01 through P6-18, checkpoint section D)
-against the frozen `phase-6-v1` seal recorded in `argus-phase-6-001`,
-with particular attention to whether the software-only scope boundary
-was honored throughout (no live/signing/dispatch/arming path anywhere
-in the diff) and whether the three DB-dependent `PASS_WITH_DEFERRED_
-ENVIRONMENTAL_VALIDATION` rows (P6-03, P6-11, P6-15) remain an
-acceptable disposition given the same environmental limitation carried
-through every prior phase. If all pass, only the orchestrator may apply
-Phase 6 approval -- write the next `ACTIVE` instruction into
+Per `orchestration/AUDITOR_POLICY.md`: audit the complete
+`argus-final-spec-recovery-001` contract (FSR-01 through FSR-16) against
+this handoff's checkpoint and bundle. If satisfied, only the
+orchestrator/human operator may apply final recovery approval -- write
+the next `ACTIVE` instruction into
 `orchestration/ORCHESTRATOR_INSTRUCTIONS.md` (`TARGET_COMMIT` pinned to
-the exact commit named in this handoff) to do so, or to require further
-remediation. Until a new instruction exists, the watcher (if running)
-takes no action beyond logging `NO_ACTIVE_INSTRUCTION`.
+the exact commit named in this handoff) to do so, to authorize the two
+disclosed open items (FSR-03/FSR-15) as a follow-up scope, or to require
+further remediation. Until a new instruction exists, the watcher (if
+running) takes no action beyond logging `NO_ACTIVE_INSTRUCTION`.
 
-**Note on this branch's history:** unchanged from prior handoffs — if you
-cloned/fetched this branch before 2026-08-30T22:35 UTC, re-clone or
-`git fetch --all && git reset --hard origin/claude/argus-folder-setup-77ahrk`
+**Note on this branch's history:** if you cloned/fetched this branch
+before this handoff's own `UTC_TIMESTAMP`, re-fetch to pick up this
+recovery's commits.
