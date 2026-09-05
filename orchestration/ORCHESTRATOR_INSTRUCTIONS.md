@@ -1,389 +1,199 @@
-# ARGUS Orchestrator Instructions
+# ARGUS Orchestrator Clarification
 
-**OWNER: ARGUS ORCHESTRATOR.** The implementation agent must not modify this file. Execute only the ACTIVE instruction below. `MASTER_SPEC.md` v2.0 remains authoritative. This instruction is a bounded second remediation after the required Phase Failure Root-Cause Review of `argus-final-spec-recovery-001`.
+**OWNER: ARGUS ORCHESTRATOR.** This is a clarification of the already-frozen `argus-final-spec-recovery-002` contract. It does **not** add, remove, strengthen, or otherwise change any acceptance requirement.
 
 ---
 
-INSTRUCTION_ID: argus-final-spec-recovery-002
-ISSUED_AT: 2026-09-04T21:35:00Z
-TARGET_COMMIT: 7cca4094d7672759b1023733a810f552f1109040
-AUTHORIZED_ACTION: EXECUTE_BOUNDED_FINAL_RECOVERY_REMEDIATION_FOR_FOUR_CONFIRMED_ROOT_CAUSES_ONLY
+INSTRUCTION_ID: argus-final-spec-recovery-002-clarification-001
+CLARIFIES_INSTRUCTION_ID: argus-final-spec-recovery-002
+GOVERNING_FROZEN_INSTRUCTION_COMMIT: 053f11de4e16831cbbb8a8a6fbb80a45e15ee1aa
+TARGET_COMMIT: 1117d4eda167a203efe6c3d5c6f6248eb84051e8
 AUTHORIZED_PHASE: 11
 APPROVES_PHASE: NONE
 STATUS: ACTIVE
+AUTHORIZED_ACTION: COMPLETE_ONLY_THE_ALREADY_FROZEN_R2_01_R2_02_R2_03_REQUIREMENTS_USING_THE_CLARIFICATIONS_BELOW
 
-# 1. Decision and scope lock
+## 1. No-moving-goalposts statement
 
-The independent final audit of `argus-final-spec-recovery-001` at `TARGET_COMMIT` found that the first recovery did substantial valid work but did **not** satisfy the sealed final-recovery contract. The human operator has authorized a second, narrowly bounded remediation after completion of the required Phase Failure Root-Cause Review.
+The acceptance contract remains exactly the R2-01 through R2-04 requirements frozen in `argus-final-spec-recovery-002` at commit `053f11de4e16831cbbb8a8a6fbb80a45e15ee1aa`.
 
-Do **not** reopen already-proven work for redesign. The following items are treated as CLOSED unless your changes create a concrete regression:
+The independent audit of commit `1117d4eda167a203efe6c3d5c6f6248eb84051e8` found:
 
-- FSR-02 core confirmed-chain actual-fill reconstruction/restart behavior;
-- FSR-05 Phase 7 forward-information implementation;
-- FSR-06 Phase 8 convergence cutoff/outcome-comparison implementation;
-- FSR-07 Phase 9 four-family predation implementation;
-- FSR-10 Phase 11 right-censoring;
-- FSR-11 purged + embargoed temporal splitting.
+- R2-04: CLOSED/PASS. Do not redesign the hermetic integration-test solution or final evidence packaging except for updating final evidence after the fixes below.
+- PostgreSQL 17: remains `FINAL_RECOVERY_ENVIRONMENT_BLOCKED`. Do not spend another implementation cycle retrying the same policy-blocked registry/PGDG paths unless the environment has materially changed.
+- R2-01, R2-02, R2-03: not yet proven against their already-written frozen wording. The clarifications below explain the intended meaning of those existing requirements only.
 
-This remediation exists only to fix:
+Do not reopen FSR-02, FSR-05, FSR-06, FSR-07, FSR-10, FSR-11, or unrelated Phase 0-11 work unless your changes cause a concrete regression.
 
-1. **R2-01 / FSR-01:** missing integrated canary-capable executor path;
-2. **R2-02 / FSR-04 + FSR-09:** knowledge-time leakage from later-created/backfilled specialist/derived rows in Phase 10/11;
-3. **R2-03 / FSR-08:** Phase 10 evaluates arbitrary strategy exits using a fixed 5-minute executable probe rather than executable evidence contemporaneous with the strategy's actual entry/exit trigger times;
-4. **R2-04 / FSR-15 + FSR-16:** non-hermetic integration tests plus incorrect final evidence/handoff/provenance packaging.
+Phase 6.5 remains forbidden. No real key access, funded wallet, live arming, mainnet signing/broadcast, capital, paid provider, or strategy live trade is authorized.
 
-FSR-03 PostgreSQL 17 remains an external environment validation requirement. Make **one bounded attempt** to run it if the environment has changed. Do not waste the session retrying the same blocked Docker/PGDG path. If still externally blocked, preserve `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` with exact evidence. PostgreSQL 16 is never a substitute PASS.
+---
 
-Phase 6.5 remains forbidden. This instruction does **not** authorize a mainnet canary, live arming, capital, paid-provider use, a funded wallet, use/readout of a real operator key, or any real transaction signing/broadcast.
+# 2. Clarification of R2-01 / FSR-01 — what “used by the executor process” and “durable before confirmation” mean
 
-# 2. Required written justification for remediation round > 1
+The frozen instruction already says the integrated orchestration seam must be **a real callable used by the executor process** and that a later canary must require no new signer/submission/reconciliation plumbing.
 
-This section satisfies the project's mandatory seven-part no-moving-goalposts test.
+Current state at TARGET_COMMIT does not yet satisfy that wording because `src/argus/executor/pipeline.py` exists, but `src/argus/executor/main.py` still performs startup/readiness only and explicitly says a future change will wire an execution path.
 
-## R2-01 — integrated executor path
+### Required interpretation
 
-1. **Exact blocker:** real signer, broadcaster, confirmation reconciler, and executor process exist separately, but no production executor path progresses one execution intent through attestation -> signing -> submission -> persisted signature/state -> confirmation reconciliation. `argus.executor.main` currently performs startup/readiness only and exits.
-2. **Classification:** SPEC_BLOCKING.
-3. **Frozen requirement:** FSR-01 required proof #4 and its explicit PASS condition: the executor must be capable of hosting Phase 6.5 later **without new executor plumbing**.
-4. **Concrete consequence:** a human-authorized canary would still require new implementation work to connect the components, so original-spec software canary-readiness is false.
-5. **Why not caught before implementation:** this is a defect in the first recovery's implementation of FSR-01; the pre-recovery audit could only identify the missing signer/submission boundary, not inspect code that did not yet exist.
-6. **Why not backlog/deferred:** this is the exact central FSR-01 acceptance proof, not optional hardening.
-7. **No backlog promotion:** no new live feature, strategy, UI, provider, or safety gate is being added; only the frozen end-to-end executor seam is being completed.
+You do **not** need to build an automatic trading daemon, signal-consumer loop, scheduler, or live strategy engine.
 
-## R2-02 — knowledge-time leakage
+A safe executor-only **single-intent mode** is sufficient. The production executor identity/entry point must have an actual code path that can invoke the existing `execute_intent_pipeline()` using the already-built production-capable signer/submission/confirmation/provider adapters, while remaining impossible to dispatch under repository defaults and without Phase 6.5 human authorization.
 
-1. **Exact blocker:** Phase 10/11 historical-decision code recomputes Phase 9 at historical `as_of=T` during the current run, persists specialist rows with `created_at=computed_at` (later than T), then loaders select by `as_of=T` without enforcing source/knowledge-time provenance. Tests cover later `as_of` rows but not later-created/backfilled rows for the same historical cutoff.
-2. **Classification:** SAFETY_OR_INTEGRITY_BLOCKING and SPEC_BLOCKING.
-3. **Frozen requirement:** FSR-04 explicitly distinguishes event time, observation time, record creation/knowledge time, and research cutoff; it explicitly forbids a later-created classification leaking backward merely because underlying events are old. FSR-09 requires Phase 11 features known at the observation time.
-4. **Concrete consequence:** Phase 10 strategy classification and Phase 11 features can use information reconstructed/recorded later while being presented as available at an earlier decision time, invalidating causal research claims.
-5. **Why not caught before implementation:** the first recovery added the per-decision-time recomputation path; only post-build tracing showed that persistence `created_at=now` and loaders keyed only on historical `as_of` left a second leakage path.
-6. **Why not backlog/deferred:** causal point-in-time truth is a core integrity requirement and was explicitly frozen in FSR-04/09.
-7. **No backlog promotion:** this does not require new research features; it repairs the timestamp/provenance semantics of already-authorized derived features.
+The point is simply this: after this repair, a future human canary may require configuration/credentials/arm authorization and an already-authorized intent, but must **not require another code change just to connect `main` -> pipeline -> signer -> submission -> reconciliation**.
 
-## R2-03 — wrong Phase 10 executable time
+### Durability clarification
 
-1. **Exact blocker:** Phase 10's primary result uses `PRIMARY_EXECUTABLE_HORIZON = "5m"` for every matched trade, even when the strategy's actual exit trigger occurs at a different time; C/D/E may also enter at a decision time different from the original source wallet's fill.
-2. **Classification:** SAFETY_OR_INTEGRITY_BLOCKING and SPEC_BLOCKING.
-3. **Frozen requirement:** FSR-08 requires contemporaneous executable quote/reverse-quote/shadow-fill evidence for the strategy's **entry and exit** decision times and forbids mark-price fallback.
-4. **Concrete consequence:** a trade exiting one hour after entry can be scored using the five-minute sell quote, so reported executable return is not the return of the strategy being tested.
-5. **Why not caught before implementation:** the first recovery correctly replaced the mark-price primary field with real executable data, but the post-build audit traced the specific horizon selection and discovered it was real data from the wrong time.
-6. **Why not backlog/deferred:** using the correct strategy entry/exit execution evidence is the central FSR-08 acceptance condition.
-7. **No backlog promotion:** no new strategy or data source is required; the existing Phase 4/5 quote-probe evidence must be matched correctly or the trade must be reported as lacking executable evidence.
+The frozen step “persist the returned transaction signature and `SUBMITTED` state before confirmation polling” means **durably committed to PostgreSQL**, not merely present in the SQLAlchemy identity map and not merely `session.flush()`ed inside an outer transaction that can still roll back.
 
-## R2-04 — full-suite/evidence contract
+Current `execute_intent_pipeline()` submits externally, writes the signature/state, calls `session.flush()`, and then enters confirmation while the surrounding transaction is still open. A process crash at that point can roll back the DB transaction even though the network already accepted the transaction.
 
-1. **Exact blocker:** 21 integration tests remain failing due shared-database cross-test pollution; final FSR files/handoff do not use the exact required paths/status; the final checkpoint did not STOP; the final recovery commit did not have the ARGUS instruction trailer as its terminal paragraph.
-2. **Classification:** SPEC_BLOCKING.
-3. **Frozen requirement:** FSR-15 requires `0 failed`; FSR-16 requires exact final evidence paths/handoff fields/STOP and terminal commit trailer discipline.
-4. **Concrete consequence:** the repository cannot demonstrate a deterministic clean full-suite run or a trustworthy final control-plane handoff.
-5. **Why not caught before implementation:** these are defects in the first recovery's final testing/evidence implementation and only exist after that recovery ran.
-6. **Why not backlog/deferred:** literal FSR-15/16 pass criteria were not met.
-7. **No backlog promotion:** fix only test isolation and exact recovery evidence/provenance; do not expand test scope or redesign production queries merely to make tests convenient.
+Fix the transaction boundary so that, after the submission result/signature is obtained, the canonical signature/fill evidence and `SUBMITTED` state are committed durably before any confirmation provider call begins. Implementation structure is your choice: a pipeline-owned transaction boundary, a dedicated persistence transaction/session, or another equivalent design is acceptable. Do not create a second state machine or second persistence model.
 
-# 3. R2-01 — complete one integrated executor pipeline
+### Existing mandatory test semantics
 
-## 3.1 Required architecture
+The already-frozen `crash_after_submission_restart_reconciles_same_signature_without_second_submit` test must simulate a **real database crash boundary**, not “first pipeline call returns normally, context manager commits, then open a second session.”
 
-Reuse the existing modules. Do not create a second state machine, second signer, second submission client, or second confirmation parser.
+A valid test must prove all of the following:
 
-Add one production executor orchestration seam inside `argus.executor` (name is your implementation choice, but it must be a real callable used by the executor process) that can execute **one already-authorized execution intent** through the existing sequence:
+1. the fake external submission seam is called exactly once and returns signature S;
+2. S + `SUBMITTED` become visible from a separate fresh DB connection/session **before confirmation is allowed to run**;
+3. inject an exception/process-abort equivalent immediately after that durable boundary and before confirmation completes;
+4. restart from a fresh session/process-equivalent;
+5. the restart loads S and reconciles S;
+6. quote/build/sign/submit are not called again;
+7. total submission count across both runs remains exactly 1.
 
-1. load/create the canonical execution intent and acquire/validate singleton fencing;
-2. run the existing risk/safety preconditions required by Phase 6 for the provided typed intent;
-3. move through the existing legal state-machine transitions;
-4. obtain/accept the existing Jupiter unsigned transaction/order result through the existing provider abstraction;
-5. deserialize/construct the `UnsignedTransactionShape` needed by `attest_transaction` from the actual unsigned transaction/order evidence used for execution — do not allow a caller to assert a passing shape unrelated to the transaction bytes being signed;
-6. require `attest_transaction(...).all_passed` before the signer can be invoked;
-7. invoke the injected `Signer` seam;
-8. invoke the injected submission seam exactly once for a new idempotency fingerprint;
-9. persist the returned transaction signature and `SUBMITTED` state before confirmation polling;
-10. invoke/reuse `reconcile_submitted_fill` for confirmed-chain outcome reconstruction;
-11. on restart, if the signature was already persisted, reconcile that same signature and **never blindly resubmit**;
-12. terminal confirmed/failed intents remain idempotent.
+This is not a new test requirement; it is the meaning of the already-frozen crash-after-submit test and “durable before confirmation” wording.
 
-The production executor process must be able to host this seam. It may remain inert by default and MUST remain impossible to run live under repository defaults because capital limits are zero and Phase 6.5 has not authorized an arm state. However, a later human canary may require only operator configuration/credentials/arm authorization — **not another code change connecting signer/submission/reconciliation**.
+---
 
-Do not add an automatic copy-signal trading daemon merely to satisfy this item. A single-intent executor command/mode or equivalent executor-only entry is sufficient if it exercises the real production plumbing and stays behind the existing executor identity and human gates.
+# 3. Clarification of R2-02 / FSR-04 + FSR-09 — provenance is not the derived row’s `created_at`
 
-## 3.2 Isolation and security
+The frozen instruction deliberately distinguishes:
 
-- `api`, research packages, ordinary CLI analytical commands, ingestion, and shadow workers must not import/resolve `FileKeypairSigner` or `SolanaSubmissionClient`.
-- Only the executor deployment identity receives the secret mount/path.
-- No Docker socket, privileged mode, host root mount, or equivalent bypass.
-- No secret bytes in logs, DB, exceptions, reports, checkpoints, tests, fixtures, or Git.
-- Wrong/missing key config fails closed before any live-capable dispatch.
-- Default capital remains exactly zero.
-- `LIVE_ARMED=false` and `LIVE_CANARY_PASSED=false` throughout this remediation.
+- historical decision cutoff `as_of=T`;
+- physical time the derived row was reconstructed/written;
+- the knowledge time of the **source evidence used to construct it**.
 
-## 3.3 Mandatory R2-01 tests
+The current `DirectionalEdge.created_at <= cutoff` / `ExpectedConfirmationEvent.created_at <= cutoff` filters are useful and should remain, but they are only the source-selection half of the frozen requirement.
 
-At minimum add focused tests proving:
+### Required interpretation
 
-- `executor_e2e_safe_synthetic_intent`: ephemeral test key/fake signer + fake unsigned transaction + fake submission + fake confirmed-chain provider; intent traverses attestation -> signing -> one submission -> persisted signature -> confirmation -> one canonical fill;
-- `attestation_failure_never_signs_or_submits`;
-- `signing_failure_never_submits`;
-- `submission_response_persisted_before_confirmation`;
-- `crash_after_submission_restart_reconciles_same_signature_without_second_submit`;
-- `terminal_restart_noop`;
-- `missing_or_bad_operator_key_fails_closed`;
-- AST/import boundary still proves non-executor code cannot import live-capable modules;
-- deployment/permission test proves API/research service cannot read the synthetic executor-secret path under the intended container/OS model as far as the available environment permits; if container runtime is unavailable, keep the structural/compose permission test and identify the runtime check under FSR-03 rather than pretending it ran.
+A `WalletSpecialistScore` reconstructed today for historical cutoff T may be perfectly valid even though the specialist-score row itself has `created_at=today`. Therefore **do not** fix this by simply adding `WalletSpecialistScore.created_at <= T` to Phase 10/11 loaders.
 
-A unit test that manually advances states without invoking the integrated executor seam does **not** satisfy this item.
+Instead, the reconstructed score must carry machine-checkable provenance proving that every source row which contributed to it was eligible under the knowledge cutoff at T.
 
-# 4. R2-02 — fix knowledge-time semantics once, then use it everywhere needed
+Use the simplest reusable implementation that satisfies the already-frozen section 4.1 model. For example, it is acceptable to add persisted fields such as:
 
-The repaired system must distinguish **historical reconstruction cutoff** from **when a derived row was physically written**.
+- `source_knowledge_max_at` (maximum creation/first-seen/knowledge timestamp among contributing source evidence, after applying the canonical knowledge rule);
+- and, if needed for auditability, a deterministic source-evidence/provenance hash or manifest reference.
 
-Do not solve this by either of these incorrect shortcuts:
+The exact schema/names are not prescribed. What matters is that Phase 10 and Phase 11 can mechanically distinguish:
 
-- selecting derived rows only by `as_of=T` while ignoring when their contributing evidence became known;
-- rejecting every historical reconstruction solely because the derived row itself was physically persisted today.
+- a score physically reconstructed later **from evidence that was all known by T** -> eligible at T;
+- a score whose reconstruction used even one source item only known after T -> ineligible at T.
 
-## 4.1 Required semantic model
+Algorithm/config identity must remain part of the proof as already required.
 
-For any derived specialist/classification used at decision time `T`, the system must be able to prove that **all contributing source evidence** was knowable by `T`.
+### Loader interpretation
 
-Implement one explicit reusable provenance/knowledge-time mechanism. The exact schema is your choice, but the persisted/reconstructed derived result must carry enough machine-checkable information to distinguish:
+`load_specialist_scores_as_of()` and `load_discovery_effect_size_by_wallet()` may not accept a score solely because `as_of == T` and version/config match. They must require the persisted provenance/knowledge proof to demonstrate source eligibility at T.
 
-- `as_of` / economic decision cutoff T;
-- physical derived-row `created_at` / reconstruction time;
-- maximum contributing source knowledge time (or equivalent evidence-manifest proof) used to construct that result;
-- algorithm/config version.
+Do the same only on the actual affected Phase 10/11 specialist/classification path. Do not turn this into a repository-wide provenance redesign.
 
-A historical replay computed today may be used as a reconstruction of state at T **only if** every contributing raw/intermediate source record itself satisfies the canonical knowledge rule at T and the derived record explicitly proves that fact. Merely setting `as_of=T` is never sufficient.
+### Mandatory section 4.3 mutation test means exactly what it says
 
-Prefer reusing the existing evidence-manifest / `known_by_cutoff` architecture. Do not duplicate five separate ad hoc timestamp rules.
+This was explicitly marked **mandatory** in the frozen instruction and must be implemented end-to-end, not replaced by only a Phase 9 unit/mechanism test.
 
-## 4.2 Phase 9/10/11 application
-
-- Phase 9 computations at historical T must source only rows whose event/effective and creation/knowledge times are <= T.
-- Any persisted backfilled `WalletSpecialistScore` intended for historical replay must retain explicit provenance that its source evidence was eligible by T.
-- Phase 10 `load_specialist_scores_as_of` must reject any score that cannot prove eligibility at that exact strategy decision time.
-- Phase 11 `load_discovery_effect_size_by_wallet` must reject any score that cannot prove eligibility at the observation time.
-- Do the same for any other Phase 10/11 derived specialist/classification row on the actual affected path.
-- Do not alter already-correct FSR-10/11 label/split behavior except for necessary version/provenance plumbing.
-
-## 4.3 Mandatory mutation tests
-
-The key test that was missing must now exist:
+One test (or one tightly-coupled test case covering both downstream consumers) must:
 
 1. seed source evidence E1 known by T;
-2. build the Phase 9 specialist/classification reconstruction for T;
-3. capture canonical Phase 10 decision and Phase 11 feature values at T;
-4. append a **new source row after T whose economic/effective time is backdated to <= T but whose `created_at`/knowledge time is > T**;
-5. rebuild the historical reconstruction for the same T under a fresh algorithm/config identity if needed to defeat idempotent cache reuse;
-6. assert byte-equivalent semantic Phase 10 decision inputs and Phase 11 feature inputs/results;
-7. assert the new row becomes visible only at a later legitimate cutoff >= its knowledge time.
+2. reconstruct the Phase 9 specialist state for T;
+3. capture the semantic Phase 10 decision input and Phase 11 specialist feature at T;
+4. append a new source row with economic/effective time <= T but `created_at`/knowledge time > T;
+5. rebuild the same historical state under a fresh identity if idempotency would otherwise reuse cached rows;
+6. prove the Phase 10 decision input and Phase 11 feature remain semantically identical;
+7. move the cutoff forward beyond the new row’s real knowledge time and prove the new evidence can then legitimately affect the result.
 
-Also add a test where a `WalletSpecialistScore` row itself is physically created after T with `as_of=T`; prove that the loader cannot accept it merely because `as_of` matches unless its source-knowledge provenance proves eligibility.
+Also retain/add the direct loader test already required by the frozen instruction: a `WalletSpecialistScore` physically written after T with `as_of=T` cannot be accepted **merely** because its `as_of` matches; it must carry valid source-knowledge provenance.
 
-# 5. R2-03 — Phase 10 must price the strategy that actually ran
+Do not weaken this to “the score row must have been created before T”; historical reconstruction performed later is allowed when its sources prove they were known by T.
 
-The current fixed `PRIMARY_EXECUTABLE_HORIZON="5m"` selection is forbidden as a universal Phase 10 primary return.
+---
 
-## 5.1 Correct matching rule
+# 4. Clarification of R2-03 / FSR-08 — “contemporaneous” applies to BOTH sides and tolerance is versioned configuration
 
-For each `MatchedTrade`, primary executable performance must be derived from executable evidence contemporaneous with **that strategy's own entry trigger and exit trigger**.
+The current repair correctly removed the universal fixed 5-minute exit lookup and correctly added special confirmation-entry handling for Strategies C/D. Preserve that work.
 
-Use existing Phase 4/5 `shadow_quote_probes` and shadow fill/position evidence. Do not query today's Jupiter for historical prices and do not create synthetic historical quotes.
+Two parts of the already-frozen wording still need to be applied literally.
 
-### Entry side
+## 4.1 Strategy A/B source-entry timing
 
-- Strategy A/B source-entry: the original shadow entry fill may be used only when its actual entry timing is the strategy entry timing represented by the trigger.
-- Strategy C/D confirmation-entry: do **not** reuse the leader's earlier source fill as the strategy entry. Match an eligible `ENTRY_DELAY` probe/fill to the confirmation trigger time within a deterministic configured tolerance. If no eligible contemporaneous entry evidence exists, the trade is `FAILURE_NO_EXECUTABLE_EVIDENCE`/insufficient — never backfilled from the earlier leader price.
-- Strategy E convergence-entry: there may be no wallet-specific shadow intent. Unless existing Phase 4/5 evidence can be deterministically matched to the convergence decision time and intended notional without inventing a quote, report no executable evidence. Do not manufacture a value merely to keep Strategy E populated.
+The frozen instruction says:
 
-### Exit side
+> Strategy A/B source-entry: the original shadow entry fill may be used only when its actual entry timing is the strategy entry timing represented by the trigger.
 
-- Match an eligible `REVERSE_EXECUTABLE` probe whose **actual terminal/response timing** is contemporaneous with `matched.exit.at` within the configured staleness/tolerance.
-- Use `actual_elapsed_seconds_from_first_seen` and/or expose the probe's actual timestamps in the loader so matching is based on actual observation timing, not just label text.
-- Do **not** select by hardcoded `5m`, `30m`, `1h`, etc. unless that probe's actual timing is the deterministic best valid match for the strategy's actual exit time.
-- If no contemporaneous reverse probe exists, report `FAILURE_NO_EXECUTABLE_EVIDENCE` rather than substituting a different-horizon quote or the mark price.
-- Explicit terminal quote failures (`NO_ROUTE`, `INSUFFICIENT_LIQUIDITY`, `PRICE_IMPACT_EXCESSIVE`, `QUOTE_FAILED`, `TOKEN_RESTRICTED`) that match the strategy exit time remain genuine failed executable outcomes.
+Therefore A/B cannot automatically use `opportunity.entry_fill` without checking its actual execution/probe timing against the strategy entry trigger.
 
-### Return construction
+Use the existing Phase 4/5 actual timing evidence. If the current `WalletOpportunity` object does not expose enough actual entry timing to prove the match, expose the relevant persisted probe/fill timing through the loader. Do not treat `first_seen_at` as the execution time unless the underlying model actually defines it that way.
 
-The primary trade return must be computed from the matched strategy-entry executable amount and matched strategy-exit executable amount, with recorded quote fees/impact/cost evidence where available. Keep mark return in separate descriptive fields only.
+If no executable entry evidence is contemporaneous with the strategy’s A/B entry trigger, return the existing no-executable-evidence/insufficient result. Do not use mark price or a distant fill to preserve sample size.
 
-The final trade record must persist enough provenance to audit:
+## 4.2 Configured timing tolerance
 
-- matched entry evidence ID/kind/actual time;
-- matched exit evidence ID/kind/actual time;
-- strategy trigger entry/exit times;
-- timing deltas/tolerance outcome;
-- executable failure class or missing-evidence reason.
+The frozen wording says “within the configured staleness/tolerance.” A hardcoded source constant such as `0.5x .. 2.0x` is not a configured/versioned tolerance.
 
-## 5.2 Mandatory R2-03 tests
+Use the existing `Phase10RunConfig.entry_exit_price_max_staleness` as the absolute timing tolerance if that field is semantically suitable for executable-evidence matching; otherwise add one explicit Phase10 config value for executable-evidence timing tolerance and include it in `config_hash()`.
 
-At minimum:
+Do not invent a second unversioned magic threshold.
 
-- **one-hour-exit trap:** source entry at 12:00, successful 5m reverse quote with return X, successful 1h reverse quote with different return Y, strategy exits ~1h; primary return must be Y, never X;
-- **no-exit-time-evidence:** only 5m probe exists but strategy exits 1h; primary return must be missing/failure, not 5m;
-- **confirmation-entry trap:** leader fill at 12:00 differs from eligible entry-delay executable evidence near confirmation at 12:03; Strategy C/D must use the confirmation-time entry evidence, never the leader fill;
-- **confirmation-entry-no-evidence:** no eligible entry probe near confirmation -> no executable result;
-- unsellable matching exit probe remains a failed executable outcome;
-- fixed-haircut mark fields cannot enter primary executable return;
-- future-created/backfilled specialist classification cannot alter Strategy B/D decision at historical T (R2-02 regression);
-- deterministic A-E behavior with insufficient executable samples allowed as a valid result.
+For entry and exit matching, compute the absolute delta between the strategy trigger time and the executable evidence’s actual observed execution/terminal time. The evidence is eligible only when `delta <= configured_tolerance`. Choose the nearest eligible item deterministically; ties must have a deterministic tiebreak. If none qualifies, report no executable evidence.
 
-If correcting this causes most/all strategy results to become `INSUFFICIENT_EXECUTABLE_SAMPLE`, that is an acceptable research result. Do not loosen timing tolerance or substitute mark prices to rescue sample size.
+This clarification does **not** prescribe a new numerical tolerance. Use an already-frozen/existing config value where semantically correct, or expose the prior implementation choice as explicit versioned configuration rather than silently hardcoding it.
 
-# 6. Versioning after newly discovered contamination
+## 4.3 Existing mandatory tests
 
-The independent audit establishes that `synthetic_super_wallet_v2` and `order_flow_prediction_v2` are not safe to present as current corrected results.
+Keep the already-written one-hour and confirmation-entry traps, and add/adjust only what is necessary to prove the already-frozen semantics:
 
-Do not delete or rewrite them.
+- A/B source entry whose actual fill/probe time falls outside configured tolerance -> no executable evidence;
+- same fixture within tolerance -> eligible;
+- quote/probe just outside configured exit tolerance -> ineligible;
+- nearest quote/probe inside tolerance -> selected deterministically;
+- changing the versioned tolerance changes eligibility and therefore changes `config_hash()`.
 
-Add additive invalidation/supersession entries:
+Do not tune the tolerance to improve Phase 10 performance. Poor/insufficient v3/vNext results remain valid.
 
-- `PHASE_10_SYNTHETIC`: invalidate/supersede `synthetic_super_wallet_v2` -> corrected new version (normally `synthetic_super_wallet_v3`);
-- `PHASE_11_PREDICTION`: invalidate/supersede `order_flow_prediction_v2` -> corrected new version (normally `order_flow_prediction_v3`).
+---
 
-Reasons must explicitly name:
+# 5. Version/evidence handling
 
-- Phase 10 wrong strategy-time executable matching + specialist knowledge-time issue;
-- Phase 11 specialist knowledge-time issue.
+Do not delete or rewrite any old research rows.
 
-Do not invalidate Phase 8 v2 or Phase 9 v2 unless your bounded remediation discovers a concrete regression caused by your own changes. Do not retune models/thresholds/strategies.
+If durable Phase 9/10/11 v3 rows were produced under the still-incomplete semantics above, apply the already-frozen version/invalidation rules before presenting corrected results as current. If v3 existed only in disposable isolated test databases and no durable derived result requires invalidation, do not manufacture an unnecessary version bump solely for cosmetics; document the determination in the final checkpoint.
 
-Re-run corrected Phase 10 and Phase 11 only under their new algorithm versions. Old v1/v2 rows remain queryable for audit but excluded from default current reports.
-
-# 7. R2-04 — make integration testing hermetic
-
-The first recovery's remaining 21 failures came from cross-test pollution in a shared long-lived dev database. Fix the test infrastructure, not production semantics/assertions.
-
-Preferred architecture: a central integration-test fixture in `tests/integration/conftest.py` (or equivalent shared mechanism) that gives each integration test module a unique clean database, migrates it to head, configures all roles/connections for that module to use it, and drops it after the module. An equivalently strong per-test isolated database/schema design is acceptable.
-
-Requirements:
-
-- full `tests/integration` must be reproducible from a dirty developer cluster and from a clean cluster;
-- one test module's rows cannot be visible to another module unless an explicit cross-module fixture says so;
-- do not weaken production queries to filter on test-only IDs merely to hide pollution;
-- do not weaken assertions;
-- do not add broad truncate/delete behavior that could ever run against non-test databases without a hard test-database guard;
-- parallel execution, if supported, must still use unique namespaces/databases;
-- test database names must be unmistakably test-only and randomized/unique.
-
-Mandatory proof on PostgreSQL 16 if that remains the available local server:
-
-1. run the full integration suite once from a fresh test namespace: 0 failed;
-2. run it a second time without manually cleaning the cluster between runs: 0 failed;
-3. run the previously failing 21-test subset after the first full run: 0 failed;
-4. verify no test data was written to the ordinary developer `argus` database.
-
-Then run full unit/golden/replay and quality checks.
-
-# 8. PostgreSQL 17 disposition
-
-Attempt genuine PostgreSQL 17 once using the repository's canonical path or another genuine PG17 instance available in the environment.
-
-If it works, run the FSR-03 matrix on PG17 and record exact commands/results.
-
-If Docker daemon/PGDG access is still externally blocked:
-
-- do not repeatedly retry;
-- retain exact disposition `FINAL_RECOVERY_ENVIRONMENT_BLOCKED`;
-- list every PG17-required test not executed;
-- do not claim `LIVE_READY_SOFTWARE=true`;
-- do not call PG16 a substitute PASS;
-- complete every non-PG17 item in this remediation anyway.
-
-# 9. Exact final evidence contract — no naming deviations
-
-Create/replace the exact files required by the original sealed FSR-16 contract:
+Update the existing exact final evidence files after the repair:
 
 - `orchestration/checkpoints/final_spec_recovery.md`
 - `orchestration/bundles/final_spec_recovery.txt`
+- `orchestration/AGENT_HANDOFF.md`
+- append-only `docs/BUILD_STATE.md` / `docs/DECISION_LOG.md`
 
-Do not substitute `fsr15_16_*`, `final_recovery_v2_*`, or another filename in the final handoff.
+Run the focused R2-01/R2-02/R2-03 tests plus the existing frozen full regression/quality matrix needed to keep FSR-15 truthful. R2-04 itself is closed; do not redesign it.
 
-`final_spec_recovery.md` must:
+If PostgreSQL 17 remains externally blocked, final status remains `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` and `LIVE_READY_SOFTWARE=false` even if all software requirements pass.
 
-- begin with `================ ARGUS ORCHESTRATOR CHECKPOINT ================`;
-- end with `================ END ARGUS CHECKPOINT =========================`;
-- name original contaminated base `ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30`;
-- name remediation-001 audited head `7cca4094d7672759b1023733a810f552f1109040`;
-- name final remediation-002 implementation/evidence commits;
-- include MASTER_SPEC hash;
-- include a final matrix mapping FSR-01..FSR-16 and R2-01..R2-04 to exact code/tests/evidence and PASS/FAIL/ENVIRONMENT_BLOCKED;
-- include exact test commands and counts, including failed/skipped counts;
-- include PG17 status/evidence;
-- include Phase 10 v3 and Phase 11 v3 sample/report results or honest insufficient-sample results;
-- list all invalidated algorithm versions (v1 and newly invalidated v2 where applicable);
-- record security state: Phase 6.5 not run, no mainnet signature/broadcast, no real key accessed, no arm file modified, capital defaults zero, no paid provider, no funded wallet;
-- state `LIVE_CANARY_PASSED=false` and `LIVE_ARMED=false`;
-- set `LIVE_READY_SOFTWARE=true` only if every non-environment software requirement passes **and** PG17 has passed; if PG17 remains blocked, it must be false/blocked;
-- finish with an explicit `STOP FOR INDEPENDENT FINAL AUDIT` before the end marker.
+---
 
-`orchestration/bundles/final_spec_recovery.txt` must be the matching machine-readable/review bundle, not a prose placeholder.
+# 6. Commit and handoff discipline
 
-Update `docs/BUILD_STATE.md` by appending the remediation-002 status; do not rewrite historical claims. Update `docs/DECISION_LOG.md` with this root-cause remediation and exact final status.
+All implementation commits made in response to this clarification must end with exactly:
 
-Replace `orchestration/AGENT_HANDOFF.md` with exactly one final handoff containing:
+`ARGUS-INSTRUCTION-ID: argus-final-spec-recovery-002-clarification-001`
 
-- new HANDOFF_ID;
-- `CURRENT_PHASE: 11`;
-- `WORK_STATUS: AWAITING_ORCHESTRATOR_INSTRUCTION`;
-- `LAST_ORCHESTRATOR_INSTRUCTION_ID: argus-final-spec-recovery-002`;
-- `CHECKPOINT_PATH: orchestration/checkpoints/final_spec_recovery.md`;
-- `BUNDLE_PATH: orchestration/bundles/final_spec_recovery.txt`;
-- actual test status;
-- `WORKING_TREE: clean`;
-- `ORCHESTRATOR_REVIEW_REQUIRED: FINAL_ORIGINAL_SPEC_AUDIT` only if all FSR/R2 requirements including PG17 pass; otherwise, if PG17 is the sole remaining blocker, `ORCHESTRATOR_REVIEW_REQUIRED: FINAL_RECOVERY_ENVIRONMENT_BLOCKED`; if any software/test blocker remains, name it explicitly and do not claim completion.
+with nothing after it.
 
-# 10. Required final test matrix
+Do not modify this file. Do not self-approve. Do not perform Phase 6.5.
 
-Before handoff, run all possible checks in this environment:
-
-1. focused R2-01 executor integration tests;
-2. focused R2-02 point-in-time/backfill mutation tests;
-3. focused R2-03 strategy-time executable-evidence tests;
-4. full `tests/unit`;
-5. full `tests/golden`;
-6. full `tests/replay`;
-7. full `tests/integration` twice under isolated test DB infrastructure;
-8. authentic real-chain fixture validation;
-9. Alembic single-head;
-10. zero -> head migration on the available DB; PG17 specifically only counts if genuine PG17;
-11. required downgrade/re-upgrade migration test(s);
-12. `ruff check`;
-13. `ruff format --check`;
-14. `mypy` canonical source scope;
-15. secret scan;
-16. checkpoint/bundle validators;
-17. dependency/lock consistency.
-
-For every check, record exact command and counts. `0 failed` is mandatory for all tests that actually run. No unexplained skip relevant to R2-01..R2-04 is allowed.
-
-# 11. Commit/provenance rules for this remediation
-
-Do not rewrite/rebase/force-push prior history just to repair old trailer defects.
-
-Every **new Claude implementation commit under this instruction** must end with exactly one final paragraph:
-
-`ARGUS-INSTRUCTION-ID: argus-final-spec-recovery-002`
-
-Nothing may follow it. If you include `Co-Authored-By` or a Claude session URL, place those paragraphs **before** the ARGUS trailer. Verify every new commit with:
-
-`git log -1 --format=%B | git interpret-trailers --parse`
-
-and verify the parsed terminal trailer is exactly the instruction ID above.
-
-Do not modify `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`.
-
-# 12. Mandatory start and stop behavior
-
-Before implementation:
-
-1. `git status --porcelain` must be clean;
-2. `git pull --ff-only`;
-3. verify remote HEAD is the instruction-only commit containing this instruction;
-4. verify that commit's direct parent is exactly `TARGET_COMMIT` `7cca4094d7672759b1023733a810f552f1109040`;
-5. verify the instruction commit changes only `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`;
-6. read `MASTER_SPEC.md`, `docs/BUILD_STATE.md`, `docs/DECISION_LOG.md`, `orchestration/PROTOCOL.md`, `orchestration/AUDITOR_POLICY.md`, this instruction, and `orchestration/AGENT_HANDOFF.md`;
-7. build a local R2 acceptance matrix before changing code.
-
-Then implement the entire bounded remediation in one batch. Do not stop between R2-01..R2-04.
-
-At the end, push final evidence/handoff, verify local/remote HEAD equality and clean worktree, then **STOP FOR INDEPENDENT FINAL AUDIT**. Do not self-approve. Do not perform Phase 6.5.
+When the three clarified already-frozen items are complete, update the exact final checkpoint/bundle/handoff, push a clean worktree, and **STOP FOR INDEPENDENT FINAL AUDIT**.
