@@ -308,6 +308,55 @@ known_blockers:
     `orchestration/checkpoints/final_spec_recovery.md`. `current_phase`/
     `last_completed_phase` are unchanged (still 11); Phase 6.5 remains
     the only phase not started, permanently human-only.
+  - **2026-09-05 — Clarification-001 to the round-2 final recovery
+    (`argus-final-spec-recovery-002-clarification-001`) completed**, after
+    an independent audit found R2-01/R2-02/R2-03 (all previously marked
+    PASS) not yet proven against their own already-frozen wording. R2-04
+    reconfirmed CLOSED/PASS (untouched); PG17 reconfirmed
+    `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` (not retried, per the
+    clarification's own explicit instruction). Three fixes: (R2-01)
+    `execute_intent_pipeline` now owns its own transaction boundary on
+    every return path (durable commit before confirmation polling can
+    ever run, replacing an internal flush inside a still-open
+    transaction), and `src/argus/executor/main.py` gained a narrow,
+    config-gated single-intent mode that actually invokes the pipeline
+    with real production-capable adapters -- staying impossible to
+    dispatch under repository defaults (existing hard risk gates,
+    unchanged, plus a new defense-in-depth field allowlist proving an
+    operator's params file can never spoof identity/arm/canary fields).
+    (R2-02) added `wallet_specialist_scores.source_knowledge_max_at`
+    (migration 0041, CHECK-constraint-enforced `<= as_of`) -- the MAX
+    knowledge-time among every source row that actually contributed to a
+    score across all four specialist dimensions (also fixing a genuine
+    independent pre-existing bug in `load_latest_exit_skill`, missing
+    half of the `known_by_cutoff` invariant its own sibling consumer
+    already applied correctly); both Phase 10/11 consumer loaders now
+    additionally require this bound; the full literal section-4.3 7-step
+    mutation-test recipe is now implemented end-to-end, closing the base
+    round's own disclosed gap. (R2-03) Strategy A/B's entry price is no
+    longer an unconditional reuse of the leader's realized fill -- a new
+    check validates the matching `ENTRY_DELAY` probe's real timing against
+    its own configured target delay before trusting it; the hardcoded,
+    unversioned `[0.5x, 2.0x]` contemporaneous-matching ratio band was
+    replaced by `Phase10RunConfig.contemporaneous_match_max_delta`, an
+    explicit, `config_hash()`-bound absolute-delta tolerance with a
+    deterministic tiebreak. `ALGORITHM_VERSION` bumped
+    `counterfactual_alpha_v3`/`order_flow_prediction_v3`/
+    `synthetic_super_wallet_v3` -> `_v4` for all three (genuine algorithm
+    evolution; no durable v3 row ever existed under any of the superseded
+    semantics, so no additional `contaminated_run_invalidations` row was
+    seeded for any of them). One genuine pre-existing test bug, unrelated
+    to the three clarified items, was found and fixed while running the
+    full regression sweep (a test compared a fixed historical migration
+    value against the LIVE `ALGORITHM_VERSION` import). Full validation:
+    `tests/unit`+`tests/golden`+`tests/replay` (1333 tests) 0 failed;
+    `tests/integration` 418 passed/0 failed; `ruff check`/
+    `ruff format --check`/`mypy` clean; secret scan clean across all 20
+    changed/new files; single Alembic head (`0041`). No gaps remain
+    disclosed. Full detail: `orchestration/checkpoints/
+    final_spec_recovery.md`. `current_phase`/`last_completed_phase`
+    remain unchanged (still 11); Phase 6.5 remains the only phase not
+    started, permanently human-only.
 
 ## Rules
 

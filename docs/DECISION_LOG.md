@@ -3887,3 +3887,145 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   for a future session to close, not silently forgotten.
 - git_commit: `b791a4011d36c0519a8c5542918c6274eaee5c71` (implementation);
   evidence commit recorded immediately after this entry.
+
+### 2026-09-05 — Clarification-001 to the round-2 final recovery (argus-final-spec-recovery-002-clarification-001): R2-01/R2-02/R2-03
+- requirement_id: `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`'s
+  `argus-final-spec-recovery-002-clarification-001` instruction,
+  responding to an independent audit that found R2-01/R2-02/R2-03 (all
+  previously marked PASS) not yet proven against their own
+  already-frozen wording, and issuing three literal clarifications. R2-04
+  was reconfirmed CLOSED/PASS (do not redesign); PG17 was reconfirmed
+  `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` (do not retry) -- the instruction's
+  own explicit `AUTHORIZED_ACTION` named exactly these three items and
+  no others.
+  - R2-01: the integrated pipeline seam existed in code but `main.py`
+    never actually called it (no real code path from `main` to
+    `execute_intent_pipeline`), and "durably committed to PostgreSQL"
+    meant a real commit, not `session.flush()` inside a still-open
+    transaction a crash could roll back.
+  - R2-02: the frozen instruction distinguishes historical decision
+    cutoff, physical reconstruction time, and the knowledge time of the
+    SOURCE EVIDENCE used to construct a derived row -- the existing
+    `created_at <= cutoff` filters on `DirectionalEdge`/
+    `ExpectedConfirmationEvent` were only "the source-selection half";
+    the reconstructed `WalletSpecialistScore` row itself carried no
+    persisted, machine-checkable proof that every contributing source
+    was eligible under the same cutoff, and the full literal
+    section-4.3 7-step mutation-test recipe had not been built.
+  - R2-03: Strategy A/B's entry price used `opportunity.entry_fill`
+    without checking its actual execution timing against the strategy's
+    own modeled entry timing; the contemporaneous-matching tolerance was
+    a hardcoded, unversioned `0.5x .. 2.0x` ratio, not configured/
+    versioned as the frozen wording requires.
+- decision: All three clarified items are fixed with real evidence, not
+  asserted. (R2-01) `execute_intent_pipeline`
+  (`src/argus/executor/pipeline.py`) now owns its own transaction
+  boundary on every return path (`await session.commit()`), making
+  signature+`SUBMITTED` durability real and independently verifiable
+  from a second DB connection before confirmation polling can ever run
+  -- the crash test was rewritten to simulate a REAL crash boundary
+  rather than merely asserting durability. `src/argus/executor/main.py`
+  gained a narrow, config-gated single-intent mode
+  (`ARGUS_EXECUTOR_SINGLE_INTENT_ID`/`ARGUS_EXECUTOR_INTENT_PARAMS_PATH`)
+  that actually invokes the pipeline with real production-capable
+  adapters, while remaining impossible to dispatch under repository
+  defaults: `LiveRiskInputs.canary_passed` can never be constructed
+  `True` anywhere in this codebase, and `arm_result.armed` requires an
+  external, human-authored, hash/expiry-validated arm file -- both
+  existing hard risk gates, unchanged; a new defense-in-depth field
+  allowlist (`_LIVE_RISK_INPUTS_REAL_ONLY_FIELDS`) proves an operator's
+  params JSON can never spoof identity/arm/canary fields even if it
+  names those keys. (R2-02) added
+  `wallet_specialist_scores.source_knowledge_max_at` (migration 0041,
+  additive: nullable -> backfilled with each row's own `as_of` -> NOT
+  NULL -> `CHECK (source_knowledge_max_at <= as_of)`) -- the MAX
+  knowledge-time among every source row that actually contributed to a
+  score, computed across all four specialist dimensions in
+  `_compute_and_persist_specialist_scores`, including a genuine
+  independent pre-existing bug found and fixed in the same pass
+  (`load_latest_exit_skill` was missing the `created_at <= cutoff` half
+  of `known_by_cutoff` its own sibling consumer already applied
+  correctly to the same table). `load_specialist_scores_as_of` and
+  `load_discovery_effect_size_by_wallet` now additionally require
+  `source_knowledge_max_at <= decision_time`, never accepting a row
+  solely because `as_of` matches; the new CHECK constraint makes the
+  literal contaminated shape structurally impossible to persist at all,
+  proved directly by a dedicated test expecting `IntegrityError`. A
+  mirror-image control proves a row physically written 30 days after its
+  own `as_of` with valid provenance is still accepted -- "historical
+  reconstruction performed later is allowed when its sources prove they
+  were known by T" is never weakened to "the score row must have been
+  created before T". The full literal section-4.3 7-step mutation-test
+  recipe is now implemented end-to-end against a real evidence source
+  with genuine `<=`-based re-selection (`wallet_score_snapshots`, reused
+  unchanged by both Phase 9's exit-specialist dimension and Phase 11's
+  own wallet fingerprint feature), closing the base round's own
+  disclosed gap. `ALGORITHM_VERSION` bumped
+  `counterfactual_alpha_v3` -> `_v4` and
+  `order_flow_prediction_v3` -> `_v4`. (R2-03) Strategy A/B's entry price
+  is gated by a new `_select_own_entry_fill_if_contemporaneous`, which
+  validates the matching `ENTRY_DELAY` probe's real observed timing
+  against its own configured target delay before trusting the loader's
+  precomputed result -- a drifted or timing-unverifiable fill is
+  honestly `FAILURE_NO_EXECUTABLE_EVIDENCE`, proved by a real DB-backed
+  fixture whose "0s"-labeled probe did not actually terminate until 2
+  hours later. The hardcoded `[0.5x, 2.0x]` ratio band was replaced by
+  `Phase10RunConfig.contemporaneous_match_max_delta`, an explicit
+  `timedelta` included in `config_hash()` -- eligibility is now an
+  ABSOLUTE delta against a versioned tolerance, with a deterministic
+  `(distance, target_label)` tiebreak, governing all three
+  contemporaneous decisions (the exit-side reverse-outcome selector, the
+  confirmation-entry probe selector, and the new own-entry-fill check).
+  `ALGORITHM_VERSION` bumped `synthetic_super_wallet_v3` -> `_v4`. For
+  all three `_v3 -> _v4` bumps: no durable (non-disposable-test-database)
+  row was ever computed under the superseded semantics in this recovery
+  round, so no additional `contaminated_run_invalidations` row was
+  seeded beyond the ones the base round already added (migrations
+  0038/0039/0040) -- a documented determination, not a silent omission,
+  confirmed by a direct query of the ordinary `argus` database (still 7
+  rows, unchanged). One genuine pre-existing test bug, unrelated to any
+  of the three clarified items, was found and fixed while running the
+  full regression sweep: `test_registry_names_all_four_contaminated_
+  phases_with_reason` compared a fixed historical migration-0040 value
+  against the LIVE `ALGORITHM_VERSION` import, an assumption that broke
+  once this round's own version bumps landed -- corrected to the literal
+  historical value the migration actually recorded, since
+  `superseded_by_algorithm_version` documents what a row was ACTUALLY
+  superseded by at migration-write time, never "whatever the current
+  version happens to be" going forward. Full validation:
+  `tests/unit`+`tests/golden`+`tests/replay` (1333 tests) 0 failed;
+  `tests/integration` 418 passed/0 failed; `ruff check`/
+  `ruff format --check`/`mypy` clean; secret scan clean across all 20
+  changed/new files this round; single Alembic head (`0041`); `uv lock
+  --check` confirms lockfile consistency. PostgreSQL 17 remains
+  `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` -- reconfirmed, NOT retried this
+  round, per the clarification instruction's own explicit
+  `AUTHORIZED_ACTION` -- so `LIVE_READY_SOFTWARE=false`. Full detail:
+  `orchestration/checkpoints/final_spec_recovery.md`.
+- reason: The clarification instruction named three specific items not
+  yet proven against their own already-frozen wording and gave detailed
+  required interpretations for each; closing each with real, verified
+  evidence (never an asserted fix) and disclosing that no gaps remain is
+  this project's own established discipline, carried through to this
+  clarification round. No unnecessary version bumps were manufactured
+  for cosmetic reasons -- each `_v3 -> _v4` bump is documented as a
+  genuine algorithm-semantics change, with the no-additional-
+  invalidation determination stated explicitly rather than silently
+  assumed.
+- requested_by: human operator (via the audit-driven
+  `argus-final-spec-recovery-002-clarification-001` instruction;
+  ChatGPT-orchestrator remains unavailable per the 2026-09-03
+  governance-change entry, so the human operator remains the audit
+  authority for this recovery too, exercised at their own discretion).
+- impact: `current_phase`/`last_completed_phase` in `docs/BUILD_STATE.md`
+  are UNCHANGED (still 11) -- this round corrected/hardened prior
+  rounds' own work rather than advancing MASTER_SPEC phase numbering.
+  Phase 6.5 (MAINNET CANARY) remains the only phase not started,
+  permanently human-only, never self-executed. This session did not
+  modify `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`, did not
+  self-approve, and did not perform Phase 6.5. PostgreSQL 17 access
+  remains the sole recorded open item for a future session (with real
+  PostgreSQL 17 access) to close, not silently forgotten; no other gap
+  remains disclosed.
+- git_commit: (this clarification round's own implementation + evidence
+  commit -- see `git log -1`).
