@@ -102,7 +102,18 @@ async def load_specialist_scores_as_of(
     AS OF ``decision_time`` -- callers use this per DISTINCT decision
     time actually needed (never the final run cutoff applied uniformly),
     after ensuring Phase 9 has itself been computed at that same cutoff
-    (see ``argus.synthetic.service``'s own per-decision-time cascade)."""
+    (see ``argus.synthetic.service``'s own per-decision-time cascade).
+
+    R2-02 clarification-001: ``as_of == decision_time`` plus matching
+    version/config is NOT sufficient proof of knowledge-time eligibility
+    on its own -- a score row can be reconstructed/persisted at ANY
+    physical time (that is legitimate; a historical backtest run today
+    necessarily creates rows with created_at=today for a past as_of).
+    What must additionally hold is that every SOURCE row contributing to
+    it was itself known by decision_time -- exactly what
+    ``source_knowledge_max_at`` proves. A row lacking that proof (i.e.
+    whose source knowledge extends past decision_time) is excluded here,
+    never accepted merely because its as_of label matches."""
     rows = (
         (
             await session.execute(
@@ -110,6 +121,7 @@ async def load_specialist_scores_as_of(
                     WalletSpecialistScore.as_of == decision_time,
                     WalletSpecialistScore.algorithm_version == algorithm_version,
                     WalletSpecialistScore.config_hash == config_hash,
+                    WalletSpecialistScore.source_knowledge_max_at <= decision_time,
                 )
             )
         )

@@ -170,6 +170,15 @@ async def execute_intent_pipeline(
             fill=existing_fill,
         )
 
+    # R2-01 clarification-001: this function owns its own transaction
+    # boundaries from here on -- it commits durably on every return path,
+    # rather than relying on a caller-managed ambient transaction spanning
+    # the whole call. Callers must NOT wrap this call in their own
+    # `async with session.begin():` block (SQLAlchemy raises
+    # ``InvalidRequestError`` if code inside such a block calls
+    # ``session.commit()`` directly, confirmed empirically) -- they may
+    # rely on the session's own autobegin behavior instead.
+
     input_mint, output_mint = _side_mints(
         side=intent.side, quote_mint=intent.quote_mint, token_mint=token_mint
     )
@@ -204,6 +213,7 @@ async def execute_intent_pipeline(
             ),
             now=now,
         )
+        await session.commit()
         return PipelineOutcome(
             intent=intent,
             status="SUBMITTED_RESOLVED" if outcome.resolved else "SUBMITTED_UNRESOLVED",
@@ -226,6 +236,7 @@ async def execute_intent_pipeline(
             reason=f"risk gates failed: {', '.join(risk_result.reason_codes)}",
             now=now,
         )
+        await session.commit()
         return PipelineOutcome(
             intent=intent,
             status="REJECTED_RISK",
@@ -281,6 +292,7 @@ async def execute_intent_pipeline(
             reason=f"attestation failed: {attestation.failed_dimensions}",
             now=now,
         )
+        await session.commit()
         return PipelineOutcome(
             intent=intent,
             status="REJECTED_ATTESTATION",
@@ -299,6 +311,7 @@ async def execute_intent_pipeline(
             reason=f"signing failed: {type(exc).__name__}: {exc}",
             now=now,
         )
+        await session.commit()
         return PipelineOutcome(intent=intent, status="SIGNING_FAILED", detail=str(exc))
 
     await apply_transition(
@@ -323,10 +336,14 @@ async def execute_intent_pipeline(
         transaction_signature=signature,
         confirmation_state=CONFIRMATION_UNKNOWN,
     )
-    # Signature + SUBMITTED are persisted together, in the SAME
-    # still-open transaction, BEFORE any confirmation attempt -- a crash
-    # right after this point resumes via the restart-safe branch above,
-    # never by re-submitting.
+    # Signature + SUBMITTED are persisted together and DURABLY COMMITTED
+    # (not merely flushed inside a still-open transaction that a crash
+    # could still roll back) BEFORE any confirmation attempt -- a crash
+    # right after this commit resumes via the restart-safe branch above,
+    # never by re-submitting. This is the exact "durable before
+    # confirmation" boundary clarification-001 requires: a separate
+    # fresh session opened after this point (and before confirmation
+    # runs) can already see S/SUBMITTED.
     await get_or_create_execution_fill(
         session, intent_id=intent.intent_id, evidence=prior_evidence, now=now
     )
@@ -337,7 +354,7 @@ async def execute_intent_pipeline(
         reason=f"submitted as {signature}",
         now=now,
     )
-    await session.flush()
+    await session.commit()
 
     outcome = await reconcile_submitted_fill(
         session,
@@ -348,6 +365,7 @@ async def execute_intent_pipeline(
         prior_evidence=prior_evidence,
         now=now,
     )
+    await session.commit()
     return PipelineOutcome(
         intent=intent,
         status="SUBMITTED_RESOLVED" if outcome.resolved else "SUBMITTED_UNRESOLVED",

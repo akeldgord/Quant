@@ -51,7 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from argus.convergence.service import ALGORITHM_VERSION as PHASE8_ALGORITHM_VERSION
 from argus.convergence.service import ConvergenceRunConfig as Phase8RunConfig
-from argus.copyability.executable_returns import compute_executable_return
+from argus.copyability.executable_returns import EntryFill, compute_executable_return
 from argus.copyability.loaders import (
     OpportunityEntryProbe,
     OpportunityReverseOutcome,
@@ -112,7 +112,29 @@ from argus.synthetic.stats import StrategySummary, TradeOutcome, compute_strateg
 # against that substituted entry (never the leader's precomputed result).
 # Every "synthetic_super_wallet_v2" row is invalidated by
 # ``contaminated_run_invalidations``.
-ALGORITHM_VERSION: Final[str] = "synthetic_super_wallet_v3"
+#
+# Clarification-001 (``argus-final-spec-recovery-002-clarification-001``,
+# section 4): bumped from "synthetic_super_wallet_v3" -- two more defects
+# in the same contemporaneous-matching family. First, Strategy A/B's
+# entry price unconditionally reused ``opportunity.entry_fill`` (the ONE
+# realized fill Phase 4's real runtime happened to resolve) with no check
+# that its own real observed timing was still contemporaneous with the
+# strategy's own modeled entry timing for that fill -- a fill whose real
+# processing drifted arbitrarily far from its own configured target delay
+# was silently trusted regardless
+# (``_select_own_entry_fill_if_contemporaneous``). Second, every
+# contemporaneous-match eligibility check (`_select_contemporaneous_
+# reverse_outcome`/`_select_contemporaneous_entry_probe`) used a hardcoded,
+# unversioned 0.5x-2.0x multiplicative ratio band -- replaced by
+# ``Phase10RunConfig.contemporaneous_match_max_delta``, an explicit,
+# versioned (``config_hash``-bound) absolute-delta tolerance, with a
+# deterministic nearest-match tiebreak. No durable (non-disposable-test-
+# database) "synthetic_super_wallet_v3" row was ever computed against a
+# real database in this recovery round, so no additional
+# ``contaminated_run_invalidations`` entry is seeded beyond the existing
+# v1->v2/v2->v3 ones -- this is genuine algorithm evolution, not a
+# contaminated-result correction.
+ALGORITHM_VERSION: Final[str] = "synthetic_super_wallet_v4"
 
 _PHASE10_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "costs.py",
@@ -164,6 +186,18 @@ class Phase10RunConfig:
     high_convergence_surprisal_threshold: Decimal
     min_exit_specialist_score: Decimal
     max_hold_duration: timedelta
+    # Clarification-001 section 4.2: the ONE explicit, versioned tolerance
+    # governing every contemporaneous-match eligibility decision Phase 10
+    # makes (the reverse-exit horizon a trade is priced against, the
+    # ENTRY_DELAY probe Strategy C/D's confirmation-entry is priced from,
+    # and Strategy A/B's own entry-fill timing check) -- replaces the
+    # previously hardcoded, unversioned 0.5x-2.0x multiplicative ratio
+    # band. A candidate is eligible only when the ABSOLUTE delta between
+    # its own real observed timing and the timing the trigger represents
+    # is <= this value; never tuned to improve Phase 10's own backtest
+    # performance -- a poor or INSUFFICIENT_SAMPLE result under a
+    # deliberately chosen, principled tolerance remains a valid result.
+    contemporaneous_match_max_delta: timedelta
 
     def config_hash(self) -> str:
         payload = (
@@ -173,7 +207,9 @@ class Phase10RunConfig:
             f"max_concurrent_positions={self.max_concurrent_positions}|"
             f"high_convergence_surprisal_threshold={self.high_convergence_surprisal_threshold}|"
             f"min_exit_specialist_score={self.min_exit_specialist_score}|"
-            f"max_hold_duration_seconds={self.max_hold_duration.total_seconds()}"
+            f"max_hold_duration_seconds={self.max_hold_duration.total_seconds()}|"
+            f"contemporaneous_match_max_delta_seconds="
+            f"{self.contemporaneous_match_max_delta.total_seconds()}"
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -197,19 +233,6 @@ def _any_exit(_entry: TriggerEvent, _exit_event: TriggerEvent) -> bool:
     return True
 
 
-# R2-03: a candidate reverse-quote horizon is only "contemporaneous" with
-# a trade's own actual hold duration if its REAL observed elapsed time
-# (never the nominal label) falls within this multiplicative band around
-# that hold duration -- picking the nearest available real evidence
-# regardless of how far off it is would silently reintroduce a milder
-# version of the original PRIMARY_EXECUTABLE_HORIZON bug (e.g. using a
-# 24h probe to price a 5-minute flip). Outside the band there is no
-# genuinely contemporaneous evidence, so the trade is honestly
-# FAILURE_NO_EXECUTABLE_EVIDENCE rather than mispriced.
-_CONTEMPORANEOUS_MIN_RATIO = Decimal("0.5")
-_CONTEMPORANEOUS_MAX_RATIO = Decimal("2.0")
-
-
 def _entry_lookup_at(entry: TriggerEvent) -> datetime:
     """R2-03: the executable-return opportunity is always keyed by the
     LEADER's own real entry time (``WalletOpportunity.first_seen_at``) --
@@ -227,22 +250,32 @@ def _entry_lookup_at(entry: TriggerEvent) -> datetime:
 
 
 def _select_contemporaneous_reverse_outcome(
-    opportunity: WalletOpportunity, *, actual_hold_seconds: Decimal
+    opportunity: WalletOpportunity, *, actual_hold_seconds: Decimal, max_delta_seconds: Decimal
 ) -> OpportunityReverseOutcome | None:
     """R2-03: replaces the fixed ``PRIMARY_EXECUTABLE_HORIZON`` lookup --
     among ``opportunity``'s own REAL reverse-quote probe results (never a
     fabricated quote), picks whichever probe's REAL observed elapsed time
     (``actual_elapsed_seconds_from_first_seen``, not its nominal label)
-    is closest to this specific trade's own actual hold duration, and
-    only if that candidate is within a reasonable contemporaneous band of
-    the actual hold duration. Returns ``None`` (never a distant
-    substitute) when no candidate qualifies."""
+    is closest to this specific trade's own actual hold duration.
+
+    Clarification-001 section 4.2: eligibility is the ABSOLUTE delta
+    between that probe's real elapsed time and the trade's own actual
+    hold duration, compared against ``max_delta_seconds`` -- an explicit,
+    versioned (``Phase10RunConfig.contemporaneous_match_max_delta``)
+    tolerance, never the previous hardcoded 0.5x-2.0x ratio band. Ties are
+    broken deterministically by ``target_label``. Returns ``None`` (never
+    a distant substitute) when no candidate qualifies -- picking the
+    nearest available real evidence regardless of how far off it is would
+    silently reintroduce a milder version of the original
+    ``PRIMARY_EXECUTABLE_HORIZON`` bug (e.g. using a 24h probe to price a
+    5-minute flip)."""
     if actual_hold_seconds <= 0:
         return None
     candidates = [
         outcome
         for outcome in opportunity.reverse_outcomes.values()
         if outcome.actual_elapsed_seconds_from_first_seen is not None
+        and outcome.actual_elapsed_seconds_from_first_seen > 0
     ]
     if not candidates:
         return None
@@ -252,40 +285,43 @@ def _select_contemporaneous_reverse_outcome(
         assert elapsed is not None
         return abs(elapsed - actual_hold_seconds)
 
-    best = min(candidates, key=_distance)
-    best_elapsed = best.actual_elapsed_seconds_from_first_seen
-    assert best_elapsed is not None
-    if best_elapsed <= 0:
-        return None
-    ratio = best_elapsed / actual_hold_seconds
-    if not (_CONTEMPORANEOUS_MIN_RATIO <= ratio <= _CONTEMPORANEOUS_MAX_RATIO):
+    best = min(candidates, key=lambda o: (_distance(o), o.target_label))
+    if _distance(best) > max_delta_seconds:
         return None
     return best
 
 
 def _select_contemporaneous_entry_probe(
-    opportunity: WalletOpportunity, *, actual_entry_delay_seconds: Decimal
+    opportunity: WalletOpportunity,
+    *,
+    actual_entry_delay_seconds: Decimal,
+    max_delta_seconds: Decimal,
 ) -> OpportunityEntryProbe | None:
     """R2-03: Strategy C/D's own entry price -- among ``opportunity``'s
     real ``ENTRY_DELAY`` probes (never the leader's own realized
     ``entry_fill``, which is fixed at whichever single delay Phase 4's
     real runtime happened to use), picks whichever probe's REAL observed
     elapsed time is closest to the follower's own actual confirmation
-    delay, subject to the SAME contemporaneous band
-    (``_CONTEMPORANEOUS_MIN_RATIO``/``_MAX_RATIO``) as the exit side --
-    for exactly the same reason: an unbounded nearest-available fallback
-    would silently reintroduce a milder version of the "wrong horizon"
-    bug on the entry side instead of the exit side. Only a probe that
-    actually resolved a real fill (``entry_fill is not None``) is a
-    candidate -- an unresolved/failed probe cannot price an entry.
-    Returns ``None`` (never a distant substitute) when nothing
-    qualifies."""
+    delay.
+
+    Clarification-001 section 4.2: eligibility is the SAME absolute-delta
+    ``max_delta_seconds`` tolerance the exit side uses (never the previous
+    ratio band) -- for exactly the same reason: an unbounded
+    nearest-available fallback would silently reintroduce a milder
+    version of the "wrong horizon" bug on the entry side instead of the
+    exit side. Only a probe that actually resolved a real fill
+    (``entry_fill is not None``) is a candidate -- an unresolved/failed
+    probe cannot price an entry. Ties are broken deterministically by
+    ``target_label``. Returns ``None`` (never a distant substitute) when
+    nothing qualifies."""
     if actual_entry_delay_seconds <= 0:
         return None
     candidates = [
         probe
         for probe in opportunity.entry_delay_probes.values()
-        if probe.entry_fill is not None and probe.actual_elapsed_seconds_from_first_seen is not None
+        if probe.entry_fill is not None
+        and probe.actual_elapsed_seconds_from_first_seen is not None
+        and probe.actual_elapsed_seconds_from_first_seen > 0
     ]
     if not candidates:
         return None
@@ -295,15 +331,49 @@ def _select_contemporaneous_entry_probe(
         assert elapsed is not None
         return abs(elapsed - actual_entry_delay_seconds)
 
-    best = min(candidates, key=_distance)
-    best_elapsed = best.actual_elapsed_seconds_from_first_seen
-    assert best_elapsed is not None
-    if best_elapsed <= 0:
-        return None
-    ratio = best_elapsed / actual_entry_delay_seconds
-    if not (_CONTEMPORANEOUS_MIN_RATIO <= ratio <= _CONTEMPORANEOUS_MAX_RATIO):
+    best = min(candidates, key=lambda p: (_distance(p), p.target_label))
+    if _distance(best) > max_delta_seconds:
         return None
     return best
+
+
+def _select_own_entry_fill_if_contemporaneous(
+    opportunity: WalletOpportunity, *, max_delta_seconds: Decimal
+) -> EntryFill | None:
+    """Clarification-001 section 4.1: Strategy A/B's own entry price must
+    never unconditionally reuse ``opportunity.entry_fill`` (the ONE
+    realized fill Phase 4's real runtime happened to resolve, at whichever
+    single ``entry_target_label``/``entry_target_seconds`` delay it used)
+    -- "the original shadow entry fill may be used only when its actual
+    entry timing is the strategy entry timing represented by the
+    trigger". For Strategy A/B the trigger's own modeled entry timing IS
+    that fill's configured target delay (``entry_target_seconds`` --
+    A/B's trigger is the leader's own real buy, and any realistic copy of
+    it necessarily executes after some modeled delay, never literally at
+    the same instant); this checks that the fill's OWN real observed
+    processing time (the matching ``entry_delay_probes`` entry's
+    ``actual_elapsed_seconds_from_first_seen``) did not drift, by more
+    than ``max_delta_seconds``, from that configured target -- never
+    treating ``first_seen_at`` itself as the fill's execution time, and
+    never trusting a fill whose real processing time is unknown or
+    arbitrarily delayed. Returns ``None`` (never a distant/mark-price
+    substitute) when there is no contemporaneous timing evidence at all,
+    mapped by the caller to ``FAILURE_NO_EXECUTABLE_EVIDENCE``."""
+    if (
+        opportunity.entry_fill is None
+        or opportunity.entry_target_label is None
+        or opportunity.entry_target_seconds is None
+    ):
+        return None
+    probe = opportunity.entry_delay_probes.get(opportunity.entry_target_label)
+    if probe is None or probe.actual_elapsed_seconds_from_first_seen is None:
+        return None
+    delta = abs(
+        probe.actual_elapsed_seconds_from_first_seen - Decimal(opportunity.entry_target_seconds)
+    )
+    if delta > max_delta_seconds:
+        return None
+    return opportunity.entry_fill
 
 
 async def _mark_prices_and_return(
@@ -377,6 +447,7 @@ async def _price_and_persist_trades(
     value)."""
     outcomes: list[TradeOutcome] = []
     max_staleness_seconds = config.entry_exit_price_max_staleness.total_seconds()
+    max_delta_seconds = Decimal(config.contemporaneous_match_max_delta.total_seconds())
 
     for ordinal, matched in enumerate(sorted(match_result.trades, key=lambda t: t.entry.at)):
         (
@@ -421,7 +492,9 @@ async def _price_and_persist_trades(
             actual_hold_seconds = Decimal((matched.exit.at - entry_lookup_at).total_seconds())
             reverse_outcome = (
                 _select_contemporaneous_reverse_outcome(
-                    opportunity, actual_hold_seconds=actual_hold_seconds
+                    opportunity,
+                    actual_hold_seconds=actual_hold_seconds,
+                    max_delta_seconds=max_delta_seconds,
                 )
                 if opportunity is not None
                 else None
@@ -450,7 +523,9 @@ async def _price_and_persist_trades(
                     (matched.entry.at - entry_lookup_at).total_seconds()
                 )
                 entry_probe = _select_contemporaneous_entry_probe(
-                    opportunity, actual_entry_delay_seconds=actual_entry_delay_seconds
+                    opportunity,
+                    actual_entry_delay_seconds=actual_entry_delay_seconds,
+                    max_delta_seconds=max_delta_seconds,
                 )
                 if (
                     entry_probe is None
@@ -487,26 +562,47 @@ async def _price_and_persist_trades(
                         gross_return = None
                         net_return = None
             else:
-                result = reverse_outcome.result
-                executable_status = result.status
-                executable_failure_class = result.failure_class
-                executable_horizon_label = reverse_outcome.target_label
-                if result.status == "SUCCESS" and result.gross_return_fraction is not None:
-                    outcome = OUTCOME_RESOLVED
-                    gross_return = result.gross_return_fraction
-                    net_return = (
-                        result.net_return_fraction
-                        if result.net_return_fraction is not None
-                        else result.gross_return_fraction
-                    )
-                elif result.status == "FAILED":
-                    outcome = OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED
+                # Clarification-001 section 4.1: Strategy A/B (and E,
+                # which never reaches here -- see the module docstring)
+                # must never trust ``reverse_outcome.result`` (computed by
+                # the loader against ``opportunity.entry_fill``) unless
+                # that fill's own real observed timing is still
+                # contemporaneous with the strategy's own modeled entry
+                # timing for it. A drifted/unresolved fill is honestly
+                # ``FAILURE_NO_EXECUTABLE_EVIDENCE``, never a mark-price
+                # or distant-fill substitute.
+                assert opportunity is not None
+                own_entry_fill = _select_own_entry_fill_if_contemporaneous(
+                    opportunity, max_delta_seconds=max_delta_seconds
+                )
+                if own_entry_fill is None:
+                    outcome = OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE
+                    executable_status = None
+                    executable_failure_class = None
+                    executable_horizon_label = None
                     gross_return = None
                     net_return = None
                 else:
-                    outcome = OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE
-                    gross_return = None
-                    net_return = None
+                    result = reverse_outcome.result
+                    executable_status = result.status
+                    executable_failure_class = result.failure_class
+                    executable_horizon_label = reverse_outcome.target_label
+                    if result.status == "SUCCESS" and result.gross_return_fraction is not None:
+                        outcome = OUTCOME_RESOLVED
+                        gross_return = result.gross_return_fraction
+                        net_return = (
+                            result.net_return_fraction
+                            if result.net_return_fraction is not None
+                            else result.gross_return_fraction
+                        )
+                    elif result.status == "FAILED":
+                        outcome = OUTCOME_FAILURE_EXECUTABLE_QUOTE_FAILED
+                        gross_return = None
+                        net_return = None
+                    else:
+                        outcome = OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE
+                        gross_return = None
+                        net_return = None
 
         await get_or_create_synthetic_strategy_trade(
             session,

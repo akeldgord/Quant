@@ -168,19 +168,44 @@ async def load_wallet_token_exits(
 
 async def load_latest_exit_skill(
     session: AsyncSession, *, wallet_id: uuid.UUID, cutoff: datetime
-) -> Decimal | None:
+) -> tuple[Decimal, datetime] | None:
     """This wallet's own latest Phase 3 ``exit_capture`` component
     (``wallet_score_snapshots.component_values``) known by ``cutoff`` --
-    reused unchanged, not recomputed."""
-    snapshot = (
-        await session.execute(
-            select(WalletScoreSnapshot)
-            .where(WalletScoreSnapshot.wallet_id == wallet_id, WalletScoreSnapshot.as_of <= cutoff)
-            .order_by(WalletScoreSnapshot.as_of.desc())
-            .limit(1)
+    reused unchanged, not recomputed. Returns ``(value, snapshot.created_at)``
+    so a caller building R2-02 source-knowledge provenance can fold this
+    row's own creation time into its bound; ``None`` when no eligible
+    snapshot exists.
+
+    Clarification-001 section 3 fix: previously bounded only by
+    ``as_of <= cutoff``, never also ``created_at <= cutoff`` -- the same
+    ``known_by_cutoff(created_at, effective_at, cutoff)`` invariant this
+    table's OTHER consumer (``argus.prediction.loaders.
+    wallet_fingerprint_at``) already applied correctly. A snapshot
+    labeled ``as_of<=cutoff`` but not physically created until after
+    cutoff was previously acceptable here -- a knowledge-time leak in the
+    same family R2-02 already fixed for ``DirectionalEdge``/
+    ``ExpectedConfirmationEvent``."""
+    candidates = (
+        (
+            await session.execute(
+                select(WalletScoreSnapshot)
+                .where(WalletScoreSnapshot.wallet_id == wallet_id)
+                .order_by(WalletScoreSnapshot.as_of.desc())
+            )
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+    snapshot: WalletScoreSnapshot | None = None
+    for candidate in candidates:
+        if known_by_cutoff(
+            created_at=candidate.created_at, effective_at=candidate.as_of, cutoff=cutoff
+        ):
+            snapshot = candidate
+            break
     if snapshot is None:
         return None
     value = snapshot.component_values.get("exit_capture")
-    return Decimal(str(value)) if value is not None else None
+    if value is None:
+        return None
+    return Decimal(str(value)), snapshot.created_at

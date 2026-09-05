@@ -1,11 +1,14 @@
-"""R2-03 (``argus-final-spec-recovery-002``): Phase 10 strategy-time
-executable matching -- pure-function coverage for
+"""R2-03 (``argus-final-spec-recovery-002``) and its Clarification-001
+(``argus-final-spec-recovery-002-clarification-001``, section 4): Phase 10
+strategy-time executable matching -- pure-function coverage for
 ``argus.synthetic.service._select_contemporaneous_reverse_outcome``,
-``_select_contemporaneous_entry_probe``, and ``_entry_lookup_at``,
-requiring no database. These replace the fixed
-``PRIMARY_EXECUTABLE_HORIZON`` lookup, the confirmation-entry opportunity
-lookup bug, and the confirmation-entry PRICE bug (Strategy C/D silently
-reusing the leader's own realized fill) the R2-03 audit named; see
+``_select_contemporaneous_entry_probe``, ``_select_own_entry_fill_if_
+contemporaneous``, and ``_entry_lookup_at``, requiring no database. These
+replace the fixed ``PRIMARY_EXECUTABLE_HORIZON`` lookup, the
+confirmation-entry opportunity lookup bug, the confirmation-entry PRICE
+bug (Strategy C/D silently reusing the leader's own realized fill), the
+unconditional Strategy A/B entry-fill reuse bug, and the hardcoded
+unversioned 0.5x-2.0x ratio tolerance the two audits named; see
 ``tests/integration/test_phase10_synthetic_persistence_and_report.py``
 and ``test_r202_specialist_knowledge_time.py`` for the DB-backed
 end-to-end coverage of the same fixes.
@@ -26,12 +29,24 @@ from argus.copyability.loaders import (
 from argus.synthetic.loaders import LEADER_ENTRY_AT_REFERENCE_KEY
 from argus.synthetic.matching import TriggerEvent
 from argus.synthetic.service import (
+    Phase10RunConfig,
     _entry_lookup_at,
     _select_contemporaneous_entry_probe,
     _select_contemporaneous_reverse_outcome,
+    _select_own_entry_fill_if_contemporaneous,
 )
 
 _NOW = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+# Clarification-001 section 4.2: the SAME absolute-delta tolerance every
+# test here uses, matching the production default
+# (``argus.cli``'s own ``Phase10RunConfig.contemporaneous_match_max_delta``)
+# -- an explicit, versioned value, never a ratio.
+_MAX_DELTA = Decimal(120)
+
+_ENTRY_FILL = EntryFill(
+    input_mint="quote", output_mint="token", input_amount_raw=1_000_000, output_amount_raw=42
+)
 
 
 def _outcome(
@@ -58,16 +73,7 @@ def _outcome(
 def _entry_probe(
     *, label: str, elapsed_seconds: int, outcome: str = "SUCCESS"
 ) -> OpportunityEntryProbe:
-    fill = (
-        EntryFill(
-            input_mint="quote",
-            output_mint="token",
-            input_amount_raw=1_000_000,
-            output_amount_raw=42,
-        )
-        if outcome == "SUCCESS"
-        else None
-    )
+    fill = _ENTRY_FILL if outcome == "SUCCESS" else None
     return OpportunityEntryProbe(
         probe_id=uuid.uuid4(),
         target_label=label,
@@ -81,6 +87,9 @@ def _opportunity(
     reverse_outcomes: dict[str, OpportunityReverseOutcome],
     *,
     entry_delay_probes: dict[str, OpportunityEntryProbe] | None = None,
+    entry_fill: EntryFill | None = None,
+    entry_target_label: str | None = "0s",
+    entry_target_seconds: int | None = 0,
 ) -> WalletOpportunity:
     return WalletOpportunity(
         shadow_intent_id=uuid.uuid4(),
@@ -88,9 +97,9 @@ def _opportunity(
         first_seen_at=_NOW,
         entry_status="FILLED",
         shadow_position_id=uuid.uuid4(),
-        entry_target_label="0s",
-        entry_target_seconds=0,
-        entry_fill=None,
+        entry_target_label=entry_target_label,
+        entry_target_seconds=entry_target_seconds,
+        entry_fill=entry_fill,
         entry_price_impact_pct=None,
         reverse_outcomes=reverse_outcomes,
         entry_delay_probes=entry_delay_probes or {},
@@ -108,7 +117,7 @@ def test_one_hour_exit_trap_picks_the_one_hour_probe_not_five_minutes() -> None:
         }
     )
     selected = _select_contemporaneous_reverse_outcome(
-        opportunity, actual_hold_seconds=Decimal(3600)
+        opportunity, actual_hold_seconds=Decimal(3600), max_delta_seconds=_MAX_DELTA
     )
     assert selected is not None
     assert selected.target_label == "1h"
@@ -121,7 +130,7 @@ def test_no_exit_time_evidence_is_none_not_a_distant_substitute() -> None:
     5-minute quote."""
     opportunity = _opportunity({"5m": _outcome(label="5m", elapsed_seconds=300)})
     selected = _select_contemporaneous_reverse_outcome(
-        opportunity, actual_hold_seconds=Decimal(24 * 3600)
+        opportunity, actual_hold_seconds=Decimal(24 * 3600), max_delta_seconds=_MAX_DELTA
     )
     assert selected is None
 
@@ -129,7 +138,7 @@ def test_no_exit_time_evidence_is_none_not_a_distant_substitute() -> None:
 def test_no_reverse_outcomes_at_all_is_none() -> None:
     opportunity = _opportunity({})
     selected = _select_contemporaneous_reverse_outcome(
-        opportunity, actual_hold_seconds=Decimal(300)
+        opportunity, actual_hold_seconds=Decimal(300), max_delta_seconds=_MAX_DELTA
     )
     assert selected is None
 
@@ -146,7 +155,7 @@ def test_unsellable_exit_within_the_contemporaneous_band_is_still_a_failure() ->
         }
     )
     selected = _select_contemporaneous_reverse_outcome(
-        opportunity, actual_hold_seconds=Decimal(300)
+        opportunity, actual_hold_seconds=Decimal(300), max_delta_seconds=_MAX_DELTA
     )
     assert selected is not None
     assert selected.target_label == "5m"
@@ -168,7 +177,7 @@ def test_probes_missing_real_elapsed_time_are_never_candidates() -> None:
     )
     opportunity = _opportunity({"5m": pending})
     selected = _select_contemporaneous_reverse_outcome(
-        opportunity, actual_hold_seconds=Decimal(300)
+        opportunity, actual_hold_seconds=Decimal(300), max_delta_seconds=_MAX_DELTA
     )
     assert selected is None
 
@@ -176,10 +185,53 @@ def test_probes_missing_real_elapsed_time_are_never_candidates() -> None:
 def test_zero_or_negative_hold_duration_is_always_none() -> None:
     opportunity = _opportunity({"5m": _outcome(label="5m", elapsed_seconds=300)})
     assert (
-        _select_contemporaneous_reverse_outcome(opportunity, actual_hold_seconds=Decimal(0)) is None
+        _select_contemporaneous_reverse_outcome(
+            opportunity, actual_hold_seconds=Decimal(0), max_delta_seconds=_MAX_DELTA
+        )
+        is None
     )
     assert (
-        _select_contemporaneous_reverse_outcome(opportunity, actual_hold_seconds=Decimal(-1))
+        _select_contemporaneous_reverse_outcome(
+            opportunity, actual_hold_seconds=Decimal(-1), max_delta_seconds=_MAX_DELTA
+        )
+        is None
+    )
+
+
+def test_reverse_outcome_tiebreak_is_deterministic_by_target_label() -> None:
+    """Clarification-001 section 4.2: when two candidates are EQUALLY
+    close to the trade's own actual hold duration, the tiebreak must be
+    deterministic (by ``target_label``), never dependent on dict/DB
+    iteration order."""
+    opportunity = _opportunity(
+        {
+            "30m": _outcome(label="30m", elapsed_seconds=295),
+            "5m": _outcome(label="5m", elapsed_seconds=305),
+        }
+    )
+    selected = _select_contemporaneous_reverse_outcome(
+        opportunity, actual_hold_seconds=Decimal(300), max_delta_seconds=_MAX_DELTA
+    )
+    assert selected is not None
+    assert selected.target_label == "30m"
+
+
+def test_reverse_outcome_rejected_exactly_past_the_configured_tolerance() -> None:
+    """Clarification-001 section 4.2: eligibility is an ABSOLUTE delta
+    against the configured tolerance -- one second past it is rejected,
+    exactly at it is accepted."""
+    at_boundary = _opportunity({"5m": _outcome(label="5m", elapsed_seconds=300 + 120)})
+    assert (
+        _select_contemporaneous_reverse_outcome(
+            at_boundary, actual_hold_seconds=Decimal(300), max_delta_seconds=_MAX_DELTA
+        )
+        is not None
+    )
+    past_boundary = _opportunity({"5m": _outcome(label="5m", elapsed_seconds=300 + 121)})
+    assert (
+        _select_contemporaneous_reverse_outcome(
+            past_boundary, actual_hold_seconds=Decimal(300), max_delta_seconds=_MAX_DELTA
+        )
         is None
     )
 
@@ -232,7 +284,7 @@ def test_confirmation_entry_price_uses_contemporaneous_entry_probe_not_leader_fi
         },
     )
     selected = _select_contemporaneous_entry_probe(
-        opportunity, actual_entry_delay_seconds=Decimal(180)
+        opportunity, actual_entry_delay_seconds=Decimal(180), max_delta_seconds=_MAX_DELTA
     )
     assert selected is not None
     assert selected.target_label == "300s"
@@ -247,7 +299,7 @@ def test_confirmation_entry_no_evidence_near_confirmation_is_none() -> None:
         {}, entry_delay_probes={"1s": _entry_probe(label="1s", elapsed_seconds=1)}
     )
     selected = _select_contemporaneous_entry_probe(
-        opportunity, actual_entry_delay_seconds=Decimal(3600)
+        opportunity, actual_entry_delay_seconds=Decimal(3600), max_delta_seconds=_MAX_DELTA
     )
     assert selected is None
 
@@ -263,7 +315,7 @@ def test_confirmation_entry_probe_missing_fill_is_never_a_candidate() -> None:
         },
     )
     selected = _select_contemporaneous_entry_probe(
-        opportunity, actual_entry_delay_seconds=Decimal(180)
+        opportunity, actual_entry_delay_seconds=Decimal(180), max_delta_seconds=_MAX_DELTA
     )
     assert selected is None
 
@@ -273,10 +325,145 @@ def test_confirmation_entry_zero_or_negative_delay_is_always_none() -> None:
         {}, entry_delay_probes={"1s": _entry_probe(label="1s", elapsed_seconds=1)}
     )
     assert (
-        _select_contemporaneous_entry_probe(opportunity, actual_entry_delay_seconds=Decimal(0))
+        _select_contemporaneous_entry_probe(
+            opportunity, actual_entry_delay_seconds=Decimal(0), max_delta_seconds=_MAX_DELTA
+        )
         is None
     )
     assert (
-        _select_contemporaneous_entry_probe(opportunity, actual_entry_delay_seconds=Decimal(-5))
+        _select_contemporaneous_entry_probe(
+            opportunity, actual_entry_delay_seconds=Decimal(-5), max_delta_seconds=_MAX_DELTA
+        )
         is None
     )
+
+
+def test_entry_probe_tiebreak_is_deterministic_by_target_label() -> None:
+    """Same deterministic-tiebreak requirement as the exit side, for the
+    entry side's own probe selection."""
+    opportunity = _opportunity(
+        {},
+        entry_delay_probes={
+            "60s": _entry_probe(label="60s", elapsed_seconds=175),
+            "15s": _entry_probe(label="15s", elapsed_seconds=185),
+        },
+    )
+    selected = _select_contemporaneous_entry_probe(
+        opportunity, actual_entry_delay_seconds=Decimal(180), max_delta_seconds=_MAX_DELTA
+    )
+    assert selected is not None
+    assert selected.target_label == "15s"
+
+
+def test_own_entry_fill_used_when_within_tolerance_of_own_target() -> None:
+    """Clarification-001 section 4.1: Strategy A/B's own entry_fill is
+    used when the matching ENTRY_DELAY probe's REAL observed timing is
+    genuinely contemporaneous with its own configured target delay --
+    the ordinary, well-behaved case."""
+    opportunity = _opportunity(
+        {},
+        entry_fill=_ENTRY_FILL,
+        entry_target_label="5s",
+        entry_target_seconds=5,
+        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=6)},
+    )
+    selected = _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+    assert selected is _ENTRY_FILL
+
+
+def test_own_entry_fill_rejected_when_real_processing_drifted_past_tolerance() -> None:
+    """The exact defect section 4.1 names: a fill whose real processing
+    drifted far past its own configured target delay must never be
+    unconditionally trusted -- honestly no-executable-evidence instead."""
+    opportunity = _opportunity(
+        {},
+        entry_fill=_ENTRY_FILL,
+        entry_target_label="5s",
+        entry_target_seconds=5,
+        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=6000)},
+    )
+    selected = _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+    assert selected is None
+
+
+def test_own_entry_fill_none_when_no_matching_probe_timing_evidence() -> None:
+    """No ENTRY_DELAY probe at all for the fill's own target label -- no
+    timing evidence to validate against, so honestly no-executable-
+    evidence rather than assuming it is fine."""
+    opportunity = _opportunity(
+        {}, entry_fill=_ENTRY_FILL, entry_target_label="5s", entry_target_seconds=5
+    )
+    selected = _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+    assert selected is None
+
+
+def test_own_entry_fill_none_when_no_entry_fill_at_all() -> None:
+    opportunity = _opportunity(
+        {},
+        entry_fill=None,
+        entry_target_label="5s",
+        entry_target_seconds=5,
+        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=5)},
+    )
+    assert (
+        _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA) is None
+    )
+
+
+def test_own_entry_fill_none_when_target_label_or_seconds_missing() -> None:
+    opportunity = _opportunity(
+        {}, entry_fill=_ENTRY_FILL, entry_target_label=None, entry_target_seconds=None
+    )
+    assert (
+        _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA) is None
+    )
+
+
+def test_own_entry_fill_accepted_exactly_at_the_configured_tolerance_boundary() -> None:
+    opportunity = _opportunity(
+        {},
+        entry_fill=_ENTRY_FILL,
+        entry_target_label="0s",
+        entry_target_seconds=0,
+        entry_delay_probes={"0s": _entry_probe(label="0s", elapsed_seconds=120)},
+    )
+    assert (
+        _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+        is _ENTRY_FILL
+    )
+    opportunity_past = _opportunity(
+        {},
+        entry_fill=_ENTRY_FILL,
+        entry_target_label="0s",
+        entry_target_seconds=0,
+        entry_delay_probes={"0s": _entry_probe(label="0s", elapsed_seconds=121)},
+    )
+    assert (
+        _select_own_entry_fill_if_contemporaneous(opportunity_past, max_delta_seconds=_MAX_DELTA)
+        is None
+    )
+
+
+def test_config_hash_changes_with_contemporaneous_match_max_delta() -> None:
+    """Clarification-001 section 4.2: the tolerance must be VERSIONED
+    configuration -- two ``Phase10RunConfig``s differing only in
+    ``contemporaneous_match_max_delta`` must never hash identically."""
+    base = Phase10RunConfig(
+        entry_exit_price_max_staleness=timedelta(minutes=30),
+        cost_bps=Decimal(100),
+        max_concurrent_positions=10,
+        high_convergence_surprisal_threshold=Decimal("3.0"),
+        min_exit_specialist_score=Decimal(70),
+        max_hold_duration=timedelta(hours=6),
+        contemporaneous_match_max_delta=timedelta(minutes=2),
+    )
+    changed = Phase10RunConfig(
+        entry_exit_price_max_staleness=timedelta(minutes=30),
+        cost_bps=Decimal(100),
+        max_concurrent_positions=10,
+        high_convergence_surprisal_threshold=Decimal("3.0"),
+        min_exit_specialist_score=Decimal(70),
+        max_hold_duration=timedelta(hours=6),
+        contemporaneous_match_max_delta=timedelta(minutes=5),
+    )
+    assert base.config_hash() != changed.config_hash()

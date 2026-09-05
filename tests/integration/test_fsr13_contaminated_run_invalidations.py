@@ -115,7 +115,15 @@ async def test_registry_names_all_four_contaminated_phases_with_reason(admin_eng
         assert len(original_row.target_commit) == 40
 
         r2_02_row = by_invalidated_version["order_flow_prediction_v2"]
-        assert r2_02_row.superseded_by_algorithm_version == CURRENT_ALGORITHM_VERSION
+        # Clarification-001 (``argus-final-spec-recovery-002-clarification-
+        # 001``) subsequently bumped ALGORITHM_VERSION again (v3 -> v4) for
+        # a genuine, non-contaminating schema/algorithm evolution (no
+        # durable v3 row ever existed to invalidate) -- this row's own
+        # ``superseded_by_algorithm_version`` is a fixed historical record
+        # of what migration 0040 ACTUALLY recorded at the time (v3), never
+        # meant to track whatever ``CURRENT_ALGORITHM_VERSION`` happens to
+        # be dynamically today.
+        assert r2_02_row.superseded_by_algorithm_version == "order_flow_prediction_v3"
         # R2-02's own new rows use INVALID_FOR_EVALUATION (also a valid
         # STATUSES member) rather than SUPERSEDED -- both mean "excluded
         # from a default current report"; only the exact status string

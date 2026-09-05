@@ -23,6 +23,7 @@ already-terminal intent as a no-op read).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -52,6 +53,7 @@ from argus.executor.persistence import (
     update_execution_fill_chain_evidence,
 )
 from argus.parsing.generic_parser import parse_transaction
+from argus.providers import SignatureStatusInfo
 
 # Only "confirmed" and above are safe to treat as a durable, non-reversible
 # on-chain outcome -- Solana's weakest "processed" commitment can still be
@@ -65,24 +67,19 @@ _SOLANA_COMMITMENT_TO_CONFIRMATION_STATE = {
 _DURABLE_CONFIRMATION_STATES = frozenset({CONFIRMATION_CONFIRMED, CONFIRMATION_FINALIZED})
 
 
-class SignatureStatus(Protocol):
-    """The exact shape ``argus.providers.SignatureStatusInfo`` already
-    has -- a ``Protocol`` here so this module depends only on structure,
-    never a concrete provider client class."""
-
-    signature: str
-    confirmation_status: str | None
-    err: Any | None
-    slot: int | None
-
-
 class ChainConfirmationProvider(Protocol):
     """The minimal read-only chain-query seam reconciliation needs --
     exactly the two methods ``argus.providers.helius.client.HeliusRpcClient``
     already implements, narrowed to a ``Protocol`` so tests can supply a
-    fake without a real network/DB dependency."""
+    fake without a real network/DB dependency. ``get_signature_statuses``
+    is typed against the real, shared ``SignatureStatusInfo`` shape
+    (never a second hand-written structural duplicate of it) -- a fake
+    test double constructs and returns real ``SignatureStatusInfo``
+    instances too."""
 
-    async def get_signature_statuses(self, signatures: list[str]) -> list[SignatureStatus]: ...
+    async def get_signature_statuses(
+        self, signatures: list[str]
+    ) -> Sequence[SignatureStatusInfo]: ...
 
     async def get_transaction(self, signature: str) -> dict[str, Any]: ...
 

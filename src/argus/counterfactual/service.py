@@ -76,7 +76,17 @@ from argus.graph.loaders import load_wallet_token_entries
 from argus.graph.service import ALGORITHM_VERSION as GRAPH_ALGORITHM_VERSION
 from argus.graph.service import GraphRunConfig
 
-ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v3"
+# R2-02 clarification-001: bumped from "counterfactual_alpha_v3" --
+# WalletSpecialistScore now carries persisted source_knowledge_max_at
+# provenance (never merely as_of/created_at) proving every contributing
+# source row across all four specialist dimensions was known by cutoff;
+# load_latest_exit_skill also gained the same created_at<=cutoff bound
+# DirectionalEdge/ExpectedConfirmationEvent already had. No durable v3
+# row was ever computed against a real (non-disposable-test) database
+# this session, so nothing requires contaminated_run_invalidations
+# entries -- this bump reflects a genuine schema/algorithm change, not a
+# contaminated-result correction.
+ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v4"
 """FSR-07/FSR-13 (final spec recovery): renamed from
 ``counterfactual_alpha_specialists_v1`` -- besides versioning the
 predation-score algorithm change below, the original name (36 chars)
@@ -158,8 +168,13 @@ class Phase9ComputationResult:
     specialist_score_count: int = 0
     predation_score_count: int = 0
     exit_convergence_event_count: int = 0
-    entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[Decimal]] = field(
-        default_factory=dict
+    # R2-02 clarification-001: each entry pairs its own residual with the
+    # persisted ``CounterfactualAlphaEstimate`` row's own ``created_at``
+    # -- the source-knowledge provenance ``_compute_and_persist_
+    # specialist_scores`` needs to fold entry-specialist contributions
+    # into ``WalletSpecialistScore.source_knowledge_max_at``.
+    entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[tuple[Decimal, datetime]]] = (
+        field(default_factory=dict)
     )
 
 
@@ -222,9 +237,9 @@ async def _compute_and_persist_counterfactual_alpha(
     cutoff: datetime,
     config: Phase9RunConfig,
     computed_at: datetime,
-) -> tuple[int, dict[tuple[uuid.UUID, int], list[Decimal]]]:
+) -> tuple[int, dict[tuple[uuid.UUID, int], list[tuple[Decimal, datetime]]]]:
     config_hash = config.config_hash()
-    entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[Decimal]] = {}
+    entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[tuple[Decimal, datetime]]] = {}
     count = 0
 
     for entry in entries:
@@ -293,7 +308,7 @@ async def _compute_and_persist_counterfactual_alpha(
                 "control_token_ids": [str(t) for t in control_token_ids],
             }
 
-            await get_or_create_counterfactual_alpha_estimate(
+            estimate, _ = await get_or_create_counterfactual_alpha_estimate(
                 session,
                 prospective_event_id=entry.source_id,
                 wallet_id=entry.wallet_id,
@@ -313,7 +328,15 @@ async def _compute_and_persist_counterfactual_alpha(
             count += 1
             if residual is not None:
                 key = (entry.wallet_id, horizon_seconds)
-                entry_alpha_by_wallet_horizon.setdefault(key, []).append(residual)
+                # R2-02 clarification-001: pairs the residual with the
+                # persisted estimate row's own created_at, so
+                # _compute_and_persist_specialist_scores can fold this
+                # contribution's real knowledge time into
+                # source_knowledge_max_at -- never just the estimate's
+                # as_of label.
+                entry_alpha_by_wallet_horizon.setdefault(key, []).append(
+                    (residual, estimate.created_at)
+                )
 
     return count, entry_alpha_by_wallet_horizon
 
@@ -322,26 +345,41 @@ async def _compute_and_persist_specialist_scores(
     session: AsyncSession,
     *,
     entries: list[WalletTokenEntry],
-    entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[Decimal]],
+    entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[tuple[Decimal, datetime]]],
     cutoff: datetime,
     graph_config: GraphRunConfig,
     config: Phase9RunConfig,
     computed_at: datetime,
 ) -> int:
+    """R2-02 clarification-001 section 3: the persisted
+    ``WalletSpecialistScore.source_knowledge_max_at`` is the MAX
+    ``created_at`` among every source row that actually contributed to
+    THIS wallet's score (across all four specialist dimensions) --
+    machine-checkable proof that every source item was known by
+    ``cutoff``, independent of the score row's own physical persistence
+    time. A wallet with zero contributing sources in every dimension
+    gets ``cutoff`` itself (a trivially safe bound: no evidence was used,
+    so there is nothing to leak)."""
     config_hash = config.config_hash()
     entry_horizon_seconds = int(config.entry_specialist_horizon.total_seconds())
 
     all_wallet_ids = {e.wallet_id for e in entries}
 
     entry_scores: dict[uuid.UUID, tuple[Decimal, int]] = {}
+    entry_max_created_at: dict[uuid.UUID, datetime] = {}
     for wallet_id in all_wallet_ids:
-        values = entry_alpha_by_wallet_horizon.get((wallet_id, entry_horizon_seconds), [])
-        if values:
+        pairs = entry_alpha_by_wallet_horizon.get((wallet_id, entry_horizon_seconds), [])
+        if pairs:
+            values = [residual for residual, _ in pairs]
             entry_scores[wallet_id] = (sum(values, Decimal(0)) / Decimal(len(values)), len(values))
+            entry_max_created_at[wallet_id] = max(created_at for _, created_at in pairs)
 
     discovery_scores: dict[uuid.UUID, tuple[Decimal, int]] = {}
     validation_scores: dict[uuid.UUID, tuple[Decimal, int]] = {}
     exit_scores: dict[uuid.UUID, Decimal] = {}
+    discovery_max_created_at: dict[uuid.UUID, datetime] = {}
+    validation_max_created_at: dict[uuid.UUID, datetime] = {}
+    exit_created_at: dict[uuid.UUID, datetime] = {}
 
     for wallet_id in all_wallet_ids:
         outgoing = (
@@ -375,6 +413,7 @@ async def _compute_and_persist_specialist_scores(
                 sum(effect_sizes, Decimal(0)) / Decimal(len(effect_sizes)),
                 len(effect_sizes),
             )
+            discovery_max_created_at[wallet_id] = max(e.created_at for e in outgoing)
 
         confirmations = (
             (
@@ -397,10 +436,11 @@ async def _compute_and_persist_specialist_scores(
                 Decimal(not_absent) / Decimal(len(confirmations)),
                 len(confirmations),
             )
+            validation_max_created_at[wallet_id] = max(c.created_at for c in confirmations)
 
         exit_skill = await load_latest_exit_skill(session, wallet_id=wallet_id, cutoff=cutoff)
         if exit_skill is not None:
-            exit_scores[wallet_id] = exit_skill
+            exit_scores[wallet_id], exit_created_at[wallet_id] = exit_skill
 
     entry_population = [v for v, _ in entry_scores.values()]
     discovery_population = [v for v, _ in discovery_scores.values()]
@@ -436,6 +476,25 @@ async def _compute_and_persist_specialist_scores(
             }
         )
 
+        # R2-02 clarification-001: the max known-by-cutoff creation time
+        # across every dimension that actually contributed a value for
+        # this wallet -- never the score row's OWN created_at, which
+        # only reflects when THIS computation ran, not when its source
+        # evidence became knowable. A wallet with no contributing source
+        # in any dimension falls back to cutoff itself (no evidence used
+        # -> nothing to leak).
+        contributing_times = [
+            t
+            for t in (
+                entry_max_created_at.get(wallet_id),
+                discovery_max_created_at.get(wallet_id),
+                validation_max_created_at.get(wallet_id),
+                exit_created_at.get(wallet_id),
+            )
+            if t is not None
+        ]
+        source_knowledge_max_at = max(contributing_times) if contributing_times else cutoff
+
         await get_or_create_wallet_specialist_score(
             session,
             wallet_id=wallet_id,
@@ -452,6 +511,7 @@ async def _compute_and_persist_specialist_scores(
             validation_percentile=validation_percentile,
             exit_percentile=exit_percentile,
             dominant_specialty=specialty,
+            source_knowledge_max_at=source_knowledge_max_at,
             algorithm_version=ALGORITHM_VERSION,
             config_hash=config_hash,
             now=computed_at,

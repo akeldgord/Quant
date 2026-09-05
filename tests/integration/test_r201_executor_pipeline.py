@@ -48,10 +48,12 @@ from sqlalchemy.ext.asyncio import (
 from argus.config import load_config
 from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
+from argus.domain.execution_fills import ExecutionFill
 from argus.domain.execution_intents import (
     SIDE_BUY,
     STATE_CONFIRMED,
     STATE_REJECTED,
+    STATE_SUBMITTED,
     STATE_UNKNOWN,
     ExecutionIntent,
 )
@@ -343,6 +345,29 @@ class _RecordingSubmit:
         return self.signature
 
 
+class _SimulatedCrash(RuntimeError):
+    """Raised by ``_CrashingConfirmationProvider`` to stand in for a real
+    process-abort/crash happening exactly at the point a real process
+    would have already durably committed signature+SUBMITTED and would
+    next call the confirmation provider -- clarification-001 section 2's
+    own required test semantics."""
+
+
+class _CrashingConfirmationProvider:
+    """Simulates a process crash immediately after the durable
+    signature+SUBMITTED commit and before confirmation completes -- the
+    pipeline calls this only AFTER that commit (see
+    ``execute_intent_pipeline``'s own ordering), so raising here proves
+    the commit already happened durably, in a separate transaction the
+    crash cannot roll back."""
+
+    async def get_signature_statuses(self, signatures: list[str]) -> list[Any]:
+        raise _SimulatedCrash("simulated process crash during confirmation polling")
+
+    async def get_transaction(self, signature: str) -> dict[str, Any]:
+        raise _SimulatedCrash("simulated process crash during confirmation polling")
+
+
 def _unique_signature() -> str:
     return f"r201-test-sig-{uuid.uuid4().hex}"
 
@@ -406,7 +431,7 @@ async def test_executor_e2e_safe_synthetic_intent(admin_engine: AsyncEngine) -> 
             ),
             dispatch=DispatchGuard(signer=FakeSigner(public_key=scenario.wallet), submit=submit),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
             outcome = await execute_intent_pipeline(
                 session,
@@ -450,7 +475,7 @@ async def test_attestation_failure_never_signs_or_submits(admin_engine: AsyncEng
             confirmation_provider=_ScriptedConfirmationProvider(signature="unused", confirmed=True),
             dispatch=DispatchGuard(signer=FakeSigner(public_key=scenario.wallet), submit=submit),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
             outcome = await execute_intent_pipeline(
                 session,
@@ -494,7 +519,7 @@ async def test_signing_failure_never_submits(admin_engine: AsyncEngine) -> None:
             confirmation_provider=_ScriptedConfirmationProvider(signature="unused", confirmed=True),
             dispatch=DispatchGuard(signer=RaisingSigner(), submit=submit),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
             outcome = await execute_intent_pipeline(
                 session,
@@ -535,7 +560,7 @@ async def test_missing_or_bad_operator_key_fails_closed(admin_engine: AsyncEngin
             confirmation_provider=_ScriptedConfirmationProvider(signature="unused", confirmed=True),
             dispatch=DispatchGuard(signer=RaisingSigner()),  # default raising_submission too
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
             outcome = await execute_intent_pipeline(
                 session,
@@ -579,7 +604,7 @@ async def test_submission_response_persisted_before_confirmation(admin_engine: A
             ),
             dispatch=DispatchGuard(signer=FakeSigner(public_key=scenario.wallet), submit=submit),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
             outcome = await execute_intent_pipeline(
                 session,
@@ -608,6 +633,20 @@ async def test_submission_response_persisted_before_confirmation(admin_engine: A
 async def test_crash_after_submission_restart_reconciles_same_signature_without_second_submit(
     admin_engine: AsyncEngine,
 ) -> None:
+    """Clarification-001 section 2's exact required semantics: this must
+    simulate a REAL database crash boundary, not merely "first call
+    returns normally, then open a second session." Proves, in order:
+    (1) the fake submission seam is called exactly once and returns S;
+    (2) S + SUBMITTED are visible from a SEPARATE fresh DB
+    connection/session BEFORE confirmation is allowed to run;
+    (3) an exception is injected immediately after that durable boundary
+    and before confirmation completes (``_CrashingConfirmationProvider``,
+    called only after ``execute_intent_pipeline``'s own durable commit);
+    (4) restart from a fresh session/process-equivalent;
+    (5) the restart loads S and reconciles S;
+    (6) quote/build/sign/submit are not called again (``_Raising*``
+    fakes would raise if touched);
+    (7) total submission count across both runs remains exactly 1."""
     scenario = _Scenario()
     token_id = await _seed_token_via_admin(admin_engine, mint=scenario.token_mint)
     signature = _unique_signature()
@@ -618,35 +657,48 @@ async def test_crash_after_submission_restart_reconciles_same_signature_without_
             intent_id = intent.intent_id
 
         submit = _RecordingSubmit(signature)
-        first_pass_deps = PipelineDependencies(
+        crashing_deps = PipelineDependencies(
             quote_provider=_FakeQuoteProvider(scenario),
             simulation_provider=_FakeSimulationProvider(scenario.simulation_result()),
-            confirmation_provider=_ScriptedConfirmationProvider(
-                signature=signature, confirmed=False
-            ),
+            confirmation_provider=_CrashingConfirmationProvider(),
             dispatch=DispatchGuard(signer=FakeSigner(public_key=scenario.wallet), submit=submit),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
-            first_outcome = await execute_intent_pipeline(
-                session,
-                intent=intent,
-                lease=_valid_lease(),
-                now=_NOW,
-                risk_inputs=_passing_risk_inputs(),
-                executor_wallet_public_key=scenario.wallet,
-                token_mint=scenario.token_mint,
-                slippage_bps=50,
-                max_total_fee_raw=100_000,
-                deps=first_pass_deps,
-            )
-        assert first_outcome.intent.state == STATE_UNKNOWN
-        assert len(submit.calls) == 1
+            with pytest.raises(_SimulatedCrash):
+                await execute_intent_pipeline(
+                    session,
+                    intent=intent,
+                    lease=_valid_lease(),
+                    now=_NOW,
+                    risk_inputs=_passing_risk_inputs(),
+                    executor_wallet_public_key=scenario.wallet,
+                    token_mint=scenario.token_mint,
+                    slippage_bps=50,
+                    max_total_fee_raw=100_000,
+                    deps=crashing_deps,
+                )
 
-        # Simulated restart: a fresh engine/session reloads the intent.
-        # The quote/simulation providers and the submit callable would all
-        # raise if touched again -- proving the restart-safe path never
-        # re-enters the forward pipeline.
+        # (1) + (2): exactly one real submission happened, and its
+        # signature + SUBMITTED state are durably visible from a BRAND
+        # NEW session/connection -- the crash (raised just above, inside
+        # confirmation) could not roll this back because it was already
+        # committed before confirmation was ever called.
+        assert len(submit.calls) == 1
+        async with sessionmaker() as verify_session:
+            durable_intent = await _load_intent(verify_session, intent_id=intent_id)
+            assert durable_intent.state == STATE_SUBMITTED
+            durable_fill = (
+                await verify_session.execute(
+                    select(ExecutionFill).where(ExecutionFill.intent_id == intent_id)
+                )
+            ).scalar_one()
+            assert durable_fill.transaction_signature == signature
+
+        # (4)-(7): restart from a fresh engine/session/connection. The
+        # quote/simulation providers and the signer would all raise if
+        # touched again -- proving the restart-safe path never re-enters
+        # the forward pipeline and never re-submits.
         fresh_engine, fresh_sessionmaker = _executor_sessionmaker()
         try:
             restart_deps = PipelineDependencies(
@@ -657,9 +709,9 @@ async def test_crash_after_submission_restart_reconciles_same_signature_without_
                 ),
                 dispatch=DispatchGuard(signer=RaisingSigner(), submit=submit),
             )
-            async with fresh_sessionmaker() as session, session.begin():
+            async with fresh_sessionmaker() as session:
                 reloaded = await _load_intent(session, intent_id=intent_id)
-                assert reloaded.state == STATE_UNKNOWN
+                assert reloaded.state == STATE_SUBMITTED
                 second_outcome = await execute_intent_pipeline(
                     session,
                     intent=reloaded,
@@ -701,7 +753,7 @@ async def test_terminal_restart_noop(admin_engine: AsyncEngine) -> None:
             ),
             dispatch=DispatchGuard(signer=FakeSigner(public_key=scenario.wallet), submit=submit),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             intent = await _load_intent(session, intent_id=intent_id)
             await execute_intent_pipeline(
                 session,
@@ -724,7 +776,7 @@ async def test_terminal_restart_noop(admin_engine: AsyncEngine) -> None:
             confirmation_provider=_ScriptedConfirmationProvider(signature="unused", confirmed=True),
             dispatch=DispatchGuard(signer=RaisingSigner()),
         )
-        async with sessionmaker() as session, session.begin():
+        async with sessionmaker() as session:
             reloaded = await _load_intent(session, intent_id=intent_id)
             assert reloaded.state == STATE_CONFIRMED
             outcome = await execute_intent_pipeline(

@@ -2708,6 +2708,12 @@ def synthetic_report(
         high_convergence_surprisal_threshold=Decimal("3.0"),
         min_exit_specialist_score=Decimal(70),
         max_hold_duration=timedelta(hours=max_hold_hours),
+        # Clarification-001 section 4.2: a principled, versioned absolute
+        # tolerance -- generous enough to absorb ordinary real-world probe
+        # processing/network jitter, tight enough to still reject a
+        # wildly-drifted or wrong-horizon fill/quote. Not tuned against
+        # any particular backtest's own results.
+        contemporaneous_match_max_delta=timedelta(minutes=2),
     )
 
     async def _run() -> int:

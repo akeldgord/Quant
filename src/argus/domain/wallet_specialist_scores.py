@@ -79,6 +79,10 @@ class WalletSpecialistScore(Base):
         CheckConstraint(
             "length(config_hash) > 0", name="ck_wallet_specialist_scores_config_hash_nonempty"
         ),
+        CheckConstraint(
+            "source_knowledge_max_at <= as_of",
+            name="ck_wallet_specialist_scores_source_knowledge_not_after_as_of",
+        ),
     )
 
     score_id: Mapped[uuid.UUID] = mapped_column(
@@ -115,6 +119,19 @@ class WalletSpecialistScore(Base):
     validation_percentile: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     exit_percentile: Mapped[Decimal | None] = mapped_column(Numeric(20, 15), nullable=True)
     dominant_specialty: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # R2-02 (argus-final-spec-recovery-002-clarification-001): machine-
+    # checkable source-knowledge provenance -- the MAX created_at/
+    # knowledge-time among every source row that actually contributed to
+    # this score (across all four specialist dimensions), never merely
+    # this row's OWN created_at (which only reflects when this
+    # computation ran, not when its source evidence became knowable). A
+    # loader consuming this row at decision time T must verify
+    # source_knowledge_max_at <= T in addition to as_of == T -- as_of
+    # alone is not sufficient proof of knowledge-time eligibility.
+    source_knowledge_max_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
     algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(64), nullable=False)

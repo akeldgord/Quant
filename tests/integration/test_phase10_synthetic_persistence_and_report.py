@@ -49,6 +49,7 @@ from argus.domain.shadow_positions import ShadowPosition
 from argus.domain.shadow_quote_probes import (
     OUTCOME_NO_ROUTE,
     OUTCOME_SUCCESS,
+    PROBE_KIND_ENTRY_DELAY,
     PROBE_KIND_REVERSE_EXECUTABLE,
     ShadowQuoteProbe,
 )
@@ -267,6 +268,34 @@ async def _seed_shadow_fill_and_quote(
     )
     await session.flush()
 
+    # Clarification-001 section 4.1: Strategy A/B's own entry_fill is only
+    # used when its OWN real observed timing (this SAME "0s" ENTRY_DELAY
+    # probe's ``actual_elapsed_seconds_from_first_seen``) is genuinely
+    # contemporaneous with its own configured target -- every fixture
+    # relying on a real (non-``FAILURE_NO_EXECUTABLE_EVIDENCE``) Strategy
+    # A/B outcome must seed this probe alongside the position's own fill.
+    session.add(
+        ShadowQuoteProbe(
+            probe_id=uuid.uuid4(),
+            probe_kind=PROBE_KIND_ENTRY_DELAY,
+            target_label="0s",
+            shadow_intent_id=intent_id,
+            input_mint=SOL_MINT,
+            output_mint=output_mint,
+            notional_input_amount_raw=entry_input_amount_raw,
+            target_due_at=entered_at,
+            requested_at=entered_at,
+            responded_at=entered_at + timedelta(milliseconds=50),
+            terminal_at=entered_at + timedelta(milliseconds=50),
+            expected_output_amount_raw=entry_output_amount_raw,
+            route_present=True,
+            outcome=OUTCOME_SUCCESS,
+            algorithm_version="p10-fsr08-test",
+            created_at=entered_at,
+        )
+    )
+    await session.flush()
+
     session.add(
         ShadowQuoteProbe(
             probe_id=uuid.uuid4(),
@@ -366,6 +395,7 @@ _CONFIG = Phase10RunConfig(
     high_convergence_surprisal_threshold=Decimal("3.0"),
     min_exit_specialist_score=Decimal(70),
     max_hold_duration=timedelta(hours=6),
+    contemporaneous_match_max_delta=timedelta(minutes=2),
 )
 
 
@@ -499,6 +529,150 @@ async def test_strategy_a_uses_real_executable_return_not_mark_price(admin_engin
                 .all()
             )
             assert {s.strategy_code for s in summaries} == set(STRATEGY_CODES)
+    finally:
+        await engine.dispose()
+
+
+async def test_strategy_a_drifted_entry_fill_timing_is_no_executable_evidence(admin_engine) -> None:
+    """Clarification-001 section 4.1: Strategy A must never trust
+    ``opportunity.entry_fill`` unconditionally -- here the position's own
+    "0s" ENTRY_DELAY probe's REAL processing did not actually terminate
+    until 2 hours after ``first_seen_at`` (a stalled-worker-style drift
+    far past its own configured target), even though a perfectly good,
+    contemporaneous 5m reverse-quote probe exists. The trade must be
+    honestly ``FAILURE_NO_EXECUTABLE_EVIDENCE``, never priced off that
+    drifted fill."""
+    config, engine, sessionmaker = _sessionmaker()
+    try:
+        wallet_address = _unique_wallet()
+        async with sessionmaker() as session, session.begin():
+            wallet_id = await _seed_wallet(session, address=wallet_address, at=_NOW)
+            mint = _unique_mint()
+            token_id = await _seed_token(session, mint=mint, at=_NOW)
+            exit_at = _NOW + timedelta(minutes=5)
+            prospective_event_id = await _seed_trade_fixture(
+                session,
+                wallet_address=wallet_address,
+                wallet_id=wallet_id,
+                token_id=token_id,
+                mint=mint,
+                entered_at=_NOW,
+                exit_at=exit_at,
+            )
+
+            intent_id = uuid.uuid4()
+            session.add(
+                ShadowIntent(
+                    shadow_intent_id=intent_id,
+                    prospective_event_id=prospective_event_id,
+                    wallet_id=wallet_id,
+                    token_id=token_id,
+                    input_mint=SOL_MINT,
+                    output_mint=mint,
+                    notional_input_amount_raw=100_000_000,
+                    config_hash="p10-r203-drift-test-config",
+                    status=STATUS_FILLED,
+                    algorithm_version="p10-r203-drift-test",
+                    created_at=_NOW,
+                )
+            )
+            await session.flush()
+            position_id = uuid.uuid4()
+            session.add(
+                ShadowPosition(
+                    shadow_position_id=position_id,
+                    shadow_intent_id=intent_id,
+                    wallet_id=wallet_id,
+                    token_id=token_id,
+                    input_mint=SOL_MINT,
+                    output_mint=mint,
+                    entry_input_amount_raw=100_000_000,
+                    entry_output_amount_raw=200_000_000,
+                    entry_price_impact_pct=Decimal("0.5"),
+                    entry_route_present=True,
+                    entry_probe_target_label="0s",
+                    entry_requested_at=_NOW,
+                    entry_responded_at=_NOW,
+                    opened_at=_NOW,
+                    algorithm_version="p10-r203-drift-test",
+                    created_at=_NOW,
+                )
+            )
+            await session.flush()
+            # The defect: this probe's REAL terminal_at is 2 HOURS after
+            # first_seen_at -- wildly past its own "0s" configured target
+            # -- even though it did eventually resolve a real fill.
+            session.add(
+                ShadowQuoteProbe(
+                    probe_id=uuid.uuid4(),
+                    probe_kind=PROBE_KIND_ENTRY_DELAY,
+                    target_label="0s",
+                    shadow_intent_id=intent_id,
+                    input_mint=SOL_MINT,
+                    output_mint=mint,
+                    notional_input_amount_raw=100_000_000,
+                    target_due_at=_NOW,
+                    requested_at=_NOW,
+                    responded_at=_NOW + timedelta(hours=2),
+                    terminal_at=_NOW + timedelta(hours=2),
+                    expected_output_amount_raw=200_000_000,
+                    route_present=True,
+                    outcome=OUTCOME_SUCCESS,
+                    algorithm_version="p10-r203-drift-test",
+                    created_at=_NOW,
+                )
+            )
+            session.add(
+                ShadowQuoteProbe(
+                    probe_id=uuid.uuid4(),
+                    probe_kind=PROBE_KIND_REVERSE_EXECUTABLE,
+                    target_label=_PRIMARY_HORIZON,
+                    shadow_position_id=position_id,
+                    input_mint=mint,
+                    output_mint=SOL_MINT,
+                    notional_input_amount_raw=200_000_000,
+                    target_due_at=_NOW + timedelta(minutes=5),
+                    requested_at=_NOW + timedelta(minutes=5),
+                    responded_at=_NOW + timedelta(minutes=5, milliseconds=100),
+                    terminal_at=_NOW + timedelta(minutes=5, milliseconds=100),
+                    expected_output_amount_raw=90_000_000,
+                    route_present=True,
+                    outcome=OUTCOME_SUCCESS,
+                    algorithm_version="p10-r203-drift-test",
+                    created_at=_NOW,
+                )
+            )
+
+        cutoff = _NOW + timedelta(hours=3)
+        async with sessionmaker() as session, session.begin():
+            await compute_and_persist_phase10(
+                session,
+                cutoff=cutoff,
+                graph_config=_GRAPH_CONFIG,
+                phase8_config=_PHASE8_CONFIG,
+                phase9_config=_PHASE9_CONFIG,
+                config=_CONFIG,
+                computed_at=_NOW,
+            )
+
+        async with sessionmaker() as session:
+            trades = (
+                (
+                    await session.execute(
+                        select(SyntheticStrategyTrade).where(
+                            SyntheticStrategyTrade.strategy_code == "A",
+                            SyntheticStrategyTrade.token_id == token_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(trades) == 1
+            trade = trades[0]
+            assert trade.outcome == "FAILURE_NO_EXECUTABLE_EVIDENCE"
+            assert trade.gross_return is None
+            assert trade.net_return is None
     finally:
         await engine.dispose()
 
@@ -691,6 +865,7 @@ async def test_strategy_b_discovery_filter_uses_entrys_own_decision_time(admin_e
                     validation_percentile=None,
                     exit_percentile=None,
                     dominant_specialty="DISCOVERY",
+                    source_knowledge_max_at=cutoff,
                     algorithm_version=PHASE9_ALGORITHM_VERSION,
                     config_hash=_PHASE9_CONFIG.config_hash(),
                     created_at=_NOW,

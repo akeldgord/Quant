@@ -151,7 +151,14 @@ async def load_discovery_effect_size_by_wallet(
     callers must invoke this once per DISTINCT observation decision time
     actually needed (never once at the final run cutoff, reused backward
     for every observation) -- the same per-decision-time pattern FSR-08
-    established for ``argus.synthetic.service``."""
+    established for ``argus.synthetic.service``.
+
+    R2-02 clarification-001: also requires
+    ``source_knowledge_max_at <= cutoff`` -- ``as_of == cutoff`` alone
+    only proves the row's own label matches, never that every source row
+    it was built from was itself known by cutoff. See
+    ``argus.synthetic.loaders.load_specialist_scores_as_of``'s own
+    docstring for the full reasoning (same invariant, same table)."""
     rows = (
         (
             await session.execute(
@@ -159,6 +166,7 @@ async def load_discovery_effect_size_by_wallet(
                     WalletSpecialistScore.as_of == cutoff,
                     WalletSpecialistScore.algorithm_version == algorithm_version,
                     WalletSpecialistScore.config_hash == config_hash,
+                    WalletSpecialistScore.source_knowledge_max_at <= cutoff,
                 )
             )
         )

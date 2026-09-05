@@ -92,7 +92,13 @@ from argus.prediction.validation import has_adequate_sample, purged_embargoed_sp
 # "order_flow_prediction_v2" row computed against the leaky Phase 9
 # input; every such row is invalidated by
 # ``contaminated_run_invalidations``.
-ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v3"
+# R2-02 clarification-001: bumped again from "order_flow_prediction_v3"
+# -- propagates Phase 9's "counterfactual_alpha_v4" (persisted
+# source_knowledge_max_at provenance, see that module's own docstring).
+# No code in THIS module changed, but its own discovery-effect-size
+# feature is read straight from the newly-provenance-checked Phase 9
+# rows via load_discovery_effect_size_by_wallet.
+ALGORITHM_VERSION: Final[str] = "order_flow_prediction_v4"
 
 _PHASE11_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "elite.py",
