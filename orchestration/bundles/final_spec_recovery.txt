@@ -1,5 +1,5 @@
-ARGUS ORCHESTRATOR REVIEW BUNDLE — argus-final-spec-recovery-002 (BOUNDED FINAL RECOVERY, ROUND 2: R2-01..R2-04), clarified by argus-final-spec-recovery-002-clarification-001
-Generated: 2026-09-05T03:10:00Z (this clarification round; base round generated 2026-09-04T23:45:00Z)
+ARGUS ORCHESTRATOR REVIEW BUNDLE — argus-final-spec-recovery-002 (BOUNDED FINAL RECOVERY, ROUND 2: R2-01..R2-04), clarified by argus-final-spec-recovery-002-clarification-001 and argus-final-spec-recovery-002-clarification-002 (the final clarification)
+Generated: 2026-09-05T06:09:13Z (this clarification round; clarification-001 generated 2026-09-05T03:10:00Z; base round generated 2026-09-04T23:45:00Z)
 
 === CHECKPOINT ===
 (see orchestration/checkpoints/final_spec_recovery.md for the full checkpoint;
@@ -8,60 +8,61 @@ embedded identity/summary below, full document is the source of truth)
 PROJECT: ARGUS
 MASTER_SPEC_VERSION: 2.0
 MASTER_SPEC_HASH: 41f7242c288feec709b1ed72e62c74a1dc5e3b3cd9ad01e9b6e28373d9d14011
-PHASE: 11 (bounded final spec recovery remediation round 2, argus-final-spec-recovery-002, clarified by argus-final-spec-recovery-002-clarification-001)
+PHASE: 11 (bounded final spec recovery remediation round 2, argus-final-spec-recovery-002, clarified by argus-final-spec-recovery-002-clarification-001 and argus-final-spec-recovery-002-clarification-002)
 STATUS: PARTIAL (all R2-01..R2-04 software requirements PASS, including every
-  literal clarification in argus-final-spec-recovery-002-clarification-001;
-  sole remaining blocker is PostgreSQL 17 environment access, an external
-  sandbox restriction, not a software defect)
+  literal clarification in BOTH clarification-001 and clarification-002,
+  explicitly marked "the final clarification" of the already-frozen
+  contract; sole remaining blocker is PostgreSQL 17 environment access, an
+  external sandbox restriction, not a software defect)
 ORIGINAL_CONTAMINATED_BASE_COMMIT: ea77dd55b1e6be91b61b2f8b37e1d70449a3cb30
 REMEDIATION_001_AUDITED_HEAD: 7cca4094d7672759b1023733a810f552f1109040
 FINAL_REMEDIATION_002_IMPLEMENTATION_COMMIT: b791a4011d36c0519a8c5542918c6274eaee5c71
 FINAL_REMEDIATION_002_EVIDENCE_COMMIT: 1117d4e
 CLARIFICATION_001_INSTRUCTION_COMMIT: 72c69c0b7fcbe2497a8745f562cfd1c6480469fc
 CLARIFICATION_001_IMPLEMENTATION_COMMIT: 140e9bd
+CLARIFICATION_001_EVIDENCE_COMMIT: 8214099
+CLARIFICATION_002_INSTRUCTION_COMMIT: 12e57a55da6a291d2e80e16c8725c0e6f54ae8e5
+CLARIFICATION_002_IMPLEMENTATION_COMMIT: 563ea11
 GIT_COMMIT (at bundle write time): (this bundle's own commit -- see `git log -1`)
 
 === GIT STATUS ===
 $ git status --porcelain
 (clean after this commit -- checkpoint/bundle/BUILD_STATE/DECISION_LOG/AGENT_HANDOFF
-committed together with the clarification-001 code+test changes)
+committed together with the clarification-002 code+test changes)
 
-=== GIT LOG -7 --ONELINE (before this bundle's own evidence commit) ===
+=== GIT LOG -8 --ONELINE (before this bundle's own evidence commit) ===
+563ea11 Clarification-002: R2-01 human-canary execution mode, R2-02 entry-specialist source-evidence knowledge time, R2-03 A/B strategy-trigger timing
+12e57a5 orchestration: final clarification of frozen recovery acceptance
+8214099 Clarification-001 final evidence: checkpoint, bundle, BUILD_STATE/DECISION_LOG, handoff
 140e9bd Clarification-001: R2-01 durable commit + single-intent wiring, R2-02 persisted source-knowledge provenance, R2-03 A/B entry-fill timing + versioned tolerance
 72c69c0 orchestration: clarify frozen recovery-002 acceptance semantics
 1117d4e FSR/R2 final evidence: checkpoint, bundle, BUILD_STATE/DECISION_LOG, handoff
 b791a40 R2-01..R2-04: bounded final spec recovery remediation (argus-final-spec-recovery-002)
 053f11d orchestration: authorize bounded final recovery remediation 002
 7cca409 FSR-16: replace AGENT_HANDOFF.md with final recovery handoff
-ffb4313 FSR-15/16: final recovery acceptance matrix + BUILD_STATE/DECISION_LOG evidence
 
-=== DIFF STAT (1117d4e..HEAD, this clarification round only, excluding orchestration/ORCHESTRATOR_INSTRUCTIONS.md) ===
-18 files changed, 1506 insertions(+), 192 deletions(-), plus 2 new files
+=== DIFF STAT (8214099..HEAD, this clarification round only, excluding orchestration/ORCHESTRATOR_INSTRUCTIONS.md and this checkpoint/bundle) ===
+8 files changed, 714 insertions(+), 130 deletions(-), plus 6 new files
 
-=== DIFF NAME-STATUS (1117d4e..HEAD, this clarification round only) ===
-M	src/argus/cli.py
+=== DIFF NAME-STATUS (8214099..HEAD, this clarification round only) ===
 M	src/argus/counterfactual/loaders.py
-M	src/argus/counterfactual/persistence.py
 M	src/argus/counterfactual/service.py
-M	src/argus/domain/wallet_specialist_scores.py
-M	src/argus/executor/confirmation.py
 M	src/argus/executor/main.py
-M	src/argus/executor/pipeline.py
+M	src/argus/executor/persistence.py
 M	src/argus/prediction/loaders.py
-M	src/argus/prediction/service.py
-M	src/argus/synthetic/loaders.py
 M	src/argus/synthetic/service.py
-M	tests/integration/test_fsr13_contaminated_run_invalidations.py
-M	tests/integration/test_phase10_synthetic_persistence_and_report.py
-M	tests/integration/test_phase11_prediction_persistence_and_report.py
-M	tests/integration/test_r201_executor_pipeline.py
-M	tests/integration/test_r202_specialist_knowledge_time.py
+M	tests/unit/test_r201_single_intent_mode.py
 M	tests/unit/test_r203_phase10_executable_matching.py
-A	migrations/versions/0041_r2_02_specialist_score_source_knowledge_provenance.py
-A	tests/unit/test_r201_single_intent_mode.py
+A	migrations/versions/0042_phase65_canary_result_evidence.py
+A	src/argus/domain/phase65_canary_results.py
+A	src/argus/executor/canary.py
+A	tests/integration/test_r201_canary_evidence.py
+A	tests/integration/test_r202_entry_specialist_knowledge_time.py
+A	tests/unit/test_r201_canary_authorization.py
 
-(the base round's own 42-file diff, 7cca409..b791a40, is unchanged and
-remains in the checkpoint's section C for historical reference)
+(the base round's own 42-file diff, 7cca409..b791a40, and clarification-001's
+own 18-file diff, 1117d4e..8214099, are unchanged and remain in the
+checkpoint's sections C/C-CLARIFICATION-001 for historical reference)
 
 === REPOSITORY TREE (top-level) ===
 .claude/ .env .env.example Dockerfile MASTER_SPEC.md Makefile README.md
@@ -70,7 +71,7 @@ pyproject.toml runtime/ scripts/ src/ tests/ uv.lock
 
 === DEPENDENCY SUMMARY ===
 $ uv lock --check
-Resolved 64 packages in 3ms
+Resolved 64 packages in 4ms
 (lockfile unchanged and consistent with pyproject.toml; no new dependency
 added by this clarification round)
 
@@ -83,18 +84,25 @@ $ grep -E "^  [a-z_]+:" compose.yaml
 
 === ALEMBIC HEAD ===
 $ uv run alembic current
-0041 (head)
-(single head; migration 0041 added this round -- additive: nullable column
--> backfill -> NOT NULL -> CHECK constraint on wallet_specialist_scores,
-no destructive DDL, no new contaminated_run_invalidations row)
+0042 (head)
+(single head; migration 0042 added this round -- purely additive: a
+brand-new phase65_canary_results table, no changes to any existing
+table/column/grant, no new contaminated_run_invalidations row)
 
 === DB COUNTS (ordinary `argus` database, post-validation) ===
 alembic_version: 1
-contaminated_run_invalidations: 7 (UNCHANGED from the base round -- this
-  round's three ALGORITHM_VERSION _v3 -> _v4 bumps genuinely required no
+contaminated_run_invalidations: 7 (UNCHANGED from every prior round -- this
+  round's two ALGORITHM_VERSION _v4 -> _v5 bumps genuinely required no
   new invalidation row)
-(every other table: 0 rows -- no test data written to the ordinary
-developer database this round; unchanged from the base round)
+chain_events/swaps/commitment_observations/parse_attempts: 4 each;
+  wallet_stream_state: 1 (pre-existing Phase 1 development-era artifacts,
+  NOT introduced by this round -- every test this round exclusively uses
+  the per-test isolated_database fixture, and the one CLI command run
+  directly against this database, `argus fixtures validate-real-chain`,
+  is a pure filesystem/hash-check with no DB access at all)
+phase65_canary_results: 0 (no real canary evidence was ever written this
+  round; only test-database rows, dropped with each isolated per-test
+  database)
 
 === PROVIDER USAGE ===
 No provider calls made this round. All new/modified tests use exclusively
@@ -102,35 +110,36 @@ caller-scripted fakes and direct DB fixtures -- never a real
 Jupiter/Helius/RPC call. No paid provider was enabled or touched.
 
 === TEST SUMMARY (this clarification round) ===
-R2-01 focused (+ 7 new single-intent-mode tests): 26 passed, 0 failed
+R2-01 focused (canary authorization/evidence, 3 test files): 38 passed, 0 failed
   $ uv run pytest tests/integration/test_r201_executor_pipeline.py \
-      tests/unit/test_r201_token_account_codec.py \
-      tests/unit/test_r201_tx_deserialize.py \
-      tests/unit/test_r201_compose_secret_isolation.py \
-      tests/unit/test_r201_single_intent_mode.py -q
-R2-02 focused (+ 3 new tests, incl. the full 7-step mutation recipe): 5 passed, 0 failed
-  $ uv run pytest tests/integration/test_r202_specialist_knowledge_time.py -q
-R2-03 focused (+ 10 new tests): 29 passed, 0 failed
+      tests/integration/test_r201_canary_evidence.py \
+      tests/unit/test_r201_single_intent_mode.py \
+      tests/unit/test_r201_canary_authorization.py -q
+R2-02/R2-03 combined focused (shared Phase 9/10/11 fixture files): 51 passed, 0 failed
   $ uv run pytest tests/unit/test_r203_phase10_executable_matching.py \
-      tests/integration/test_phase10_synthetic_persistence_and_report.py -q
-Full unit+golden+replay: 1333 passed, 0 failed
+      tests/integration/test_phase10_synthetic_persistence_and_report.py \
+      tests/integration/test_phase9_counterfactual_persistence_and_report.py \
+      tests/integration/test_r202_specialist_knowledge_time.py \
+      tests/integration/test_r202_entry_specialist_knowledge_time.py \
+      tests/integration/test_phase11_prediction_persistence_and_report.py -q
+Full unit+golden+replay: 1354 passed, 0 failed
   $ uv run pytest tests/unit tests/golden tests/replay -q
-Full integration: 418 passed, 0 failed (one genuine pre-existing
-  test-assumption bug found and fixed mid-round -- see "KNOWN-BUG FIX" below)
+Full integration: 426 passed, 0 failed
   $ uv run pytest tests/integration -q
-Real-chain fixtures: unaffected this round (base round's own 12/12 ok stands)
+Full suite from repo root (includes tests/phase_1_5's 7 tests, not
+covered by the two split invocations above): 1787 passed, 0 failed
+  $ uv run pytest -q
+  (1354 + 426 + 7 = 1787, reconciled)
+Real-chain fixtures: unaffected this round (12/12 ok, re-verified)
 
-=== KNOWN-BUG FIX (this round, unrelated to the clarification's own requested changes) ===
-test_registry_names_all_four_contaminated_phases_with_reason
-(tests/integration/test_fsr13_contaminated_run_invalidations.py) compared
-a fixed historical migration-0040 value against the LIVE
-prediction.service.ALGORITHM_VERSION import -- an implicit assumption
-that silently broke once this round's own order_flow_prediction_v3 -> v4
-bump landed. Fixed: assert against the literal historical value
-("order_flow_prediction_v3") the migration actually recorded, since
-superseded_by_algorithm_version documents what a row was ACTUALLY
-superseded by at migration-write time, never "whatever the current
-version happens to be" going forward.
+=== REGRESSION-PROOF DISCIPLINE (this round) ===
+Both new loader/matching-logic fixes (R2-02's Phase 9 market-state
+loaders; R2-03's _select_own_entry_fill_if_contemporaneous) were each
+temporarily reverted to their pre-fix form and the new tests re-run,
+confirming they FAIL against the bug and PASS against the real fix --
+proving the new tests are genuine regression tests, not vacuously true
+assertions. The reverted copies were restored and re-verified clean
+(ruff/mypy) before this evidence was written.
 
 === COVERAGE ===
 Not separately instrumented this round (no coverage-percentage tooling
@@ -140,13 +149,21 @@ exists in this repository; unchanged from every prior round).
 $ uv run ruff check .
 All checks passed!
 $ uv run ruff format --check .
-461 files already formatted
-$ uv run mypy src/
-Success: no issues found in 228 source files
+467 files already formatted
+$ uv run mypy
+Success: no issues found in 230 source files
+(bare `uv run mypy`, per Makefile's own `typecheck` target -- scopes to
+packages = ["argus"], i.e. src/argus only, per pyproject.toml's
+[tool.mypy]; 228 + 2 new src files this round: canary.py,
+phase65_canary_results.py)
 
 === SECRET SCAN ===
-$ grep -InE "AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(api[_-]?key|secret|password|token)[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+_=-]{12,}[\"']" <20 changed/new files this round>
-(no output -- clean)
+$ grep -inE "AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|password\s*=\s*['\"][^'\"]+['\"]|api[-_]?key\s*=\s*['\"][^'\"]+['\"]|secret\s*=\s*['\"][^'\"]+['\"]|BEGIN OPENSSH PRIVATE KEY" <full diff + raw content of all 14 changed/new files this round>
+(the only matches were helius_api_key="fake-helius-key" -- a test fixture
+stand-in string, clearly fake per its own name, in
+tests/unit/test_r201_single_intent_mode.py -- clean)
+$ base58 keypair-length scan (64-88 char base58-alphabet runs) across the
+same file set: no matches.
 
 === MASTER_SPEC HASH ===
 $ sha256sum MASTER_SPEC.md
@@ -156,39 +173,50 @@ $ sha256sum MASTER_SPEC.md
 === BUILD_STATE ===
 docs/BUILD_STATE.md updated (append-only): current_phase/last_completed_phase
 remain 11 (unchanged); new history entry recording
-argus-final-spec-recovery-002-clarification-001's completion (R2-01 durable
-commit + real single-intent wiring; R2-02 persisted source-knowledge
-provenance + full mutation recipe; R2-03 A/B entry-fill timing check +
-versioned absolute-delta tolerance) and PG17's continuing
-FINAL_RECOVERY_ENVIRONMENT_BLOCKED disposition (reconfirmed, not retried).
-No historical claim rewritten.
+argus-final-spec-recovery-002-clarification-002's completion (human-canary
+execution mode -- the only way canary_passed=True can ever be constructed;
+entry-specialist source-evidence knowledge time, closing the ENTRY-
+SPECIALIST mutation-recipe hole; Strategy A/B entry timing compared
+against the actual strategy trigger time, not a fill's own configured
+target delay) and PG17's continuing FINAL_RECOVERY_ENVIRONMENT_BLOCKED
+disposition (reconfirmed, not retried -- environment has not materially
+changed). No historical claim rewritten.
 
 === DECISION_LOG CHANGES ===
 docs/DECISION_LOG.md: one new entry recording the
-argus-final-spec-recovery-002-clarification-001 remediation, its exact
-final status, the three ALGORITHM_VERSION _v3 -> _v4 bumps and the
-explicit determination that no additional contaminated_run_invalidations
-row was required for any of them, and the one unrelated pre-existing test
-bug found and fixed.
+argus-final-spec-recovery-002-clarification-002 remediation, its exact
+final status, the two ALGORITHM_VERSION _v4 -> _v5 bumps and the explicit
+determination that no additional contaminated_run_invalidations row was
+required for either of them, and the regression-proof discipline applied
+to both new fixes.
 
 === PG17 DISPOSITION (reconfirmed this round, NOT retried) ===
 Per the clarification instruction's own explicit AUTHORIZED_ACTION, PG17
-was not re-attempted this round. Disposition remains
-FINAL_RECOVERY_ENVIRONMENT_BLOCKED (base round's own fresh bounded
-attempt: genuine egress-policy 403 denials on both the Docker registry and
-the PGDG apt host, confirmed non-retryable per /root/.ccr/README.md).
-PostgreSQL 16 (native apt package) continues to serve every real
-Postgres-backed test in this repository, never claimed as a PG17
-substitute. LIVE_READY_SOFTWARE=false.
+was not re-attempted this round -- the environment has not materially
+changed since clarification-001's own fresh bounded attempt (genuine
+egress-policy 403 denials on both the Docker registry and the PGDG apt
+host, confirmed non-retryable per /root/.ccr/README.md). Disposition
+remains FINAL_RECOVERY_ENVIRONMENT_BLOCKED. PostgreSQL 16 (native apt
+package) continues to serve every real Postgres-backed test in this
+repository, never claimed as a PG17 substitute. LIVE_READY_SOFTWARE=false.
 
 === SECURITY STATE ===
 Phase 6.5 not run, not attempted this round. No mainnet signature/broadcast.
-No real key accessed. No arm file created or modified. Capital defaults
-zero throughout every test. No paid provider. No funded wallet.
+No real key/seed accessed. No arm file created or modified. No real human
+Phase 6.5 canary authorization was ever created -- every
+CanaryAuthorizationResult/authorization-file test uses synthetic,
+test-only identity/expiry values; phase65_canary_results received zero
+real rows this round. Capital defaults zero throughout every test. No
+paid provider. No funded wallet.
 LIVE_CANARY_PASSED=false. LIVE_ARMED=false.
 LIVE_READY_SOFTWARE=false (PG17 environment-blocked).
 This round did not modify orchestration/ORCHESTRATOR_INSTRUCTIONS.md, did
 not self-approve, and did not perform Phase 6.5, per the clarification's
 own explicit instruction.
+
+No gaps remain disclosed: every item argus-final-spec-recovery-002-
+clarification-002 named is CLOSED, and the instruction itself is
+explicitly marked "the final clarification" of the already-frozen
+contract.
 
 STOP FOR INDEPENDENT FINAL AUDIT

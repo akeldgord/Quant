@@ -357,6 +357,59 @@ known_blockers:
     final_spec_recovery.md`. `current_phase`/`last_completed_phase`
     remain unchanged (still 11); Phase 6.5 remains the only phase not
     started, permanently human-only.
+  - **2026-09-05 — Clarification-002 to the round-2 final recovery
+    (`argus-final-spec-recovery-002-clarification-002`) completed** --
+    explicitly marked "the final clarification" of the already-frozen
+    contract, after a second independent audit found the same three
+    R2-01/R2-02/R2-03 items (all previously marked PASS, including after
+    clarification-001) still not fully satisfying their own
+    already-frozen wording. R2-04 reconfirmed CLOSED/PASS (untouched);
+    PG17 reconfirmed `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` (not retried --
+    environment has not materially changed). Three fixes: (R2-01) a new
+    human-canary execution mode -- `src/argus/executor/canary.py`
+    (`validate_canary_authorization_file`, mirroring `argus.executor.arm`'s
+    own architecture: read-only, fails closed, bound to both the running
+    build/config identity and the specific intent being authorized) plus
+    a new `phase65_canary_results` table (migration 0042, purely
+    additive) -- the ONLY mechanism that can ever construct
+    `canary_passed=True` for ordinary execution, written only after a
+    genuine on-chain `CONFIRMED` success under a validated canary
+    authorization. `main.py` gained a config-gated canary-attempt branch
+    that reaches the exact same `execute_intent_pipeline` every other
+    path uses, with every existing risk gate unchanged. (R2-02) Phase 9's
+    entry-specialist provenance previously forwarded a DERIVED estimate
+    row's own physical write time into
+    `WalletSpecialistScore.source_knowledge_max_at`, never the actual
+    knowledge time of the `TokenMarketSnapshot` source evidence used; the
+    two Phase 9 market-state loaders also enforced no knowledge-time
+    bound at all, letting a later-backfilled snapshot with an old
+    `observed_at` silently contaminate a historical reconstruction. Both
+    loaders now require `observed_at <= cutoff` AND `created_at <=
+    cutoff`; the entry-specialist computation now folds the MAX real
+    `created_at` of the source rows it actually used. (R2-03) Strategy
+    A/B's entry-fill timing check (added by clarification-001) still
+    compared the wrong two quantities -- a probe's real elapsed time
+    against its OWN configured target delay, never against the
+    STRATEGY's own entry trigger time. Fixed to derive the actual
+    executable-entry-evidence timestamp and compare it directly to the
+    strategy's own trigger, using the same versioned absolute-delta
+    tolerance clarification-001 introduced. `ALGORITHM_VERSION` bumped
+    `counterfactual_alpha_v4`/`synthetic_super_wallet_v4` -> `_v5` for
+    both (genuine algorithm evolution; no durable v4 row ever existed
+    under either superseded semantics, so no additional
+    `contaminated_run_invalidations` row was seeded). Both new
+    loader/matching-logic fixes were verified to FAIL against a
+    deliberately-reverted pre-fix copy before being confirmed to pass
+    against the real fix -- proving the new tests are genuine regression
+    tests. Full validation: `tests/unit`+`tests/golden`+`tests/replay`
+    (1354 tests) 0 failed; `tests/integration` 426 passed/0 failed; full
+    suite from repo root (includes `tests/phase_1_5`) 1787 passed/0
+    failed, reconciled; `ruff check`/`ruff format --check`/`mypy` clean;
+    secret scan clean across all 14 changed/new files; single Alembic
+    head (`0042`, purely additive). No gaps remain disclosed. Full
+    detail: `orchestration/checkpoints/final_spec_recovery.md`.
+    `current_phase`/`last_completed_phase` remain unchanged (still 11);
+    Phase 6.5 remains the only phase not started, permanently human-only.
 
 ## Rules
 

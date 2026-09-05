@@ -4029,3 +4029,136 @@ INFORMATION VALUE (M1-M7), awaiting independent audit
   remains disclosed.
 - git_commit: (this clarification round's own implementation + evidence
   commit -- see `git log -1`).
+
+### 2026-09-05 — Clarification-002 (the final clarification) to the round-2 final recovery (argus-final-spec-recovery-002-clarification-002): R2-01/R2-02/R2-03
+- requirement_id: `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`'s
+  `argus-final-spec-recovery-002-clarification-002` instruction,
+  explicitly marked "the final clarification" of the already-frozen
+  `argus-final-spec-recovery-002` acceptance contract. A second
+  independent audit found the same three R2-01/R2-02/R2-03 items (all
+  previously marked PASS, including after clarification-001) still not
+  fully satisfying their own already-frozen wording. R2-04 was
+  reconfirmed CLOSED/PASS (do not redesign); PG17 was reconfirmed
+  `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` (do not retry unless the
+  environment has materially changed) -- the instruction's own explicit
+  `AUTHORIZED_ACTION` named exactly these three items and no others.
+  - R2-01: the frozen contract requires a future Phase 6.5 human canary
+    to be executable WITHOUT another code change, while `canary_passed`
+    must remain impossible for ORDINARY live operation before Phase 6.5
+    succeeds. `build_live_risk_inputs_from_params_file` hardcoded
+    `canary_passed=False` unconditionally, making the very first canary
+    structurally impossible to ever attempt, not merely gated.
+  - R2-02: the frozen contract requires entry-specialist provenance to
+    track the knowledge time of the actual SOURCE evidence used, never a
+    newly-created derived estimate's own write time.
+    `_compute_and_persist_counterfactual_alpha` forwarded
+    `CounterfactualAlphaEstimate.created_at` -- a DERIVED row's own
+    physical write time -- into `source_knowledge_max_at`; separately,
+    the Phase 9 market-state loaders enforced no knowledge-time bound at
+    all, letting a later-backfilled snapshot contaminate a historical
+    reconstruction.
+  - R2-03: the frozen contract requires Strategy A/B's entry timing to
+    compare the ACTUAL evidence time to the STRATEGY's own entry trigger
+    time. Clarification-001's own fix still compared a probe's real
+    elapsed time against its OWN configured target delay, never against
+    `matched.entry.at` -- "actual delay versus configured target delay"
+    is not the same check as "actual evidence timestamp versus strategy
+    trigger timestamp."
+- decision: All three clarified items are fixed with real evidence, not
+  asserted, and each was verified against a deliberately-reverted pre-fix
+  copy to confirm the new tests are genuine regression tests. (R2-01) New
+  `src/argus/executor/canary.py` (`validate_canary_authorization_file`)
+  mirrors `argus.executor.arm`'s own architecture exactly: a NEW,
+  separate external authorization artifact (never the operator's
+  single-intent params JSON, never the existing arm file), read-only,
+  fails closed, bound to BOTH the running build/config identity AND the
+  specific `intent_id` being authorized. New `phase65_canary_results`
+  table (migration 0042, purely additive: a brand-new table, no changes
+  to any existing table/column/grant) is the ONLY mechanism that can ever
+  construct `canary_passed=True` for ordinary execution -- written only
+  after a genuine on-chain `CONFIRMED` success (`status ==
+  "SUBMITTED_RESOLVED"` AND `intent.state == STATE_CONFIRMED` --
+  `SUBMITTED_RESOLVED` alone is insufficient, since a resolved outcome
+  can also be a resolved-but-FAILED transaction) under a validated canary
+  authorization. `main.py`'s `run_single_intent_if_configured` gained a
+  config-gated canary-attempt branch that reaches the exact same
+  `execute_intent_pipeline` every other path uses -- every existing risk
+  gate, identity check, arm validation, fencing, attestation, signer
+  isolation, and capital limit still applies unchanged. (R2-02) Both
+  Phase 9 market-state loaders
+  (`load_token_market_snapshot_at_or_before`/`load_nearest_token_market_
+  snapshot`) now require `observed_at <= cutoff` AND `created_at <=
+  cutoff` before a row is ever a candidate --
+  `load_nearest_token_market_snapshot`'s own "nearest" selection
+  previously had no upper bound on either timestamp at all.
+  `_token_features_at`/`_forward_return_for_token` now return the ACTUAL
+  snapshot row(s) they used alongside their result, and the MAX of those
+  real `created_at` values is folded into
+  `source_knowledge_max_at` -- never the persisted estimate row's own
+  `created_at`. `ALGORITHM_VERSION` bumped `counterfactual_alpha_v4` ->
+  `_v5`. A new mutation test
+  (`test_entry_specialist_market_evidence_mutation_end_to_end`) extends
+  the existing seven-step recipe (the EXIT-dimension test, left
+  unmodified) to the ENTRY-SPECIALIST market-evidence path specifically,
+  plus a narrower direct-loader proof
+  (`test_entry_specialist_nearest_snapshot_ignores_future_knowledge_row_
+  directly`) -- both verified to FAIL against the pre-fix loader and PASS
+  against the fix. (R2-03) Strategy A/B's own entry price is gated by the
+  SAME `_select_own_entry_fill_if_contemporaneous`, now taking
+  `strategy_entry_at` (i.e. `matched.entry.at`): it derives the actual
+  executable-entry-evidence timestamp
+  (`opportunity.first_seen_at + actual_elapsed_seconds_from_first_seen`)
+  and compares THAT to the strategy's own trigger time -- the same
+  versioned `Phase10RunConfig.contemporaneous_match_max_delta` tolerance
+  clarification-001 introduced, never the fill's own configured target
+  delay. `ALGORITHM_VERSION` bumped `synthetic_super_wallet_v4` -> `_v5`.
+  For both `_v4 -> _v5` bumps: no durable (non-disposable-test-database)
+  row was ever computed under the superseded semantics in this recovery
+  round, so no additional `contaminated_run_invalidations` row was seeded
+  beyond the ones prior rounds already added -- a documented
+  determination, not a silent omission, confirmed by a direct query of
+  the ordinary `argus` database (still 7 rows, unchanged). Full
+  validation: `tests/unit`+`tests/golden`+`tests/replay` (1354 tests) 0
+  failed; `tests/integration` 426 passed/0 failed; full suite from repo
+  root (includes `tests/phase_1_5`) 1787 passed/0 failed, reconciled
+  (1354+426+7=1787); `ruff check`/`ruff format --check`/`mypy` clean;
+  secret scan clean across all 14 changed/new files this round; single
+  Alembic head (`0042`); `uv lock --check` confirms lockfile consistency.
+  PostgreSQL 17 remains `FINAL_RECOVERY_ENVIRONMENT_BLOCKED` --
+  reconfirmed, NOT retried this round (environment has not materially
+  changed), per the clarification instruction's own explicit
+  `AUTHORIZED_ACTION` -- so `LIVE_READY_SOFTWARE=false`. Full detail:
+  `orchestration/checkpoints/final_spec_recovery.md`.
+- reason: The clarification instruction, explicitly marked "the final
+  clarification" of the already-frozen contract, named three specific
+  items not yet proven against their own already-frozen wording and gave
+  detailed required interpretations for each; closing each with real,
+  verified evidence (never an asserted fix), proving the new tests are
+  genuine regressions (not vacuously true) via a deliberate revert-and-
+  reconfirm step, and disclosing that no gaps remain is this project's
+  own established discipline, carried through to this final
+  clarification round. No unnecessary version bumps were manufactured
+  for cosmetic reasons -- each `_v4 -> _v5` bump is documented as a
+  genuine algorithm-semantics change, with the no-additional-
+  invalidation determination stated explicitly rather than silently
+  assumed.
+- requested_by: human operator (via the audit-driven
+  `argus-final-spec-recovery-002-clarification-002` instruction;
+  ChatGPT-orchestrator remains unavailable per the 2026-09-03
+  governance-change entry, so the human operator remains the audit
+  authority for this recovery too, exercised at their own discretion).
+- impact: `current_phase`/`last_completed_phase` in `docs/BUILD_STATE.md`
+  are UNCHANGED (still 11) -- this round corrected/hardened prior
+  rounds' own work rather than advancing MASTER_SPEC phase numbering.
+  Phase 6.5 (MAINNET CANARY) remains the only phase not started,
+  permanently human-only, never self-executed. This session did not
+  modify `orchestration/ORCHESTRATOR_INSTRUCTIONS.md`, did not
+  self-approve, and did not perform Phase 6.5. PostgreSQL 17 access
+  remains the sole recorded open item for a future session (with real
+  PostgreSQL 17 access) to close, not silently forgotten. No gaps remain
+  disclosed: every item this clarification-002 round named is CLOSED,
+  and the instruction itself is explicitly marked "the final
+  clarification" of the already-frozen contract -- no further
+  clarification is expected.
+- git_commit: (this clarification round's own implementation + evidence
+  commit -- see `git log -1`).
