@@ -76,17 +76,24 @@ from argus.graph.loaders import load_wallet_token_entries
 from argus.graph.service import ALGORITHM_VERSION as GRAPH_ALGORITHM_VERSION
 from argus.graph.service import GraphRunConfig
 
-# R2-02 clarification-001: bumped from "counterfactual_alpha_v3" --
-# WalletSpecialistScore now carries persisted source_knowledge_max_at
-# provenance (never merely as_of/created_at) proving every contributing
-# source row across all four specialist dimensions was known by cutoff;
-# load_latest_exit_skill also gained the same created_at<=cutoff bound
-# DirectionalEdge/ExpectedConfirmationEvent already had. No durable v3
-# row was ever computed against a real (non-disposable-test) database
-# this session, so nothing requires contaminated_run_invalidations
-# entries -- this bump reflects a genuine schema/algorithm change, not a
+# R2-02 clarification-002: bumped from "counterfactual_alpha_v4" -- the
+# entry-specialist contribution folded into
+# WalletSpecialistScore.source_knowledge_max_at previously used
+# CounterfactualAlphaEstimate.created_at (the physical creation time of a
+# DERIVED row written during this very replay), not the actual maximum
+# knowledge time of the TokenMarketSnapshot source rows used to compute
+# the residual. The two Phase 9 market-state loaders
+# (load_token_market_snapshot_at_or_before / load_nearest_token_market_
+# snapshot) also gained an explicit created_at<=cutoff (and
+# observed_at<=cutoff) bound -- previously unenforced, so a
+# later-backfilled snapshot with an old observed_at could silently
+# contaminate a historical reconstruction. No schema change is required
+# (source_knowledge_max_at already exists, migration 0041) and no durable
+# v4 row was ever computed against a real (non-disposable-test) database
+# this session, so nothing requires a contaminated_run_invalidations
+# entry -- this bump reflects a genuine algorithm change, not a
 # contaminated-result correction.
-ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v4"
+ALGORITHM_VERSION: Final[str] = "counterfactual_alpha_v5"
 """FSR-07/FSR-13 (final spec recovery): renamed from
 ``counterfactual_alpha_specialists_v1`` -- besides versioning the
 predation-score algorithm change below, the original name (36 chars)
@@ -103,7 +110,25 @@ below previously filtered contributing ``DirectionalEdge``/
 missing, letting a specialist score labeled ``as_of=T`` be silently built
 from source evidence only recorded (i.e. only knowable) AFTER T. Every
 ``counterfactual_alpha_v2`` row is invalidated by
-``contaminated_run_invalidations`` (migration ``0038``) for this reason."""
+``contaminated_run_invalidations`` (migration ``0038``) for this reason.
+
+``_v4`` (R2-02 clarification-001): ``WalletSpecialistScore`` gained
+persisted ``source_knowledge_max_at`` provenance; ``load_latest_exit_
+skill`` gained the same ``created_at<=cutoff`` bound.
+
+``_v5`` (R2-02 clarification-002): the entry-specialist contribution
+folded into ``source_knowledge_max_at`` previously used
+``CounterfactualAlphaEstimate.created_at`` -- a derived row's own
+physical write time, not the real source evidence's knowledge time.
+``_token_features_at``/``_forward_return_for_token`` now return the
+actual ``TokenMarketSnapshot`` row(s) they used alongside their result,
+and ``_compute_and_persist_counterfactual_alpha`` folds the MAX of those
+real ``created_at`` values into each residual's entry, instead. The two
+Phase 9 market-state loaders also gained an explicit
+``created_at<=cutoff``/``observed_at<=cutoff`` bound they previously
+lacked entirely -- ``load_nearest_token_market_snapshot``'s ``after``
+branch in particular had no upper bound on either timestamp before this
+fix."""
 
 _PHASE9_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "buckets.py",
@@ -168,10 +193,12 @@ class Phase9ComputationResult:
     specialist_score_count: int = 0
     predation_score_count: int = 0
     exit_convergence_event_count: int = 0
-    # R2-02 clarification-001: each entry pairs its own residual with the
-    # persisted ``CounterfactualAlphaEstimate`` row's own ``created_at``
-    # -- the source-knowledge provenance ``_compute_and_persist_
-    # specialist_scores`` needs to fold entry-specialist contributions
+    # R2-02 clarification-002: each entry pairs its own residual with the
+    # MAX ``created_at`` among the actual ``TokenMarketSnapshot`` source
+    # rows used to compute it -- never the persisted
+    # ``CounterfactualAlphaEstimate`` row's own ``created_at`` (that only
+    # reflects when this replay physically ran). ``_compute_and_persist_
+    # specialist_scores`` folds this real source-evidence knowledge time
     # into ``WalletSpecialistScore.source_knowledge_max_at``.
     entry_alpha_by_wallet_horizon: dict[tuple[uuid.UUID, int], list[tuple[Decimal, datetime]]] = (
         field(default_factory=dict)
@@ -179,10 +206,16 @@ class Phase9ComputationResult:
 
 
 async def _token_features_at(
-    session: AsyncSession, *, token: Token, at: datetime, max_staleness: timedelta
-) -> TokenFeatures | None:
+    session: AsyncSession, *, token: Token, at: datetime, max_staleness: timedelta, cutoff: datetime
+) -> tuple[TokenFeatures, datetime] | None:
+    """Clarification-002 section 3: returns the matching-dimension
+    features paired with the snapshot row's own ``created_at`` -- the
+    caller needs this to fold the ACTUAL source evidence's knowledge time
+    into ``source_knowledge_max_at``, never the physically-later
+    ``CounterfactualAlphaEstimate.created_at`` merely because that derived
+    row happened to be written during this replay."""
     snapshot = await load_token_market_snapshot_at_or_before(
-        session, token_id=token.token_id, at=at
+        session, token_id=token.token_id, at=at, cutoff=cutoff
     )
     if snapshot is None or snapshot.market_cap_usd is None or snapshot.liquidity_usd is None:
         return None
@@ -191,12 +224,15 @@ async def _token_features_at(
     age = at - token.first_observed_at
     if age < timedelta(0):
         return None
-    return TokenFeatures(
-        token_id=token.token_id,
-        market_cap_bucket=market_cap_bucket(snapshot.market_cap_usd),
-        liquidity_bucket=liquidity_bucket(snapshot.liquidity_usd),
-        token_age_bucket=token_age_bucket(age),
-        launch_venue=snapshot.venue,
+    return (
+        TokenFeatures(
+            token_id=token.token_id,
+            market_cap_bucket=market_cap_bucket(snapshot.market_cap_usd),
+            liquidity_bucket=liquidity_bucket(snapshot.liquidity_usd),
+            token_age_bucket=token_age_bucket(age),
+            launch_venue=snapshot.venue,
+        ),
+        snapshot.created_at,
     )
 
 
@@ -207,16 +243,26 @@ async def _forward_return_for_token(
     entered_at: datetime,
     horizon: timedelta,
     config: Phase9RunConfig,
-) -> Decimal | None:
+    cutoff: datetime,
+) -> tuple[Decimal, datetime] | None:
+    """Clarification-002 section 3: returns the forward return paired
+    with the MAX ``created_at`` of the two ``TokenMarketSnapshot`` rows
+    actually used to compute it -- the real source-evidence knowledge
+    time, not any later derived row's own persistence time."""
     max_staleness_seconds = config.max_price_staleness.total_seconds()
     entry_snapshot = await load_nearest_token_market_snapshot(
-        session, token_id=token_id, target=entered_at, max_staleness_seconds=max_staleness_seconds
+        session,
+        token_id=token_id,
+        target=entered_at,
+        max_staleness_seconds=max_staleness_seconds,
+        cutoff=cutoff,
     )
     horizon_snapshot = await load_nearest_token_market_snapshot(
         session,
         token_id=token_id,
         target=entered_at + horizon,
         max_staleness_seconds=max_staleness_seconds,
+        cutoff=cutoff,
     )
     if (
         entry_snapshot is None
@@ -225,7 +271,10 @@ async def _forward_return_for_token(
         or horizon_snapshot.price_usd is None
     ):
         return None
-    return compute_forward_return(entry_snapshot.price_usd, horizon_snapshot.price_usd)
+    forward_return = compute_forward_return(entry_snapshot.price_usd, horizon_snapshot.price_usd)
+    if forward_return is None:
+        return None
+    return forward_return, max(entry_snapshot.created_at, horizon_snapshot.created_at)
 
 
 async def _compute_and_persist_counterfactual_alpha(
@@ -246,27 +295,38 @@ async def _compute_and_persist_counterfactual_alpha(
         wallet_token = tokens_by_id.get(entry.token_id)
         if wallet_token is None:
             continue
-        wallet_features = await _token_features_at(
+        wallet_features_result = await _token_features_at(
             session,
             token=wallet_token,
             at=entry.entered_at,
             max_staleness=config.max_price_staleness,
+            cutoff=cutoff,
         )
-        if wallet_features is None:
+        if wallet_features_result is None:
             continue
+        wallet_features, wallet_features_created_at = wallet_features_result
 
         candidate_features: list[TokenFeatures] = []
+        # R2-02 clarification-002: only candidates that are actually
+        # SELECTED as controls below feed source_knowledge_max_at -- a
+        # considered-but-non-matching candidate's snapshot never
+        # influenced the residual value, so its knowledge time must not
+        # be folded in either.
+        candidate_features_created_at: dict[uuid.UUID, datetime] = {}
         for candidate in candidate_tokens:
             if candidate.token_id == wallet_token.token_id:
                 continue
-            features = await _token_features_at(
+            candidate_result = await _token_features_at(
                 session,
                 token=candidate,
                 at=entry.entered_at,
                 max_staleness=config.max_price_staleness,
+                cutoff=cutoff,
             )
-            if features is not None:
+            if candidate_result is not None:
+                features, features_created_at = candidate_result
                 candidate_features.append(features)
+                candidate_features_created_at[features.token_id] = features_created_at
 
         control_token_ids = select_matched_control_tokens(
             wallet_features, candidate_features, max_control_tokens=config.max_control_tokens
@@ -274,24 +334,43 @@ async def _compute_and_persist_counterfactual_alpha(
 
         for horizon in config.horizons:
             horizon_seconds = int(horizon.total_seconds())
-            wallet_return = await _forward_return_for_token(
+            wallet_return_result = await _forward_return_for_token(
                 session,
                 token_id=wallet_token.token_id,
                 entered_at=entry.entered_at,
                 horizon=horizon,
                 config=config,
+                cutoff=cutoff,
             )
+            wallet_return = wallet_return_result[0] if wallet_return_result is not None else None
+
+            # R2-02 clarification-002: the real source-evidence knowledge
+            # times that actually determined THIS residual -- the wallet's
+            # own matching-feature snapshot (it decided which controls
+            # matched), the wallet's own forward-return snapshots, and
+            # each SELECTED control's matching-feature snapshot and
+            # forward-return snapshots. Never the persisted estimate row's
+            # own created_at, which only reflects when this replay ran.
+            source_created_ats: list[datetime] = [wallet_features_created_at]
+            if wallet_return_result is not None:
+                source_created_ats.append(wallet_return_result[1])
+
             control_returns: list[Decimal] = []
             for control_token_id in control_token_ids:
-                control_return = await _forward_return_for_token(
+                control_created_at = candidate_features_created_at.get(control_token_id)
+                if control_created_at is not None:
+                    source_created_ats.append(control_created_at)
+                control_return_result = await _forward_return_for_token(
                     session,
                     token_id=control_token_id,
                     entered_at=entry.entered_at,
                     horizon=horizon,
                     config=config,
+                    cutoff=cutoff,
                 )
-                if control_return is not None:
-                    control_returns.append(control_return)
+                if control_return_result is not None:
+                    control_returns.append(control_return_result[0])
+                    source_created_ats.append(control_return_result[1])
 
             matched_universe_return = (
                 sum(control_returns, Decimal(0)) / Decimal(len(control_returns))
@@ -308,7 +387,7 @@ async def _compute_and_persist_counterfactual_alpha(
                 "control_token_ids": [str(t) for t in control_token_ids],
             }
 
-            estimate, _ = await get_or_create_counterfactual_alpha_estimate(
+            await get_or_create_counterfactual_alpha_estimate(
                 session,
                 prospective_event_id=entry.source_id,
                 wallet_id=entry.wallet_id,
@@ -328,14 +407,18 @@ async def _compute_and_persist_counterfactual_alpha(
             count += 1
             if residual is not None:
                 key = (entry.wallet_id, horizon_seconds)
-                # R2-02 clarification-001: pairs the residual with the
-                # persisted estimate row's own created_at, so
-                # _compute_and_persist_specialist_scores can fold this
-                # contribution's real knowledge time into
-                # source_knowledge_max_at -- never just the estimate's
-                # as_of label.
+                # R2-02 clarification-002: pairs the residual with the MAX
+                # created_at among the actual TokenMarketSnapshot rows that
+                # determined it (wallet + selected-control matching
+                # features and forward-return snapshots) --
+                # _compute_and_persist_specialist_scores folds this real
+                # source-evidence knowledge time into
+                # source_knowledge_max_at. Never the persisted estimate
+                # row's own created_at (clarification-001's prior, weaker
+                # bound) -- that only reflects when THIS replay ran, not
+                # when its source evidence became knowable.
                 entry_alpha_by_wallet_horizon.setdefault(key, []).append(
-                    (residual, estimate.created_at)
+                    (residual, max(source_created_ats))
                 )
 
     return count, entry_alpha_by_wallet_horizon

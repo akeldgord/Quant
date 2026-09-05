@@ -38,15 +38,28 @@ def is_sell(swap: Swap) -> bool:
 
 
 async def load_token_market_snapshot_at_or_before(
-    session: AsyncSession, *, token_id: uuid.UUID, at: datetime
+    session: AsyncSession, *, token_id: uuid.UUID, at: datetime, cutoff: datetime
 ) -> TokenMarketSnapshot | None:
     """The point-in-time pattern ``argus.tokens.reference_prices.
     latest_price_at_or_before`` established, applied to
-    ``token_market_snapshots``."""
+    ``token_market_snapshots``.
+
+    Clarification-002 section 3: ``observed_at <= at`` alone only bounds
+    the row's claimed EFFECTIVE time -- a row's own knowledge time
+    (``created_at``) must independently satisfy ``created_at <= cutoff``
+    (the same ``known_by_cutoff`` (M1) discipline every other Phase 9
+    source query already applies), or a later-backfilled snapshot with an
+    old ``observed_at`` could leak into a historical reconstruction as
+    though it had always been known."""
     return (
         await session.execute(
             select(TokenMarketSnapshot)
-            .where(TokenMarketSnapshot.token_id == token_id, TokenMarketSnapshot.observed_at <= at)
+            .where(
+                TokenMarketSnapshot.token_id == token_id,
+                TokenMarketSnapshot.observed_at <= at,
+                TokenMarketSnapshot.observed_at <= cutoff,
+                TokenMarketSnapshot.created_at <= cutoff,
+            )
             .order_by(TokenMarketSnapshot.observed_at.desc())
             .limit(1)
         )
@@ -54,19 +67,38 @@ async def load_token_market_snapshot_at_or_before(
 
 
 async def load_nearest_token_market_snapshot(
-    session: AsyncSession, *, token_id: uuid.UUID, target: datetime, max_staleness_seconds: float
+    session: AsyncSession,
+    *,
+    token_id: uuid.UUID,
+    target: datetime,
+    max_staleness_seconds: float,
+    cutoff: datetime,
 ) -> TokenMarketSnapshot | None:
     """The snapshot whose ``observed_at`` is closest to ``target`` (before
     OR after), within ``max_staleness_seconds`` -- for a *forward*-return
     horizon price, reusing the last known price from long before the
     target time would misrepresent a future price as known; ``None`` is
-    the honest answer when nothing sufficiently close exists."""
+    the honest answer when nothing sufficiently close exists.
+
+    Clarification-002 section 3: this is the one loader most exposed to a
+    knowledge-time leak -- the ``after`` branch selects the CLOSEST
+    snapshot strictly after ``target`` with no upper bound at all before
+    this fix, so a snapshot inserted later (high ``created_at``) whose
+    ``observed_at`` merely happens to land nearer ``target`` than any
+    snapshot legitimately known at ``cutoff`` could silently replace the
+    honest nearest-known one. Both candidate queries now additionally
+    require ``observed_at <= cutoff`` (the row's own effective time must
+    not be from beyond the reconstruction point either) AND
+    ``created_at <= cutoff`` (``known_by_cutoff`` (M1)) before ever being
+    considered a candidate."""
     before = (
         await session.execute(
             select(TokenMarketSnapshot)
             .where(
                 TokenMarketSnapshot.token_id == token_id,
                 TokenMarketSnapshot.observed_at <= target,
+                TokenMarketSnapshot.observed_at <= cutoff,
+                TokenMarketSnapshot.created_at <= cutoff,
             )
             .order_by(TokenMarketSnapshot.observed_at.desc())
             .limit(1)
@@ -76,7 +108,10 @@ async def load_nearest_token_market_snapshot(
         await session.execute(
             select(TokenMarketSnapshot)
             .where(
-                TokenMarketSnapshot.token_id == token_id, TokenMarketSnapshot.observed_at > target
+                TokenMarketSnapshot.token_id == token_id,
+                TokenMarketSnapshot.observed_at > target,
+                TokenMarketSnapshot.observed_at <= cutoff,
+                TokenMarketSnapshot.created_at <= cutoff,
             )
             .order_by(TokenMarketSnapshot.observed_at.asc())
             .limit(1)

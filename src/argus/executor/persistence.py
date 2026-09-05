@@ -40,8 +40,10 @@ from argus.domain.execution_fills import ExecutionFill
 from argus.domain.execution_intent_transitions import ExecutionIntentTransition
 from argus.domain.execution_intents import STATE_CREATED, ExecutionIntent
 from argus.domain.live_positions import STATUS_CLOSED, STATUS_OPEN, LivePosition
+from argus.domain.phase65_canary_results import Phase65CanaryResult
 from argus.domain.risk_exit_events import RiskExitEvent
 from argus.domain.token_safety_assessments import TokenSafetyAssessment
+from argus.executor.arm import ApprovedIdentity
 from argus.executor.attestation import AttestationResult
 from argus.executor.fill_accounting import ALL_CONFIRMATION_STATES, FillEvidence
 from argus.executor.risk_exits import RiskExitTrigger
@@ -402,6 +404,71 @@ async def record_token_safety_assessment(
     session.add(row)
     await session.flush()
     return row
+
+
+async def record_canary_result(
+    session: AsyncSession,
+    *,
+    intent_id: uuid.UUID,
+    transaction_signature: str,
+    approved: ApprovedIdentity,
+    completed_at: datetime,
+) -> Phase65CanaryResult:
+    """Clarification-002 section 2: persists the ONE piece of evidence a
+    genuinely successful, human-authorized Phase 6.5 canary produces --
+    only ever called by ``argus.executor.main`` after
+    ``execute_intent_pipeline`` reaches a real on-chain ``CONFIRMED``
+    success for an intent run under a validated
+    ``argus.executor.canary`` authorization. Never called on
+    rejection/failure/unresolved outcomes -- there is no caller path that
+    reaches this function without that real success already having
+    happened, so no code here needs to (or does) re-derive/guess a PASS
+    from a weaker signal.
+
+    ``intent_id`` is UNIQUE (migration 0042): a second call for the same
+    intent -- which should never happen in practice (an intent is
+    terminal once ``CONFIRMED``) -- raises ``IntegrityError`` rather than
+    silently creating a second, potentially-inconsistent row."""
+    row = Phase65CanaryResult(
+        canary_result_id=uuid.uuid4(),
+        intent_id=intent_id,
+        transaction_signature=transaction_signature,
+        approved_git_commit=approved.git_commit,
+        approved_executor_build_hash=approved.executor_build_hash,
+        approved_risk_config_hash=approved.risk_config_hash,
+        completed_at=completed_at,
+        created_at=completed_at,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def load_passed_canary_result_for_identity(
+    session: AsyncSession, *, approved: ApprovedIdentity
+) -> Phase65CanaryResult | None:
+    """Clarification-002 section 2's own read path for ordinary (non-
+    canary-authorization) single-intent execution: has a Phase 6.5 canary
+    already genuinely passed under EXACTLY this running build/config
+    identity? A pass recorded under a different git commit/executor
+    build/risk config never counts -- a material code/config change
+    always requires a fresh canary, never a stale carried-over pass.
+    Returns ``None`` (the repository default, unchanged from before this
+    table existed) until the very first real canary succeeds."""
+    return (
+        (
+            await session.execute(
+                select(Phase65CanaryResult).where(
+                    Phase65CanaryResult.approved_git_commit == approved.git_commit,
+                    Phase65CanaryResult.approved_executor_build_hash
+                    == approved.executor_build_hash,
+                    Phase65CanaryResult.approved_risk_config_hash == approved.risk_config_hash,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
 
 
 async def load_open_position_for_token(

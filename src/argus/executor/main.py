@@ -24,19 +24,37 @@ automatic trading daemon, signal-consumer loop, scheduler, or live
 strategy engine exists, and none is added here. Under repository
 defaults (``ARGUS_EXECUTOR_SINGLE_INTENT_ID`` unset) this module's
 behavior is byte-for-byte unchanged from before: startup/readiness only,
-never touching the pipeline. Even when single-intent mode IS configured,
-the risk gates the pipeline itself evaluates make live dispatch
-structurally impossible without separate, external authorization: this
-module can never construct ``canary_passed=True`` (there is no persisted
-"Phase 6.5 canary passed" record anywhere in this codebase -- Phase 6.5
-is explicitly human-only and never self-executed, so no code path here
-has a way to produce that value), and ``arm_result.armed`` can only be
-``True`` if an external, human-authored, hash/expiry-validated arm file
-exists at ``ARGUS_LIVE_ARM_FILE_PATH`` (see ``argus.executor.arm``, which
-this module never writes). ``LIVE_ARMED`` in :class:`ExecutorStartupReport`
-is therefore still unconditionally ``False`` -- it describes this
-module's own top-level disposition, never the pipeline's own internal
-(and separately gated) risk evaluation.
+never touching the pipeline. ``arm_result.armed`` can only be ``True`` if
+an external, human-authored, hash/expiry-validated arm file exists at
+``ARGUS_LIVE_ARM_FILE_PATH`` (see ``argus.executor.arm``, which this
+module never writes). ``LIVE_ARMED`` in :class:`ExecutorStartupReport` is
+therefore still unconditionally ``False`` -- it describes this module's
+own top-level disposition, never the pipeline's own internal (and
+separately gated) risk evaluation.
+
+Clarification-002 section 2: ``canary_passed`` construction. Ordinary
+single-intent execution can construct ``canary_passed=True`` ONLY by
+reading a persisted :class:`~argus.domain.phase65_canary_results.
+Phase65CanaryResult` row matching this process's own running build/
+config identity (``argus.executor.persistence.load_passed_canary_result_
+for_identity``) -- absent that (the repository default, and every state
+before the very first real canary succeeds), it is unconditionally
+``False``, unchanged from before this mechanism existed. That persisted
+row can ONLY ever be created by THIS module, and only after
+``execute_intent_pipeline`` reaches a genuine on-chain ``CONFIRMED``
+success for an intent run under a SEPARATE, external, human-authored,
+hash/expiry/intent-bound canary-authorization file at
+``ARGUS_EXECUTOR_CANARY_AUTHORIZATION_PATH`` (see ``argus.executor.
+canary``, which -- like the arm file -- this module never writes, and
+which is never sourced from the operator's generic single-intent params
+file: see ``_LIVE_RISK_INPUTS_REAL_ONLY_FIELDS``). A rejected/failed/
+unresolved canary attempt never produces that evidence. No code change is
+required to run the very first canary: an operator authors the arm file
+(as always) plus this one additional authorization file, sets
+``ARGUS_EXECUTOR_CANARY_AUTHORIZATION_PATH``, and runs single-intent mode
+exactly as today -- every other risk gate, approved build/config
+identity, singleton fencing, transaction attestation, and signer
+isolation still applies unchanged.
 """
 
 from __future__ import annotations
@@ -56,9 +74,10 @@ from argus.clock import Clock
 from argus.config import ArgusConfig, load_config, resolve_production_git_commit
 from argus.db.connection import connection_for_role
 from argus.db.roles import DbRole
-from argus.domain.execution_intents import ExecutionIntent
+from argus.domain.execution_intents import STATE_CONFIRMED, ExecutionIntent
 from argus.domain.tokens import Token
 from argus.executor.arm import ApprovedIdentity, ArmValidationResult, validate_arm_file
+from argus.executor.canary import CanaryAuthorizationResult, validate_canary_authorization_file
 from argus.executor.dispatch import DispatchGuard
 from argus.executor.live_signing import (
     ARGUS_EXECUTOR_SIGNER_KEY_PATH_ENV_VAR,
@@ -66,6 +85,10 @@ from argus.executor.live_signing import (
     SignerKeyLoadError,
 )
 from argus.executor.live_submission import SolanaSubmissionClient
+from argus.executor.persistence import (
+    load_passed_canary_result_for_identity,
+    record_canary_result,
+)
 from argus.executor.pipeline import PipelineDependencies, PipelineOutcome, execute_intent_pipeline
 from argus.executor.risk_gates import LiveRiskInputs
 from argus.executor.service import BUILD_HASH, build_phase6_disposition
@@ -86,6 +109,16 @@ _DEFAULT_LEASE_TTL = timedelta(seconds=30)
 # docstring.
 ARGUS_EXECUTOR_SINGLE_INTENT_ID_ENV_VAR = "ARGUS_EXECUTOR_SINGLE_INTENT_ID"
 ARGUS_EXECUTOR_INTENT_PARAMS_PATH_ENV_VAR = "ARGUS_EXECUTOR_INTENT_PARAMS_PATH"
+
+# Clarification-002 section 2: entirely opt-in, separate from the single-
+# intent params file above -- absent (the repository default), single-
+# intent mode behaves exactly as before this mechanism existed
+# (``canary_passed`` sourced only from persisted evidence, defaulting to
+# ``False``). When set, this run is a human-authorized canary ATTEMPT:
+# ``canary_passed`` is constructed ``True`` for this one pipeline call
+# ONLY after the file at this path validates (see ``argus.executor.
+# canary``), never from a generic params-file boolean.
+ARGUS_EXECUTOR_CANARY_AUTHORIZATION_PATH_ENV_VAR = "ARGUS_EXECUTOR_CANARY_AUTHORIZATION_PATH"
 
 # LiveRiskInputs fields this module NEVER takes from the operator-supplied
 # params file -- always the real, structurally-computed identity/arm/
@@ -126,7 +159,11 @@ def _decode_risk_input_field(field_type: Any, raw: Any) -> Any:
 
 
 def build_live_risk_inputs_from_params_file(
-    *, params_path: Path, approved: ApprovedIdentity, arm: ArmValidationResult
+    *,
+    params_path: Path,
+    approved: ApprovedIdentity,
+    arm: ArmValidationResult,
+    canary_passed: bool,
 ) -> LiveRiskInputs:
     """Assembles a real :class:`LiveRiskInputs` for the single-intent
     path. The identity/arm/canary fields are ALWAYS the real values
@@ -137,10 +174,13 @@ def build_live_risk_inputs_from_params_file(
     exposure, liquidity, chain freshness, etc.), never the fields that
     gate whether live dispatch is even reachable at all.
 
-    ``canary_passed`` is unconditionally ``False``: there is no persisted
-    "Phase 6.5 canary passed" record anywhere in this codebase (Phase 6.5
-    is explicitly human-only and never self-executed here), so no code
-    path in this module can ever produce ``True`` for it."""
+    ``canary_passed`` is the caller's responsibility to compute honestly
+    (Clarification-002 section 2): either from a persisted
+    :class:`~argus.domain.phase65_canary_results.Phase65CanaryResult`
+    matching this process's own running identity (ordinary execution), or
+    from a freshly-validated external canary-authorization file (a
+    one-time canary attempt) -- never from ``params_path`` itself, and
+    never a repository default of ``True``."""
     try:
         raw = json.loads(params_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -164,7 +204,7 @@ def build_live_risk_inputs_from_params_file(
 
     return LiveRiskInputs(
         software_readiness=True,
-        canary_passed=False,
+        canary_passed=canary_passed,
         arm_result=arm,
         running_git_commit=approved.git_commit,
         running_executor_build_hash=approved.executor_build_hash,
@@ -270,7 +310,25 @@ async def run_single_intent_if_configured(
     default. When it IS set, every other requirement below still fails
     CLOSED (raises :class:`SingleIntentConfigurationError`, never
     silently skips or fabricates a default) rather than proceeding with
-    an incomplete configuration."""
+    an incomplete configuration.
+
+    Clarification-002 section 2: when
+    ``ARGUS_EXECUTOR_CANARY_AUTHORIZATION_PATH`` is ALSO set, this run is
+    a human-authorized canary ATTEMPT for this exact ``intent_id`` -- the
+    file at that path must independently validate (see
+    ``argus.executor.canary``) or this fails closed before touching the
+    pipeline at all. ``canary_passed`` is then constructed ``True`` for
+    this ONE pipeline call; every other risk gate (arm file, approved
+    build/config identity, wallet/exposure/liquidity/etc.) still applies
+    unchanged. Only if the pipeline reaches a genuine on-chain
+    ``CONFIRMED`` success does this function persist a
+    :class:`~argus.domain.phase65_canary_results.Phase65CanaryResult`
+    (``argus.executor.persistence.record_canary_result``) -- a
+    rejected/failed/unresolved outcome never produces that evidence.
+    Absent that env var (the repository default), ``canary_passed`` is
+    instead sourced from whatever such evidence already exists for this
+    process's own running identity (``load_passed_canary_result_for_
+    identity``) -- ``False`` until the very first real canary succeeds."""
     intent_id_raw = env.get(ARGUS_EXECUTOR_SINGLE_INTENT_ID_ENV_VAR)
     if not intent_id_raw:
         return None
@@ -317,11 +375,38 @@ async def run_single_intent_if_configured(
             "(quote/simulation/confirmation all need a real RPC endpoint)"
         )
 
-    risk_inputs = build_live_risk_inputs_from_params_file(
-        params_path=params_path, approved=approved, arm=arm
-    )
+    canary_auth_path_raw = env.get(ARGUS_EXECUTOR_CANARY_AUTHORIZATION_PATH_ENV_VAR)
+    is_canary_attempt = False
+    if canary_auth_path_raw:
+        is_canary_attempt = True
+        canary_auth: CanaryAuthorizationResult = validate_canary_authorization_file(
+            Path(canary_auth_path_raw), approved=approved, now=clock.utc_now(), intent_id=intent_id
+        )
+        if not canary_auth.authorized:
+            raise SingleIntentConfigurationError(
+                f"canary authorization at {canary_auth_path_raw} is invalid: {canary_auth.reason}"
+            )
+        _logger.info("executor_canary_attempt_authorized", intent_id=str(intent_id))
 
     async with sessionmaker() as session:
+        if is_canary_attempt:
+            # Constructed True ONLY under the freshly-validated
+            # authorization above -- never read from persisted evidence
+            # for this one attempt (that evidence does not exist yet on
+            # the very first canary, and must not be reused for later
+            # ones either -- each canary attempt authorizes exactly one
+            # intent).
+            canary_passed = True
+        else:
+            existing_canary = await load_passed_canary_result_for_identity(
+                session, approved=approved
+            )
+            canary_passed = existing_canary is not None
+
+        risk_inputs = build_live_risk_inputs_from_params_file(
+            params_path=params_path, approved=approved, arm=arm, canary_passed=canary_passed
+        )
+
         intent = await session.get(ExecutionIntent, intent_id)
         if intent is None:
             raise SingleIntentConfigurationError(f"no ExecutionIntent found for id {intent_id}")
@@ -346,7 +431,7 @@ async def run_single_intent_if_configured(
                 ).send_transaction,
             ),
         )
-        return await execute_intent_pipeline(
+        outcome = await execute_intent_pipeline(
             session,
             intent=intent,
             lease=lease,
@@ -358,6 +443,31 @@ async def run_single_intent_if_configured(
             max_total_fee_raw=max_total_fee_raw,
             deps=deps,
         )
+
+        # Clarification-002 section 2 requirement 4: successful
+        # completion of the canary may produce the persisted evidence
+        # later used to derive canary_passed=True for ordinary execution;
+        # failure must not. "Successful" is deliberately strict: a real
+        # on-chain CONFIRMED fill, never merely SUBMITTED/UNRESOLVED or a
+        # resolved-but-FAILED outcome.
+        if (
+            is_canary_attempt
+            and outcome.status == "SUBMITTED_RESOLVED"
+            and outcome.intent.state == STATE_CONFIRMED
+            and outcome.fill is not None
+            and outcome.fill.transaction_signature
+        ):
+            await record_canary_result(
+                session,
+                intent_id=intent_id,
+                transaction_signature=outcome.fill.transaction_signature,
+                approved=approved,
+                completed_at=clock.utc_now(),
+            )
+            await session.commit()
+            _logger.info("executor_canary_result_recorded", intent_id=str(intent_id))
+
+        return outcome
 
 
 async def _main_async() -> tuple[ExecutorStartupReport, PipelineOutcome | None]:

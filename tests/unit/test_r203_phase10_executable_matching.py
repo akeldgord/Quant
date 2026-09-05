@@ -12,6 +12,23 @@ unversioned 0.5x-2.0x ratio tolerance the two audits named; see
 ``tests/integration/test_phase10_synthetic_persistence_and_report.py``
 and ``test_r202_specialist_knowledge_time.py`` for the DB-backed
 end-to-end coverage of the same fixes.
+
+Clarification-002 (``argus-final-spec-recovery-002-clarification-002``,
+section 4): ``_select_own_entry_fill_if_contemporaneous`` now compares the
+ACTUAL executable-entry-evidence timestamp to the STRATEGY's own entry
+trigger time (``matched.entry.at``), never merely the matching probe's
+own configured target delay (clarification-001's prior, weaker check) --
+see the ``test_own_entry_fill_*`` tests below. Deterministic nearest/
+tiebreak coverage for "more than one eligible real entry observation"
+already exists for the sibling confirmation-entry function
+(``test_entry_probe_tiebreak_is_deterministic_by_target_label``,
+``_select_contemporaneous_entry_probe``) -- Strategy A/B's OWN function
+deliberately stays bound to the ONE realized ``opportunity.entry_fill``
+(never substituting a DIFFERENT ENTRY_DELAY probe's own hypothetical
+fill, which would silently change the reported trade's actual bought
+quantity/mint for a strategy whose entire premise is "the same wallet's
+REAL realized buy") -- so there is exactly one real timing-evidence
+candidate per opportunity here, and no tiebreak scenario arises.
 """
 
 from __future__ import annotations
@@ -355,11 +372,12 @@ def test_entry_probe_tiebreak_is_deterministic_by_target_label() -> None:
     assert selected.target_label == "15s"
 
 
-def test_own_entry_fill_used_when_within_tolerance_of_own_target() -> None:
-    """Clarification-001 section 4.1: Strategy A/B's own entry_fill is
-    used when the matching ENTRY_DELAY probe's REAL observed timing is
-    genuinely contemporaneous with its own configured target delay --
-    the ordinary, well-behaved case."""
+def test_own_entry_fill_used_when_within_tolerance_of_strategy_trigger() -> None:
+    """Clarification-002 section 4: Strategy A/B's own entry_fill is used
+    when the matching ENTRY_DELAY probe's REAL evidence timestamp
+    (``first_seen_at + actual_elapsed_seconds_from_first_seen``) is
+    genuinely contemporaneous with the STRATEGY's own entry trigger time
+    -- the ordinary, well-behaved case."""
     opportunity = _opportunity(
         {},
         entry_fill=_ENTRY_FILL,
@@ -367,22 +385,56 @@ def test_own_entry_fill_used_when_within_tolerance_of_own_target() -> None:
         entry_target_seconds=5,
         entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=6)},
     )
-    selected = _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+    selected = _select_own_entry_fill_if_contemporaneous(
+        opportunity, strategy_entry_at=_NOW + timedelta(seconds=8), max_delta_seconds=_MAX_DELTA
+    )
     assert selected is _ENTRY_FILL
 
 
-def test_own_entry_fill_rejected_when_real_processing_drifted_past_tolerance() -> None:
-    """The exact defect section 4.1 names: a fill whose real processing
-    drifted far past its own configured target delay must never be
-    unconditionally trusted -- honestly no-executable-evidence instead."""
+def test_own_entry_fill_rejected_when_real_evidence_drifts_from_strategy_trigger() -> None:
+    """The exact defect clarification-002 section 4 names: a fill whose
+    real evidence timestamp lands far from the STRATEGY's own entry
+    trigger time must never be trusted, even if that timestamp is close
+    to the fill's own configured target delay."""
     opportunity = _opportunity(
         {},
         entry_fill=_ENTRY_FILL,
         entry_target_label="5s",
         entry_target_seconds=5,
-        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=6000)},
+        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=6)},
     )
-    selected = _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+    selected = _select_own_entry_fill_if_contemporaneous(
+        opportunity,
+        strategy_entry_at=_NOW + timedelta(hours=2),
+        max_delta_seconds=_MAX_DELTA,
+    )
+    assert selected is None
+
+
+def test_own_entry_fill_rejected_when_it_perfectly_matches_own_target_but_far_from_trigger() -> (
+    None
+):
+    """Clarification-002 section 4's own named scenario: a fill that
+    perfectly matches its own configured ``entry_target_seconds`` (delta
+    of zero against ITS OWN target) must still be rejected when its real
+    evidence timestamp is far from the strategy's actual trigger time --
+    "actual delay versus configured target delay" is never a substitute
+    for "actual evidence timestamp versus strategy trigger timestamp."""
+    opportunity = _opportunity(
+        {},
+        entry_fill=_ENTRY_FILL,
+        entry_target_label="5s",
+        entry_target_seconds=5,
+        # elapsed_seconds == entry_target_seconds exactly -- a perfect
+        # match against the fill's OWN target, the old (wrong) check.
+        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=5)},
+    )
+    # The strategy's own trigger is far from first_seen_at + 5s.
+    selected = _select_own_entry_fill_if_contemporaneous(
+        opportunity,
+        strategy_entry_at=_NOW + timedelta(hours=1),
+        max_delta_seconds=_MAX_DELTA,
+    )
     assert selected is None
 
 
@@ -393,7 +445,9 @@ def test_own_entry_fill_none_when_no_matching_probe_timing_evidence() -> None:
     opportunity = _opportunity(
         {}, entry_fill=_ENTRY_FILL, entry_target_label="5s", entry_target_seconds=5
     )
-    selected = _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+    selected = _select_own_entry_fill_if_contemporaneous(
+        opportunity, strategy_entry_at=_NOW, max_delta_seconds=_MAX_DELTA
+    )
     assert selected is None
 
 
@@ -406,7 +460,10 @@ def test_own_entry_fill_none_when_no_entry_fill_at_all() -> None:
         entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=5)},
     )
     assert (
-        _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA) is None
+        _select_own_entry_fill_if_contemporaneous(
+            opportunity, strategy_entry_at=_NOW, max_delta_seconds=_MAX_DELTA
+        )
+        is None
     )
 
 
@@ -415,11 +472,18 @@ def test_own_entry_fill_none_when_target_label_or_seconds_missing() -> None:
         {}, entry_fill=_ENTRY_FILL, entry_target_label=None, entry_target_seconds=None
     )
     assert (
-        _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA) is None
+        _select_own_entry_fill_if_contemporaneous(
+            opportunity, strategy_entry_at=_NOW, max_delta_seconds=_MAX_DELTA
+        )
+        is None
     )
 
 
 def test_own_entry_fill_accepted_exactly_at_the_configured_tolerance_boundary() -> None:
+    """Boundary check against the STRATEGY trigger time (never the fill's
+    own configured target): the probe's real evidence timestamp is
+    ``first_seen_at + 120s``, and the strategy trigger is exactly 120s
+    (then 121s) away from ``first_seen_at``."""
     opportunity = _opportunity(
         {},
         entry_fill=_ENTRY_FILL,
@@ -428,7 +492,9 @@ def test_own_entry_fill_accepted_exactly_at_the_configured_tolerance_boundary() 
         entry_delay_probes={"0s": _entry_probe(label="0s", elapsed_seconds=120)},
     )
     assert (
-        _select_own_entry_fill_if_contemporaneous(opportunity, max_delta_seconds=_MAX_DELTA)
+        _select_own_entry_fill_if_contemporaneous(
+            opportunity, strategy_entry_at=_NOW, max_delta_seconds=_MAX_DELTA
+        )
         is _ENTRY_FILL
     )
     opportunity_past = _opportunity(
@@ -439,9 +505,31 @@ def test_own_entry_fill_accepted_exactly_at_the_configured_tolerance_boundary() 
         entry_delay_probes={"0s": _entry_probe(label="0s", elapsed_seconds=121)},
     )
     assert (
-        _select_own_entry_fill_if_contemporaneous(opportunity_past, max_delta_seconds=_MAX_DELTA)
+        _select_own_entry_fill_if_contemporaneous(
+            opportunity_past, strategy_entry_at=_NOW, max_delta_seconds=_MAX_DELTA
+        )
         is None
     )
+
+
+def test_own_entry_fill_no_mark_price_fallback_when_no_probe_qualifies() -> None:
+    """Clarification-002 section 4's own required test: with no
+    contemporaneous timing evidence at all, the result must be ``None``
+    -- the caller maps this to ``FAILURE_NO_EXECUTABLE_EVIDENCE``, never
+    silently substituting a mark price or a distant fill."""
+    opportunity = _opportunity(
+        {},
+        entry_fill=_ENTRY_FILL,
+        entry_target_label="5s",
+        entry_target_seconds=5,
+        entry_delay_probes={"5s": _entry_probe(label="5s", elapsed_seconds=5)},
+    )
+    selected = _select_own_entry_fill_if_contemporaneous(
+        opportunity,
+        strategy_entry_at=_NOW + timedelta(days=1),
+        max_delta_seconds=_MAX_DELTA,
+    )
+    assert selected is None
 
 
 def test_config_hash_changes_with_contemporaneous_match_max_delta() -> None:

@@ -219,8 +219,16 @@ async def compute_raw_features(
     momentum_pct: Decimal | None = None
 
     if token is not None:
+        # R2-02 clarification-002: this feature vector is itself a
+        # historical reconstruction as-of ``entered_at`` -- so
+        # ``entered_at`` is this call's own knowledge cutoff, passed to
+        # every ``TokenMarketSnapshot`` lookup below. Without it, a
+        # snapshot's ``observed_at`` alone bounded its claimed effective
+        # time but never its own knowledge/``created_at`` time, letting a
+        # later-backfilled row leak into a feature computed for an
+        # earlier decision point.
         snapshot = await load_token_market_snapshot_at_or_before(
-            session, token_id=token_id, at=entered_at
+            session, token_id=token_id, at=entered_at, cutoff=entered_at
         )
         if (
             snapshot is not None
@@ -239,14 +247,14 @@ async def compute_raw_features(
         # their own respective target time -- never the "nearest" snapshot
         # (which could be strictly after ``entered_at`` itself).
         entry_price_snapshot = await load_token_market_snapshot_at_or_before(
-            session, token_id=token_id, at=entered_at
+            session, token_id=token_id, at=entered_at, cutoff=entered_at
         )
         entry_price = _snapshot_price_at_or_before(
             entry_price_snapshot, target=entered_at, max_staleness_seconds=max_staleness_seconds
         )
         prior_target = entered_at - momentum_window
         prior_price_snapshot = await load_token_market_snapshot_at_or_before(
-            session, token_id=token_id, at=prior_target
+            session, token_id=token_id, at=prior_target, cutoff=entered_at
         )
         prior_price = _snapshot_price_at_or_before(
             prior_price_snapshot, target=prior_target, max_staleness_seconds=max_staleness_seconds

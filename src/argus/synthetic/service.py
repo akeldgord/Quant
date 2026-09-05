@@ -134,7 +134,26 @@ from argus.synthetic.stats import StrategySummary, TradeOutcome, compute_strateg
 # ``contaminated_run_invalidations`` entry is seeded beyond the existing
 # v1->v2/v2->v3 ones -- this is genuine algorithm evolution, not a
 # contaminated-result correction.
-ALGORITHM_VERSION: Final[str] = "synthetic_super_wallet_v4"
+#
+# Clarification-002 (``argus-final-spec-recovery-002-clarification-002``,
+# section 4): bumped from "synthetic_super_wallet_v4" -- clarification-001's
+# own fix (above) still compared the wrong two quantities:
+# ``_select_own_entry_fill_if_contemporaneous`` checked the matching
+# ENTRY_DELAY probe's real elapsed time against its OWN configured target
+# delay (``entry_target_seconds``) -- a purely internal consistency check
+# -- never against the STRATEGY's own entry trigger time
+# (``matched.entry.at``), which is what the frozen R2-03 acceptance test
+# actually requires. A fill could perfectly match its own configured
+# target delay while still landing far from the strategy trigger it is
+# meant to price, and would previously have been silently accepted. Now
+# fixed: the actual timestamp of the executable entry evidence
+# (``opportunity.first_seen_at + actual_elapsed_seconds_from_first_seen``)
+# is compared directly to ``matched.entry.at``. No durable (non-
+# disposable-test-database) "synthetic_super_wallet_v4" row was ever
+# computed against a real database in this recovery round, so no
+# additional ``contaminated_run_invalidations`` entry is seeded -- this is
+# genuine algorithm evolution, not a contaminated-result correction.
+ALGORITHM_VERSION: Final[str] = "synthetic_super_wallet_v5"
 
 _PHASE10_ARTIFACT_FILENAMES: Final[tuple[str, ...]] = (
     "costs.py",
@@ -338,27 +357,29 @@ def _select_contemporaneous_entry_probe(
 
 
 def _select_own_entry_fill_if_contemporaneous(
-    opportunity: WalletOpportunity, *, max_delta_seconds: Decimal
+    opportunity: WalletOpportunity, *, strategy_entry_at: datetime, max_delta_seconds: Decimal
 ) -> EntryFill | None:
-    """Clarification-001 section 4.1: Strategy A/B's own entry price must
+    """Clarification-002 section 4: Strategy A/B's own entry price must
     never unconditionally reuse ``opportunity.entry_fill`` (the ONE
     realized fill Phase 4's real runtime happened to resolve, at whichever
     single ``entry_target_label``/``entry_target_seconds`` delay it used)
     -- "the original shadow entry fill may be used only when its actual
     entry timing is the strategy entry timing represented by the
-    trigger". For Strategy A/B the trigger's own modeled entry timing IS
-    that fill's configured target delay (``entry_target_seconds`` --
-    A/B's trigger is the leader's own real buy, and any realistic copy of
-    it necessarily executes after some modeled delay, never literally at
-    the same instant); this checks that the fill's OWN real observed
-    processing time (the matching ``entry_delay_probes`` entry's
-    ``actual_elapsed_seconds_from_first_seen``) did not drift, by more
-    than ``max_delta_seconds``, from that configured target -- never
-    treating ``first_seen_at`` itself as the fill's execution time, and
-    never trusting a fill whose real processing time is unknown or
-    arbitrarily delayed. Returns ``None`` (never a distant/mark-price
-    substitute) when there is no contemporaneous timing evidence at all,
-    mapped by the caller to ``FAILURE_NO_EXECUTABLE_EVIDENCE``."""
+    trigger". The frozen acceptance test compares the ACTUAL timestamp of
+    the executable entry evidence (``opportunity.first_seen_at +
+    actual_elapsed_seconds_from_first_seen``, the matching
+    ``entry_delay_probes`` entry's real observed processing time) against
+    the STRATEGY's own entry trigger time (``strategy_entry_at``, i.e.
+    ``matched.entry.at``) -- NEVER against the fill's own configured
+    target delay (``entry_target_seconds``, clarification-001's prior,
+    weaker check). The former only proves the probe's real processing
+    time stayed close to what it was CONFIGURED to be; it does not prove
+    contemporaneity with the actual strategy trigger this trade is keyed
+    to -- a fill that perfectly matches its own configured target delay
+    but whose real evidence lands far from the strategy's actual trigger
+    time must still be rejected. Returns ``None`` (never a distant/mark-
+    price substitute) when there is no contemporaneous timing evidence at
+    all, mapped by the caller to ``FAILURE_NO_EXECUTABLE_EVIDENCE``."""
     if (
         opportunity.entry_fill is None
         or opportunity.entry_target_label is None
@@ -368,10 +389,11 @@ def _select_own_entry_fill_if_contemporaneous(
     probe = opportunity.entry_delay_probes.get(opportunity.entry_target_label)
     if probe is None or probe.actual_elapsed_seconds_from_first_seen is None:
         return None
-    delta = abs(
-        probe.actual_elapsed_seconds_from_first_seen - Decimal(opportunity.entry_target_seconds)
+    actual_entry_evidence_at = opportunity.first_seen_at + timedelta(
+        seconds=float(probe.actual_elapsed_seconds_from_first_seen)
     )
-    if delta > max_delta_seconds:
+    delta_seconds = Decimal(abs((actual_entry_evidence_at - strategy_entry_at).total_seconds()))
+    if delta_seconds > max_delta_seconds:
         return None
     return opportunity.entry_fill
 
@@ -382,17 +404,24 @@ async def _mark_prices_and_return(
     matched: MatchedTrade,
     config: Phase10RunConfig,
     max_staleness_seconds: float,
+    cutoff: datetime,
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
     """FSR-08: the OLD fixed-cost-haircut mark-price computation,
     preserved unchanged but now purely descriptive -- returns
     (mark_entry_price, mark_exit_price, mark_gross_return,
     mark_net_return), NEVER consulted for the primary executable
-    ``outcome``/``gross_return``/``net_return`` fields."""
+    ``outcome``/``gross_return``/``net_return`` fields.
+
+    R2-02 clarification-002: ``cutoff`` is this run's own knowledge
+    cutoff -- threaded through so neither snapshot lookup can be
+    contaminated by a later-backfilled row, matching the same fix applied
+    to Phase 9's entry-specialist path."""
     entry_snapshot = await load_nearest_token_market_snapshot(
         session,
         token_id=matched.entry.token_id,
         target=matched.entry.at,
         max_staleness_seconds=max_staleness_seconds,
+        cutoff=cutoff,
     )
     if entry_snapshot is None or entry_snapshot.price_usd is None or matched.exit is None:
         return (
@@ -406,6 +435,7 @@ async def _mark_prices_and_return(
         token_id=matched.entry.token_id,
         target=matched.exit.at,
         max_staleness_seconds=max_staleness_seconds,
+        cutoff=cutoff,
     )
     if exit_snapshot is None or exit_snapshot.price_usd is None:
         return entry_snapshot.price_usd, None, None, None
@@ -456,7 +486,11 @@ async def _price_and_persist_trades(
             mark_gross_return,
             mark_net_return,
         ) = await _mark_prices_and_return(
-            session, matched=matched, config=config, max_staleness_seconds=max_staleness_seconds
+            session,
+            matched=matched,
+            config=config,
+            max_staleness_seconds=max_staleness_seconds,
+            cutoff=cutoff,
         )
 
         if matched.exit is None:
@@ -562,18 +596,21 @@ async def _price_and_persist_trades(
                         gross_return = None
                         net_return = None
             else:
-                # Clarification-001 section 4.1: Strategy A/B (and E,
-                # which never reaches here -- see the module docstring)
-                # must never trust ``reverse_outcome.result`` (computed by
-                # the loader against ``opportunity.entry_fill``) unless
-                # that fill's own real observed timing is still
-                # contemporaneous with the strategy's own modeled entry
-                # timing for it. A drifted/unresolved fill is honestly
-                # ``FAILURE_NO_EXECUTABLE_EVIDENCE``, never a mark-price
-                # or distant-fill substitute.
+                # Clarification-002 section 4: Strategy A/B (and E, which
+                # never reaches here -- see the module docstring) must
+                # never trust ``reverse_outcome.result`` (computed by the
+                # loader against ``opportunity.entry_fill``) unless that
+                # fill's own real observed timing is still contemporaneous
+                # with the STRATEGY's own entry trigger time
+                # (``matched.entry.at``) -- never merely with the fill's
+                # own configured target delay. A drifted/unresolved fill
+                # is honestly ``FAILURE_NO_EXECUTABLE_EVIDENCE``, never a
+                # mark-price or distant-fill substitute.
                 assert opportunity is not None
                 own_entry_fill = _select_own_entry_fill_if_contemporaneous(
-                    opportunity, max_delta_seconds=max_delta_seconds
+                    opportunity,
+                    strategy_entry_at=matched.entry.at,
+                    max_delta_seconds=max_delta_seconds,
                 )
                 if own_entry_fill is None:
                     outcome = OUTCOME_FAILURE_NO_EXECUTABLE_EVIDENCE
